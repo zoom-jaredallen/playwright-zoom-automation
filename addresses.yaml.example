@@ -1,0 +1,76 @@
+# Address profiles for Zoom Business Address automation.
+#
+# Current Zoom public contact pages list these office cities but generally do not
+# publish full street addresses. The street-address examples below should be
+# reviewed before production use, especially for country-specific documentation.
+profiles:
+  australia_sydney:
+    country: AU
+    numberType: Toll
+    customerName: Zoom Communications Ltd
+    address:
+      line1: 9 Castlereagh St
+      line2: Level 1
+      city: Sydney
+      state: NSW
+      postalCode: "2000"
+    documents:
+      required: false
+
+  singapore_ioi:
+    country: SG
+    numberType: Toll
+    customerName: Zoom Communications Ltd
+    address:
+      line1: 2 Central Blvd
+      line2: "#24-01A"
+      city: Singapore
+      postalCode: "018916"
+    contact:
+      name: Zoom Communications Ltd
+      number: ""
+      email: ""
+    documents:
+      required: true
+      businessVerificationPath: /absolute/path/to/business-verification.pdf
+
+  india_mumbai:
+    country: IN
+    numberType: Toll
+    customerName: ZVC India Private Limited
+    address:
+      line1: Sag Baug Road, off Andheri-Kurla Road
+      line2: Marol, Andheri East
+      city: Mumbai
+      state: MH
+      postalCode: "400059"
+    documents:
+      required: true
+      businessVerificationPath: /absolute/path/to/business-verification.pdf
+
+  japan_tokyo:
+    country: JP
+    numberType: Toll
+    customerName: Zoom Communications Japan
+    address:
+      line1: 2-1-6 Uchisaiwaicho
+      line2: Hibiya Park Front 19-F
+      city: Chiyoda-ku
+      state: Tokyo
+      postalCode: "100-0011"
+    documents:
+      required: true
+      businessVerificationPath: /absolute/path/to/business-verification.pdf
+
+  united_states_san_jose:
+    country: US
+    numberType: Toll
+    customerName: Zoom Communications, Inc.
+    address:
+      line1: 55 Almaden Boulevard
+      line2: Suite 600
+      city: San Jose
+      state: CA
+      postalCode: "95113"
+    documents:
+      required: false

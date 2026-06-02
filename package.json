@@ -1,0 +1,41 @@
+{
+  "name": "zoom-business-address-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright automation for adding Zoom sub-account business addresses and documents.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:ui": "vite build",
+    "dev": "tsx src/server/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "serve:ui": "UI_DEV=false tsx src/server/index.ts",
+    "start": "tsx src/main.ts",
+    "playwright:install": "playwright install chromium"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.2",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "playwright": "^1.60.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tsx": "^4.19.2",
+    "vite": "^8.0.16",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.8"
+  }
+}
