@@ -45,6 +45,11 @@ export interface JobView {
     status: "queued" | "running" | "completed" | "skipped" | "failed";
     message?: string;
     error?: string;
+    logs?: Array<{
+      timestamp: string;
+      step: string;
+      detail?: string;
+    }>;
   }>;
   summary: {
     queued: number;

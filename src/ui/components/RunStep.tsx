@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { JobView, SubAccountView } from "../api.js";
 
 interface RunStepProps {
@@ -11,6 +12,8 @@ interface RunStepProps {
 }
 
 export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCancel, onBack, onNewRun }: RunStepProps) {
+  const [expandedAccountId, setExpandedAccountId] = useState<string | undefined>();
+
   if (!job) {
     return (
       <div className="run-step-empty">
@@ -91,38 +94,60 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
             ? workflowNames.get(pipelineOrder[0]) ?? "—"
             : "—";
 
+          const isExpanded = expandedAccountId === accountState.accountId;
+          const hasLogs = accountState.logs && accountState.logs.length > 0;
+
           return (
-            <div
-              key={accountState.accountId}
-              className={`run-account-row ${accountState.status}`}
-            >
-              <span className="run-account-name">
-                <strong>{account?.name ?? accountState.accountId}</strong>
-                {account?.ownerEmail ? <small>{account.ownerEmail}</small> : null}
-              </span>
-              <span className="run-account-workflow">{workflowName}</span>
-              <span className="run-account-status">
-                <span className={`run-account-dot ${accountState.status}`} />
-                {statusLabel(accountState.status)}
-              </span>
-              <span className="run-account-progress">
-                {accountState.status === "running" ? (
-                  <span className="run-account-spinner">
-                    <span className="spinner" />
-                    {accountState.message ?? "Processing..."}
-                  </span>
-                ) : accountState.status === "completed" ? (
-                  <span className="run-account-done">✓ {accountState.message ?? "Done"}</span>
-                ) : accountState.status === "failed" ? (
-                  <span className="run-account-error" title={accountState.error}>
-                    ✗ {accountState.error?.slice(0, 60) ?? "Failed"}
-                  </span>
-                ) : accountState.status === "skipped" ? (
-                  <span className="run-account-skipped">○ {accountState.message ?? "Skipped"}</span>
-                ) : (
-                  <span className="run-account-queued">Waiting...</span>
-                )}
-              </span>
+            <div key={accountState.accountId} className="run-account-block">
+              <div
+                className={`run-account-row ${accountState.status} ${hasLogs ? "clickable" : ""}`}
+                onClick={() => hasLogs && setExpandedAccountId(isExpanded ? undefined : accountState.accountId)}
+              >
+                <span className="run-account-name">
+                  <strong>{account?.name ?? accountState.accountId}</strong>
+                  {account?.ownerEmail ? <small>{account.ownerEmail}</small> : null}
+                </span>
+                <span className="run-account-workflow">{workflowName}</span>
+                <span className="run-account-status">
+                  <span className={`run-account-dot ${accountState.status}`} />
+                  {statusLabel(accountState.status)}
+                </span>
+                <span className="run-account-progress">
+                  {accountState.status === "running" ? (
+                    <span className="run-account-spinner">
+                      <span className="spinner" />
+                      {accountState.message ?? "Processing..."}
+                    </span>
+                  ) : accountState.status === "completed" ? (
+                    <span className="run-account-done">✓ {accountState.message ?? "Done"}</span>
+                  ) : accountState.status === "failed" ? (
+                    <span className="run-account-error" title={accountState.error}>
+                      ✗ {accountState.error?.slice(0, 60) ?? "Failed"}
+                    </span>
+                  ) : accountState.status === "skipped" ? (
+                    <span className="run-account-skipped">○ {accountState.message ?? "Skipped"}</span>
+                  ) : (
+                    <span className="run-account-queued">Waiting...</span>
+                  )}
+                  {hasLogs ? (
+                    <span className="run-account-expand">{isExpanded ? "▾" : "▸"}</span>
+                  ) : null}
+                </span>
+              </div>
+
+              {isExpanded && accountState.logs ? (
+                <div className="run-account-logs">
+                  {accountState.logs.map((log, i) => (
+                    <div key={i} className="run-log-entry">
+                      <span className="run-log-time">
+                        {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                      <span className="run-log-step">{log.step}</span>
+                      {log.detail ? <span className="run-log-detail">{log.detail}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           );
         })}

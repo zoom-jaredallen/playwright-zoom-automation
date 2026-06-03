@@ -10,6 +10,12 @@ export interface CreateJobInput {
   addressProfile: string;
 }
 
+export interface AccountLogEntry {
+  timestamp: string;
+  step: string;
+  detail?: string;
+}
+
 export interface JobAccountState {
   accountId: string;
   workflowId?: string;
@@ -18,6 +24,7 @@ export interface JobAccountState {
   error?: string;
   startedAt?: string;
   completedAt?: string;
+  logs?: AccountLogEntry[];
 }
 
 export interface JobSummary {
@@ -48,6 +55,7 @@ export interface JobStore {
   listJobs(): AutomationJob[];
   markJob(id: string, status: JobStatus, message?: string): AutomationJob;
   markAccount(id: string, accountId: string, patch: Partial<JobAccountState>): AutomationJob;
+  logAccountStep(id: string, accountId: string, step: string, detail?: string): AutomationJob;
 }
 
 export function createJobStore(): JobStore {
@@ -117,6 +125,19 @@ export function createJobStore(): JobStore {
       }
 
       job.summary = summarize(job.accounts);
+      job.updatedAt = new Date().toISOString();
+      return cloneJob(job);
+    },
+
+    logAccountStep(id, accountId, step, detail) {
+      const job = getMutableJob(id);
+      const account = job.accounts.find((item) => item.accountId === accountId);
+      if (!account) {
+        throw new Error(`Account is not part of job: ${accountId}`);
+      }
+      if (!account.logs) account.logs = [];
+      account.logs.push({ timestamp: new Date().toISOString(), step, detail });
+      account.message = step;
       job.updatedAt = new Date().toISOString();
       return cloneJob(job);
     }

@@ -1,194 +1,70 @@
 
 
-/* ─── Modal ───────────────────────────────────────────────────────────────── */
+/* ─── Per-Account Log Panel ───────────────────────────────────────────────── */
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 900;
-  background: rgba(0, 0, 0, 0.5);
-  display: grid;
-  place-items: center;
-  animation: fade-in 0.15s ease-out;
+.run-account-block {
+  border-bottom: 1px solid var(--border-border-subtle-neutral);
 }
 
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.run-account-block .run-account-row {
+  border-bottom: 0;
 }
 
-.modal-content {
-  width: 90vw;
-  max-width: 560px;
-  max-height: 85vh;
-  overflow: auto;
-  border-radius: var(--radius-lg, 12px);
-  background: var(--background-bg-default);
-  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.12));
-  animation: modal-slide-up 0.2s ease-out;
+.run-account-row.clickable {
+  cursor: pointer;
 }
 
-@keyframes modal-slide-up {
-  from { transform: translateY(16px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+.run-account-row.clickable:hover {
+  background: var(--state-state-subtle-neutral-hover);
 }
 
-/* ─── Import Workflow ─────────────────────────────────────────────────────── */
-
-.import-workflow {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.import-header h3 {
-  margin: 0 0 4px;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.import-header p {
-  margin: 0;
-  font-size: 13px;
+.run-account-expand {
+  margin-left: 8px;
+  font-size: 11px;
   color: var(--text-text-subtle-neutral);
 }
 
-.import-dropzone {
-  border: 2px dashed var(--border-border-neutral);
-  border-radius: var(--radius-md, 8px);
-  padding: 32px 24px;
-  text-align: center;
-  transition: border-color 0.15s, background 0.15s;
-  cursor: pointer;
+.run-account-logs {
+  padding: 8px 24px 12px 56px;
+  background: var(--fill-fill-subtler-neutral);
+  border-top: 1px solid var(--border-border-subtle-neutral);
+  max-height: 200px;
+  overflow-y: auto;
+  animation: logs-expand 0.15s ease-out;
 }
 
-.import-dropzone:focus {
-  outline: none;
-  border-color: var(--border-border-primary);
+@keyframes logs-expand {
+  from { max-height: 0; opacity: 0; }
+  to { max-height: 200px; opacity: 1; }
 }
 
-.import-dropzone.dragging {
-  border-color: var(--border-border-primary);
-  background: var(--fill-fill-subtler-primary);
-}
-
-.import-dropzone.has-preview {
-  border-style: solid;
-  border-color: var(--fill-fill-success);
-  background: var(--fill-fill-subtler-success);
-  padding: 16px;
-}
-
-.import-dropzone-content p {
-  margin: 4px 0;
-  font-size: 14px;
-  color: var(--text-text-neutral);
-}
-
-.import-dropzone-icon {
-  font-size: 32px;
-  display: block;
-  margin-bottom: 8px;
-}
-
-.import-browse-btn {
-  border: 0;
-  background: transparent;
-  color: var(--text-text-primary);
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: underline;
-  font-size: inherit;
-}
-
-.import-preview {
+.run-log-entry {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 18px;
 }
 
-.import-preview-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full, 999px);
-  background: var(--fill-fill-success);
-  color: var(--text-text-inverse);
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  font-weight: 700;
+.run-log-time {
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--text-text-subtle-neutral);
+  min-width: 65px;
   flex-shrink: 0;
 }
 
-.import-preview-info {
-  flex: 1;
-  text-align: left;
-}
-
-.import-preview-info strong {
-  display: block;
-  font-size: 14px;
-}
-
-.import-preview-info small {
-  font-size: 12px;
-  color: var(--text-text-subtle-neutral);
-}
-
-.import-paste-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.import-paste-label {
-  font-size: 12px;
-  font-weight: 600;
+.run-log-step {
   color: var(--text-text-neutral);
 }
 
-.import-paste-area {
-  width: 100%;
-  border: 1px solid var(--border-border-neutral);
-  border-radius: var(--radius-md, 8px);
-  padding: 8px 12px;
-  font-family: monospace;
-  font-size: 12px;
-  resize: vertical;
-  color: var(--text-text-stronger-neutral);
-  background: var(--fill-fill-input, var(--background-bg-default));
+.run-log-detail {
+  color: var(--text-text-subtle-neutral);
+  font-size: 11px;
 }
 
-.import-paste-area:focus {
-  border-color: var(--border-border-primary);
-  box-shadow: 0 0 0 3px var(--fill-fill-subtler-primary);
-  outline: none;
-}
-
-.import-error {
-  padding: 8px 12px;
-  border-radius: var(--radius-md, 8px);
-  background: var(--fill-fill-subtler-error);
-  color: var(--text-text-error);
-  font-size: 13px;
-}
-
-.import-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-border-subtle-neutral);
-}
-
-/* Configure section header with action button */
-.configure-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.configure-section-header h3 {
-  margin: 0;
+.run-log-entry:last-child .run-log-step {
+  color: var(--text-text-primary);
+  font-weight: 600;
 }

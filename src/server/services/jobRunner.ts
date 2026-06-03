@@ -69,11 +69,12 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
     await validateDocumentFiles(config.documents);
   }
 
-  const logger = createLogger({
+  const baseLogger = createLogger({
     level: parseLogLevel(process.env.LOG_LEVEL),
     filePath: `${config.runtime.artifactsDir}/logs/job-${options.jobId}.jsonl`,
     baseMeta: { jobId: options.jobId, workflows: options.workflowIds }
   });
+  const logger = createStepTrackingLogger(baseLogger, options.store, options.jobId);
 
   const pipelineLabel = workflows.map((w) => w.name).join(" → ");
   options.store.markJob(options.jobId, "running", `Running: ${pipelineLabel}`);
@@ -102,9 +103,33 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
         config,
         logger
       });
+      const progressAdapter = createJobProgressAdapter(options.store, options.jobId, workflow.id);
+      // Wrap markRunning to set active account on the step-tracking logger
+      const trackingProgress: ProgressAdapter = {
+        ...progressAdapter,
+        markRunning: async (account) => {
+          logger.setActiveAccount(account.id);
+          return progressAdapter.markRunning(account);
+        },
+        markCompleted: async (account, message) => {
+          const result = await progressAdapter.markCompleted(account, message);
+          logger.setActiveAccount(undefined);
+          return result;
+        },
+        markFailed: async (account, error, retryable) => {
+          const result = await progressAdapter.markFailed(account, error, retryable);
+          logger.setActiveAccount(undefined);
+          return result;
+        },
+        markSkipped: async (account, message) => {
+          const result = await progressAdapter.markSkipped(account, message);
+          logger.setActiveAccount(undefined);
+          return result;
+        }
+      };
       const runner = new AutomationRunner({
         flow,
-        progress: createJobProgressAdapter(options.store, options.jobId, workflow.id),
+        progress: trackingProgress,
         retry: {
           attempts: options.retryAttempts,
           baseDelayMs: options.retryBaseDelayMs
@@ -136,17 +161,76 @@ function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: st
     shouldSkip: async () => false,
     markRunning: async (account) => {
       store.markAccount(jobId, account.id, { status: "running", workflowId });
+      store.logAccountStep(jobId, account.id, "Starting workflow", workflowId);
     },
     markCompleted: async (account, message) => {
+      store.logAccountStep(jobId, account.id, "Completed", message);
       store.markAccount(jobId, account.id, { status: "completed", workflowId, message });
     },
     markSkipped: async (account, message) => {
+      store.logAccountStep(jobId, account.id, "Skipped", message);
       store.markAccount(jobId, account.id, { status: "skipped", workflowId, message });
     },
     markFailed: async (account, error) => {
+      store.logAccountStep(jobId, account.id, "Failed", error.message);
       store.markAccount(jobId, account.id, { status: "failed", workflowId, error: error.message });
     }
   };
+}
+
+/**
+ * Create a logger that also emits step-level events to the job store.
+ * This allows the UI to show real-time progress per account.
+ */
+function createStepTrackingLogger(
+  baseLogger: import("../../logger.js").Logger,
+  store: JobStore,
+  jobId: string
+): import("../../logger.js").Logger & { setActiveAccount(accountId: string | undefined): void } {
+  let activeAccountId: string | undefined;
+
+  return {
+    setActiveAccount(accountId: string | undefined) {
+      activeAccountId = accountId;
+    },
+    debug(message: string, meta?: Record<string, unknown>) {
+      baseLogger.debug(message, meta);
+    },
+    info(message: string, meta?: Record<string, unknown>) {
+      baseLogger.info(message, meta);
+      if (activeAccountId && isUserFacingStep(message)) {
+        try { store.logAccountStep(jobId, activeAccountId, message); } catch { /* ignore */ }
+      }
+    },
+    warn(message: string, meta?: Record<string, unknown>) {
+      baseLogger.warn(message, meta);
+      if (activeAccountId) {
+        try { store.logAccountStep(jobId, activeAccountId, `⚠ ${message}`); } catch { /* ignore */ }
+      }
+    },
+    error(message: string, meta?: Record<string, unknown>) {
+      baseLogger.error(message, meta);
+      if (activeAccountId) {
+        try { store.logAccountStep(jobId, activeAccountId, `✗ ${message}`); } catch { /* ignore */ }
+      }
+    },
+    child(meta: Record<string, unknown>) {
+      return createStepTrackingLogger(baseLogger.child(meta), store, jobId);
+    }
+  };
+}
+
+/**
+ * Filter log messages to only show user-facing steps (not internal debug noise).
+ */
+function isUserFacingStep(message: string): boolean {
+  const patterns = [
+    /navigat/i, /click/i, /fill/i, /select/i, /upload/i, /wait/i,
+    /impersonat/i, /dismiss/i, /verif/i, /submit/i, /search/i,
+    /address/i, /phone/i, /number/i, /document/i, /form/i,
+    /login/i, /session/i, /page/i, /popup/i, /save/i, /done/i
+  ];
+  return patterns.some((p) => p.test(message));
 }
 
 

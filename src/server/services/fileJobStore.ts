@@ -127,6 +127,20 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
       job.updatedAt = new Date().toISOString();
       persist(job);
       return cloneJob(job);
+    },
+
+    logAccountStep(id: string, accountId: string, step: string, detail?: string): AutomationJob {
+      const job = getMutableJob(id);
+      const account = job.accounts.find((item) => item.accountId === accountId);
+      if (!account) {
+        throw new Error(`Account is not part of job: ${accountId}`);
+      }
+      if (!account.logs) account.logs = [];
+      account.logs.push({ timestamp: new Date().toISOString(), step, detail });
+      account.message = step;
+      job.updatedAt = new Date().toISOString();
+      persist(job);
+      return cloneJob(job);
     }
   };
 }
