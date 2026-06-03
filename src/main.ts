@@ -2,6 +2,7 @@ import { chromium } from "playwright";
 import { filterAccountsByOwnerRange } from "./automation/accountFilters.js";
 import { AutomationRunner } from "./automation/runner.js";
 import { ProgressStore } from "./automation/progressStore.js";
+import { CliProgressAdapter } from "./cliProgressAdapter.js";
 import { loadConfigFromEnvFile } from "./config.js";
 import { createLogger, parseLogLevel } from "./logger.js";
 import { validateDocumentFiles } from "./preflight.js";
@@ -56,7 +57,8 @@ async function main(): Promise<void> {
       config: config.zoom,
       logger
     });
-    const progress = new ProgressStore(config.runtime.progressPath);
+    const fileProgress = new ProgressStore(config.runtime.progressPath);
+    const cliProgress = new CliProgressAdapter(fileProgress, accounts.length);
     const flow = new BusinessAddressFlow({
       browser,
       masterStorageState,
@@ -75,7 +77,7 @@ async function main(): Promise<void> {
 
     const runner = new AutomationRunner({
       flow,
-      progress,
+      progress: cliProgress,
       retry: {
         attempts: config.runtime.flowRetryAttempts,
         baseDelayMs: config.runtime.flowRetryBaseDelayMs
@@ -89,7 +91,11 @@ async function main(): Promise<void> {
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
 
-    logger.info("Automation run finished", { ...summary });
+    // Print CLI summary and save report
+    cliProgress.display.printSummary();
+    const reportPath = cliProgress.display.saveReport(config.runtime.artifactsDir, runId);
+    logger.info("Automation run finished", { ...summary, reportPath });
+
     if (summary.failed > 0) {
       process.exitCode = 1;
     }
