@@ -68,7 +68,8 @@ export function AppShell({ children, activeView = "run", onViewChange }: AppShel
               <a className="scope-chip" href="#settings">Settings</a>
             </div>
             <div className="left-nav-footer">
-              <SearchIcon /> <SettingsIcon />
+              <button className="icon-button" aria-label="Search"><SearchIcon /></button>
+              <button className="icon-button" aria-label="Settings"><SettingsIcon /></button>
             </div>
           </aside>
 

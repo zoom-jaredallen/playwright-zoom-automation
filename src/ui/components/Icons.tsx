@@ -5,6 +5,8 @@ type IconProps = SVGProps<SVGSVGElement>;
 function IconBase(props: IconProps) {
   return (
     <svg
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

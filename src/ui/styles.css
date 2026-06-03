@@ -265,6 +265,9 @@ a:focus-visible {
 
 .left-nav-footer {
   margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-text-subtle-neutral);
   font-size: 12px;
 }
