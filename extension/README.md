@@ -4,22 +4,24 @@ A Chrome extension that records user interactions in the Zoom admin portal and c
 
 ## Installation (Development)
 
-1. Install Chrome extension types:
+1. Install dependencies and build:
    ```bash
    cd extension
-   npm install --save-dev @types/chrome
+   npm install
+   npm run build
    ```
 
-2. Build the extension:
-   ```bash
-   npx tsc -p tsconfig.json
-   ```
-
-3. Load in Chrome:
+2. Load in Chrome:
    - Open `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked"
-   - Select the `extension/dist/` directory (or `extension/` if using a bundler)
+   - Enable **Developer mode** (toggle in top-right)
+   - Click **Load unpacked**
+   - Select the `extension/dist/` folder
+
+3. For development with auto-rebuild:
+   ```bash
+   npm run watch
+   ```
+   Then reload the extension in Chrome after changes.
 
 ## Usage
 
