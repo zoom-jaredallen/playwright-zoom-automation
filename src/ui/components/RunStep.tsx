@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { JobView, SubAccountView } from "../api.js";
+import { useEffect, useState } from "react";
+import { fetchJobArtifacts, type ArtifactView, type JobView, type SubAccountView } from "../api.js";
 
 interface RunStepProps {
   job?: JobView;
@@ -13,6 +13,23 @@ interface RunStepProps {
 
 export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCancel, onBack, onNewRun }: RunStepProps) {
   const [expandedAccountId, setExpandedAccountId] = useState<string | undefined>();
+  const [artifactsByAccount, setArtifactsByAccount] = useState<Record<string, ArtifactView[]>>({});
+  const [artifactErrors, setArtifactErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!job || !expandedAccountId) return;
+    if (artifactsByAccount[expandedAccountId] || artifactErrors[expandedAccountId]) return;
+    void fetchJobArtifacts(job.id, expandedAccountId)
+      .then((response) => {
+        setArtifactsByAccount((current) => ({ ...current, [expandedAccountId]: response.artifacts }));
+      })
+      .catch((error) => {
+        setArtifactErrors((current) => ({
+          ...current,
+          [expandedAccountId]: error instanceof Error ? error.message : String(error)
+        }));
+      });
+  }, [artifactErrors, artifactsByAccount, expandedAccountId, job?.id]);
 
   if (!job) {
     return (
@@ -135,17 +152,34 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
                 </span>
               </div>
 
-              {isExpanded && accountState.logs ? (
+              {isExpanded ? (
                 <div className="run-account-logs">
-                  {accountState.logs.map((log, i) => (
-                    <div key={i} className="run-log-entry">
-                      <span className="run-log-time">
-                        {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                      </span>
-                      <span className="run-log-step">{log.step}</span>
-                      {log.detail ? <span className="run-log-detail">{log.detail}</span> : null}
+                  <div className="run-artifacts">
+                    <div className="run-artifacts-header">
+                      <strong>Artifacts</strong>
+                      <a className="tertiary-button compact" href={`/api/jobs/${job.id}/artifacts?accountId=${encodeURIComponent(accountState.accountId)}`} target="_blank" rel="noreferrer">
+                        View JSON
+                      </a>
                     </div>
-                  ))}
+                    <ArtifactActions artifacts={artifactsByAccount[accountState.accountId] ?? []} error={artifactErrors[accountState.accountId]} />
+                  </div>
+
+                  <div className="run-step-log-header">
+                    <strong>Step logs</strong>
+                  </div>
+                  {accountState.logs && accountState.logs.length > 0 ? (
+                    accountState.logs.map((log, i) => (
+                      <div key={i} className="run-log-entry">
+                        <span className="run-log-time">
+                          {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                        <span className="run-log-step">{log.step}</span>
+                        {log.detail ? <span className="run-log-detail">{log.detail}</span> : null}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="run-log-empty">No step logs recorded yet.</div>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -162,6 +196,52 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
       ) : null}
     </div>
   );
+}
+
+function ArtifactActions({ artifacts, error }: { artifacts: ArtifactView[]; error?: string }) {
+  if (error) {
+    return <div className="run-log-empty">Artifact lookup failed: {error}</div>;
+  }
+  if (artifacts.length === 0) {
+    return <div className="run-log-empty">No artifacts found for this account yet.</div>;
+  }
+
+  const trace = artifacts.find((artifact) => artifact.type === "trace");
+  const screenshots = artifacts.filter((artifact) => artifact.type === "screenshot");
+  const logs = artifacts.filter((artifact) => artifact.type === "log");
+  const details = artifacts.filter((artifact) => artifact.type === "details");
+
+  return (
+    <div className="artifact-actions">
+      {trace ? (
+        <>
+          <a className="tertiary-button compact" href={traceViewerUrl(trace.url)} target="_blank" rel="noreferrer">Open trace</a>
+          <a className="tertiary-button compact" href={trace.url} download>Download trace</a>
+        </>
+      ) : null}
+      {screenshots.length > 0 ? (
+        <a className="tertiary-button compact" href={screenshots[0].url} target="_blank" rel="noreferrer">View screenshots ({screenshots.length})</a>
+      ) : null}
+      {logs.length > 0 ? (
+        <a className="tertiary-button compact" href={logs[0].url} target="_blank" rel="noreferrer">View step logs</a>
+      ) : null}
+      {details.length > 0 ? (
+        <a className="tertiary-button compact" href={details[0].url} target="_blank" rel="noreferrer">View failure details</a>
+      ) : null}
+      <div className="artifact-list">
+        {artifacts.slice(0, 6).map((artifact) => (
+          <a key={artifact.url} href={artifact.url} target="_blank" rel="noreferrer">
+            <span className={`artifact-kind ${artifact.type}`}>{artifact.type}</span>
+            <span>{artifact.name}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function traceViewerUrl(traceUrl: string): string {
+  return `https://trace.playwright.dev/?trace=${encodeURIComponent(new URL(traceUrl, window.location.origin).toString())}`;
 }
 
 function statusLabel(status: string): string {

@@ -3,6 +3,7 @@
   "name": "Zoom Workflow Recorder",
   "version": "1.0.0",
   "description": "Record Zoom admin portal workflows for batch automation across sub-accounts.",
+  "minimum_chrome_version": "116",
   "permissions": ["activeTab", "storage", "scripting", "sidePanel"],
   "host_permissions": ["https://*.zoom.us/*"],
   "action": {

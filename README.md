@@ -94,6 +94,7 @@ Each sub-account browser flow can retry retryable failures such as page timeouts
 Before a real run, document paths are checked for existence, supported extension, and Zoom's 10MB upload limit. Dry runs skip document preflight so you can safely test form detection with placeholder paths.
 
 Failure screenshots, JSON page snapshots, and Playwright traces are written under `output/artifacts/`.
+In the web UI, expand an account row in the run monitor to open traces in Playwright Trace Viewer, download trace zips, view screenshots, inspect failure details, and open step logs.
 
 ## Adding Future Automations
 

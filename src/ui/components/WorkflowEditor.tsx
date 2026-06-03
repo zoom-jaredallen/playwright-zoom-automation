@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RecordedWorkflowView, RecordedActionView } from "../api.js";
+import type { RecordedWorkflowView, RecordedActionView, WorkflowQualityReportView } from "../api.js";
 import { StepDetail } from "./StepDetail.js";
 
 interface WorkflowEditorProps {
@@ -18,6 +18,7 @@ export function WorkflowEditor({ workflow, onSave, onClose }: WorkflowEditorProp
   const listRef = useRef<HTMLDivElement>(null);
 
   const selectedStep = steps.find((s) => s.id === selectedStepId);
+  const quality = workflow.quality ?? calculateQualityReport(steps);
 
   const handleDragStart = (index: number) => {
     setDragIndex(index);
@@ -78,7 +79,8 @@ export function WorkflowEditor({ workflow, onSave, onClose }: WorkflowEditorProp
     onSave({
       ...workflow,
       meta: { ...workflow.meta, name },
-      actions: steps
+      actions: steps,
+      quality: calculateQualityReport(steps)
     });
     setDirty(false);
   };
@@ -106,6 +108,18 @@ export function WorkflowEditor({ workflow, onSave, onClose }: WorkflowEditorProp
 
       <div className="editor-body">
         <div className="editor-step-list" ref={listRef}>
+          <div className="workflow-quality-card">
+            <div>
+              <span className={`workflow-quality-score ${quality.score >= 80 ? "good" : quality.score >= 60 ? "warn" : "bad"}`}>{quality.score}</span>
+              <strong>Workflow quality</strong>
+            </div>
+            <small>{quality.selectorStability}% selectors · {quality.assertionCoverage}% assertions · {quality.evidenceCoverage}% evidence</small>
+            {quality.warnings.length > 0 ? (
+              <ul>
+                {quality.warnings.slice(0, 3).map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            ) : null}
+          </div>
           <div className="step-list-header">
             <span>Steps</span>
           </div>
@@ -177,4 +191,31 @@ export function WorkflowEditor({ workflow, onSave, onClose }: WorkflowEditorProp
       </div>
     </div>
   );
+}
+
+function calculateQualityReport(steps: RecordedActionView[]): WorkflowQualityReportView {
+  const actionable = steps.filter((step) => !["navigate", "wait", "screenshot", "dismiss"].includes(step.type));
+  const stableSelectors = actionable.filter((step) => step.selectors.role?.name || step.selectors.label || step.selectors.testId).length;
+  const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
+  const submitActions = steps.filter((step) => step.type === "click" && /save|submit|add|continue|confirm/i.test(step.selectors.role?.name ?? step.selectors.text ?? ""));
+  const assertionActions = steps.filter((step) => step.type === "assert");
+  const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertionActions.length, submitActions.length) / submitActions.length) * 100);
+  const evidenceCount = steps.filter((step) => step.type === "screenshot" || step.screenshotOnFailure || step.onFailure === "screenshot").length;
+  const evidenceCoverage = steps.length === 0 ? 100 : Math.round((evidenceCount / steps.length) * 100);
+  const riskySteps = steps.filter((step) => step.type === "click" && !step.selectors.role?.name && !step.selectors.testId).length;
+  const hardcodedValues = steps.filter((step) => {
+    const value = step.value ?? step.expected ?? "";
+    return value.length > 0 && !value.includes("{{") && step.type !== "assert";
+  }).length;
+  const unsupportedBrowserPreflightSteps = steps.filter((step) => step.type === "upload").length;
+  const penalties = riskySteps * 7 + hardcodedValues * 3 + unsupportedBrowserPreflightSteps * 8;
+  const score = Math.max(0, Math.min(100, Math.round((selectorStability * 0.35) + (assertionCoverage * 0.3) + (evidenceCoverage * 0.2) + 15 - penalties)));
+  const warnings = [
+    selectorStability < 70 ? "Several steps rely on weak selectors." : undefined,
+    assertionCoverage < 80 ? "Add validations after important submit/save actions." : undefined,
+    evidenceCoverage < 25 ? "Add screenshots for evidence and failure diagnosis." : undefined,
+    unsupportedBrowserPreflightSteps > 0 ? "Upload steps cannot be tested by browser preflight." : undefined,
+    hardcodedValues > 0 ? "Review hardcoded values before bulk runs." : undefined
+  ].filter(Boolean) as string[];
+  return { score, selectorStability, assertionCoverage, evidenceCoverage, riskySteps, hardcodedValues, unsupportedBrowserPreflightSteps, warnings };
 }

@@ -1,4 +1,4 @@
-import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow } from "../shared/types.js";
+import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow, SelectorTestResult, WorkflowQualityReport, WorkflowTestEvent } from "../shared/types.js";
 
 const recordingStateEl = mustGet("recording-state");
 const statusPillEl = mustGet("status-pill");
@@ -7,9 +7,25 @@ const emptyActionsEl = mustGet("empty-actions");
 const stepSummaryEl = mustGet("step-summary");
 const parameterListEl = mustGet("parameter-list");
 const messageEl = mustGet("message");
+const testSummaryEl = mustGet("test-summary");
+const testEventsEl = mustGet("test-events");
+const inspectorSummaryEl = mustGet("inspector-summary");
+const inspectorEmptyEl = mustGet("inspector-empty");
+const inspectorFieldsEl = mustGet("inspector-fields");
+const selectorTestResultEl = mustGet("selector-test-result");
+const qualityReportEl = mustGet("quality-report");
+const qualityScoreEl = mustGet("quality-score");
 
 const workflowNameInput = mustGet("workflow-name") as HTMLInputElement;
 const workflowCategorySelect = mustGet("workflow-category") as HTMLSelectElement;
+const inspectorDescriptionInput = mustGet("inspector-description") as HTMLInputElement;
+const stepTimeoutInput = mustGet("step-timeout") as HTMLInputElement;
+const stepRetryCountInput = mustGet("step-retry-count") as HTMLInputElement;
+const stepRetryDelayInput = mustGet("step-retry-delay") as HTMLInputElement;
+const stepContinueOnFailureInput = mustGet("step-continue-on-failure") as HTMLInputElement;
+const stepScreenshotOnFailureInput = mustGet("step-screenshot-on-failure") as HTMLInputElement;
+const stepConditionSelect = mustGet("step-condition") as HTMLSelectElement;
+const stepConditionTextInput = mustGet("step-condition-text") as HTMLInputElement;
 const manualUrlInput = mustGet("manual-url") as HTMLInputElement;
 const assertTypeSelect = mustGet("assert-type") as HTMLSelectElement;
 const assertExpectedInput = mustGet("assert-expected") as HTMLInputElement;
@@ -29,11 +45,19 @@ const btnAddWait = mustGet("btn-add-wait") as HTMLButtonElement;
 const btnCopy = mustGet("btn-copy") as HTMLButtonElement;
 const btnDownload = mustGet("btn-download") as HTMLButtonElement;
 const btnSync = mustGet("btn-sync") as HTMLButtonElement;
+const btnTestWorkflow = mustGet("btn-test-workflow") as HTMLButtonElement;
+const btnTestSelector = mustGet("btn-test-selector") as HTMLButtonElement;
 
 let recording = false;
 let paused = false;
 let actions: RecordedAction[] = [];
 let currentWorkflow: RecordedWorkflow | undefined;
+let selectedActionId: string | undefined;
+let insertAfterActionId: string | null | undefined;
+let testRunning = false;
+let testCurrentActionId: string | undefined;
+let testEvents: WorkflowTestEvent[] = [];
+let selectorTestResults: Record<string, SelectorTestResult> = {};
 
 interface SelectorConfidence {
   level: "strong" | "medium" | "weak" | "manual";
@@ -52,20 +76,16 @@ function wireEvents(): void {
   btnPause.addEventListener("click", () => void togglePause());
   btnStop.addEventListener("click", () => void stopRecording());
   btnClear.addEventListener("click", () => void clearActions());
-  btnAddNavigation.addEventListener("click", () => void addNavigationStep());
-  btnAddAssertion.addEventListener("click", () => void addAssertionStep());
-  btnAddScreenshot.addEventListener("click", () => void addScreenshotStep());
-  btnAddWait.addEventListener("click", () => void addWaitStep());
-  manualUrlInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void addNavigationStep();
-    }
-  });
+  btnAddNavigation.addEventListener("click", () => void addToolbarStep(addNavigationStep));
+  btnAddAssertion.addEventListener("click", () => void addToolbarStep(addAssertionStep));
+  btnAddScreenshot.addEventListener("click", () => void addToolbarStep(addScreenshotStep));
+  btnAddWait.addEventListener("click", () => void addToolbarStep(addWaitStep));
+  wireInspectorEvents();
 
   btnCopy.addEventListener("click", () => void copyWorkflow());
   btnDownload.addEventListener("click", () => void downloadWorkflow());
   btnSync.addEventListener("click", () => void syncWorkflow());
+  btnTestWorkflow.addEventListener("click", () => void runTestWorkflow());
 
   chrome.runtime.onMessage.addListener((message: ExtensionMessage) => {
     if (message.type === "RECORDER_STATE_UPDATED") {
@@ -74,15 +94,67 @@ function wireEvents(): void {
       actions = message.actions;
       render();
     }
+    if (message.type === "TEST_WORKFLOW_STATE_UPDATED") {
+      testRunning = message.running;
+      testCurrentActionId = message.currentActionId;
+      testEvents = message.events;
+      renderTestState();
+      renderActions();
+    }
   });
+}
+
+function wireInspectorEvents(): void {
+  inspectorDescriptionInput.addEventListener("blur", () => void updateSelectedAction({ description: inspectorDescriptionInput.value }));
+  manualUrlInput.addEventListener("blur", () => void updateSelectedAction({ url: manualUrlInput.value }));
+  manualUrlInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      manualUrlInput.blur();
+    }
+  });
+
+  assertTypeSelect.addEventListener("change", () => void updateSelectedAction({ assertionType: assertTypeSelect.value as RecordedAction["assertionType"] }));
+  assertExpectedInput.addEventListener("blur", () => void updateSelectedAction({ expected: assertExpectedInput.value }));
+  assertExpectedInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      assertExpectedInput.blur();
+    }
+  });
+  assertTimeoutInput.addEventListener("blur", () => void updateSelectedAction({ timeout: Number(assertTimeoutInput.value) || 10_000 }));
+  assertOnFailureSelect.addEventListener("change", () => void updateSelectedAction({ onFailure: assertOnFailureSelect.value as RecordedAction["onFailure"] }));
+
+  screenshotLabelInput.addEventListener("blur", () => void updateSelectedAction({ screenshotLabel: screenshotLabelInput.value }));
+  screenshotLabelInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      screenshotLabelInput.blur();
+    }
+  });
+
+  waitMsInput.addEventListener("blur", () => void updateSelectedAction({ waitMs: Number(waitMsInput.value) || 1_000 }));
+
+  stepTimeoutInput.addEventListener("blur", () => void updateSelectedAction({ timeout: Number(stepTimeoutInput.value) || 10_000 }));
+  stepRetryCountInput.addEventListener("blur", () => void updateSelectedAction({ retryCount: Number(stepRetryCountInput.value) || 0 }));
+  stepRetryDelayInput.addEventListener("blur", () => void updateSelectedAction({ retryDelayMs: Number(stepRetryDelayInput.value) || 1_000 }));
+  stepContinueOnFailureInput.addEventListener("change", () => void updateSelectedAction({ continueOnFailure: stepContinueOnFailureInput.checked }));
+  stepScreenshotOnFailureInput.addEventListener("change", () => void updateSelectedAction({ screenshotOnFailure: stepScreenshotOnFailureInput.checked }));
+  stepConditionSelect.addEventListener("change", () => void updateCondition());
+  stepConditionTextInput.addEventListener("blur", () => void updateCondition());
+  btnTestSelector.addEventListener("click", () => void testSelectedSelector());
 }
 
 async function refreshState(): Promise<void> {
   const status = await sendMessage({ type: "GET_STATUS" });
   const actionResponse = await sendMessage({ type: "GET_ACTIONS" });
+  const testResponse = await sendMessage({ type: "GET_TEST_WORKFLOW_STATE" });
   recording = Boolean(status?.recording);
   paused = Boolean(status?.paused);
   actions = actionResponse?.actions ?? [];
+  testRunning = Boolean(testResponse?.running);
+  testCurrentActionId = testResponse?.currentActionId;
+  testEvents = testResponse?.events ?? [];
   render();
 }
 
@@ -141,54 +213,67 @@ async function clearActions(): Promise<void> {
 }
 
 async function addAssertionStep(): Promise<void> {
-  const expected = assertExpectedInput.value.trim();
-  if (!expected) {
-    setMessage("Enter a value to validate before adding an assertion.");
-    return;
-  }
-
-  await sendMessage({
+  const response = await sendMessage({
     type: "ADD_ASSERTION_ACTION",
-    assertionType: assertTypeSelect.value as RecordedAction["assertionType"],
-    expected,
-    timeout: Number(assertTimeoutInput.value) || 10_000,
-    onFailure: assertOnFailureSelect.value as RecordedAction["onFailure"]
+    assertionType: "textVisible",
+    expected: "",
+    timeout: 10_000,
+    onFailure: "screenshot",
+    insertAfterActionId
   });
-  assertExpectedInput.value = "";
-  setMessage("Assertion step added.");
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Validation step added. Configure it in Properties.");
   await refreshState();
 }
 
 async function addScreenshotStep(): Promise<void> {
-  await sendMessage({ type: "ADD_SCREENSHOT_ACTION", label: screenshotLabelInput.value });
-  screenshotLabelInput.value = "";
-  setMessage("Screenshot step added.");
+  const response = await sendMessage({ type: "ADD_SCREENSHOT_ACTION", label: "evidence", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Screenshot step added. Configure it in Properties.");
   await refreshState();
 }
 
 async function addWaitStep(): Promise<void> {
-  await sendMessage({ type: "ADD_WAIT_ACTION", waitMs: Number(waitMsInput.value) || 1_000 });
-  setMessage("Wait step added.");
+  const response = await sendMessage({ type: "ADD_WAIT_ACTION", waitMs: 1_000, insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Wait step added. Configure it in Properties.");
   await refreshState();
 }
 
 async function addNavigationStep(): Promise<void> {
-  const url = manualUrlInput.value.trim();
-  if (!url) {
-    setMessage("Enter a URL or Zoom path before adding a navigation step.");
-    return;
-  }
+  const response = await sendMessage({ type: "ADD_NAVIGATION_ACTION", url: "/", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Navigation step added. Configure it in Properties.");
+  await refreshState();
+}
 
-  await sendMessage({ type: "ADD_NAVIGATION_ACTION", url });
-  manualUrlInput.value = "";
-  setMessage("Navigation step added.");
+async function addToolbarStep(addStep: () => Promise<void>): Promise<void> {
+  insertAfterActionId = undefined;
+  await addStep();
+}
+
+async function runTestWorkflow(): Promise<void> {
+  const response = await sendMessage({ type: "RUN_TEST_WORKFLOW" });
+  if (!response?.ok) {
+    setMessage(response?.error ?? "Could not start test workflow.");
+  }
   await refreshState();
 }
 
 function render(): void {
+  if (selectedActionId && !actions.some((action) => action.id === selectedActionId)) {
+    selectedActionId = undefined;
+  }
   renderStatus();
   renderActions();
+  renderInspector();
   renderParameters();
+  renderTestState();
+  renderQualityReport();
 }
 
 function renderStatus(): void {
@@ -211,9 +296,18 @@ function renderActions(): void {
   actionListEl.innerHTML = "";
   emptyActionsEl.style.display = actions.length === 0 ? "grid" : "none";
 
+  if (actions.length === 0) {
+    actionListEl.appendChild(renderInsertRow(null));
+    return;
+  }
+
   actions.forEach((action, index) => {
     const item = document.createElement("article");
-    item.className = "action-item";
+    item.className = `action-item${action.id === selectedActionId ? " selected" : ""}${action.id === testCurrentActionId ? " testing" : ""}`;
+    item.addEventListener("click", () => {
+      selectedActionId = action.id;
+      render();
+    });
 
     const main = document.createElement("div");
     main.className = "action-main";
@@ -270,7 +364,97 @@ function renderActions(): void {
     item.append(main, controls);
     item.appendChild(renderSelectorRepair(action, confidence));
     actionListEl.appendChild(item);
+    actionListEl.appendChild(renderInsertRow(action.id, index === actions.length - 1));
   });
+}
+
+function renderInsertRow(afterActionId: string | null, isLast = false): HTMLElement {
+  const row = document.createElement("div");
+  row.className = `insert-row${insertAfterActionId === afterActionId ? " open" : ""}${isLast ? " last" : ""}`;
+
+  const plus = document.createElement("button");
+  plus.type = "button";
+  plus.className = "insert-plus";
+  plus.title = afterActionId === null ? "Insert first step" : "Insert step here";
+  plus.textContent = "+";
+  plus.addEventListener("click", () => {
+    insertAfterActionId = insertAfterActionId === afterActionId ? undefined : afterActionId;
+    renderActions();
+  });
+  row.appendChild(plus);
+
+  if (insertAfterActionId === afterActionId) {
+    const tools = document.createElement("div");
+    tools.className = "insert-tools";
+    tools.append(
+      makeInsertTool("↗", "Navigate", () => void addNavigationStep()),
+      makeInsertTool("✓", "Validate", () => void addAssertionStep()),
+      makeInsertTool("▣", "Shot", () => void addScreenshotStep()),
+      makeInsertTool("⏱", "Wait", () => void addWaitStep())
+    );
+    row.appendChild(tools);
+  }
+
+  return row;
+}
+
+function makeInsertTool(icon: string, label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "insert-tool";
+  button.title = label;
+  button.textContent = `${icon} ${label}`;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderInspector(): void {
+  const action = selectedAction();
+  inspectorEmptyEl.classList.toggle("hidden", Boolean(action));
+  inspectorFieldsEl.classList.toggle("hidden", !action);
+
+  if (!action) {
+    inspectorSummaryEl.textContent = "Select a step to configure it.";
+    return;
+  }
+
+  inspectorSummaryEl.textContent = `${action.type} step`;
+  inspectorDescriptionInput.value = action.description ?? describeAction(action);
+  stepTimeoutInput.value = String(action.timeout ?? 10_000);
+  stepRetryCountInput.value = String(action.retryCount ?? 0);
+  stepRetryDelayInput.value = String(action.retryDelayMs ?? 1_000);
+  stepContinueOnFailureInput.checked = Boolean(action.continueOnFailure);
+  stepScreenshotOnFailureInput.checked = Boolean(action.screenshotOnFailure);
+  stepConditionSelect.value = action.condition?.type ?? "none";
+  stepConditionTextInput.value = action.condition?.text ?? "";
+
+  const selectorBased = !["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type);
+  togglePropertyField("field-selector-test", selectorBased);
+  togglePropertyField("field-url", action.type === "navigate");
+  togglePropertyField("field-assertion", action.type === "assert");
+  togglePropertyField("field-screenshot", action.type === "screenshot");
+  togglePropertyField("field-wait", action.type === "wait");
+
+  if (action.type === "navigate") {
+    manualUrlInput.value = action.url ?? "";
+  }
+  if (action.type === "assert") {
+    assertTypeSelect.value = action.assertionType ?? "textVisible";
+    assertExpectedInput.value = action.expected ?? "";
+    assertTimeoutInput.value = String(action.timeout ?? 10_000);
+    assertOnFailureSelect.value = action.onFailure ?? "screenshot";
+  }
+  if (action.type === "screenshot") {
+    screenshotLabelInput.value = action.screenshotLabel ?? "evidence";
+  }
+  if (action.type === "wait") {
+    waitMsInput.value = String(action.waitMs ?? 1_000);
+  }
+  renderSelectorTestResult(action);
+}
+
+function togglePropertyField(id: string, visible: boolean): void {
+  mustGet(id).classList.toggle("hidden", !visible);
 }
 
 function renderSelectorRepair(action: RecordedAction, confidence: SelectorConfidence): HTMLElement {
@@ -356,6 +540,97 @@ function renderParameters(): void {
   }
 }
 
+function renderTestState(): void {
+  btnTestWorkflow.disabled = testRunning || recording;
+  btnTestWorkflow.textContent = testRunning ? "Testing" : "Test";
+  testSummaryEl.textContent = testRunning
+    ? "Testing workflow in the active tab..."
+    : "Run the current workflow in this browser tab.";
+
+  testEventsEl.innerHTML = "";
+  for (const event of testEvents.slice(-8)) {
+    const item = document.createElement("div");
+    item.className = `test-event ${event.level}`;
+    item.textContent = `${new Date(event.timestamp).toLocaleTimeString()} ${event.message}`;
+    testEventsEl.appendChild(item);
+  }
+}
+
+function renderQualityReport(): void {
+  const report = calculateQualityReport(actions);
+  qualityScoreEl.textContent = `${report.score}`;
+  qualityScoreEl.className = `quality-score ${report.score >= 80 ? "good" : report.score >= 60 ? "warn" : "bad"}`;
+  qualityReportEl.innerHTML = "";
+
+  const metrics = [
+    ["Selector stability", report.selectorStability],
+    ["Assertion coverage", report.assertionCoverage],
+    ["Evidence coverage", report.evidenceCoverage]
+  ] as const;
+
+  for (const [label, value] of metrics) {
+    const row = document.createElement("div");
+    row.className = "quality-row";
+    row.innerHTML = `<span>${label}</span><strong>${value}%</strong>`;
+    qualityReportEl.appendChild(row);
+  }
+
+  const risk = document.createElement("div");
+  risk.className = "quality-risk-grid";
+  risk.innerHTML = `
+    <span>Risky steps <strong>${report.riskySteps}</strong></span>
+    <span>Hardcoded values <strong>${report.hardcodedValues}</strong></span>
+    <span>Unsupported test steps <strong>${report.unsupportedBrowserPreflightSteps}</strong></span>
+  `;
+  qualityReportEl.appendChild(risk);
+
+  if (report.warnings.length > 0) {
+    const list = document.createElement("ul");
+    list.className = "quality-warnings";
+    for (const warning of report.warnings) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      list.appendChild(item);
+    }
+    qualityReportEl.appendChild(list);
+  }
+}
+
+function renderSelectorTestResult(action: RecordedAction): void {
+  const result = selectorTestResults[action.id];
+  selectorTestResultEl.innerHTML = "";
+  if (!result) {
+    selectorTestResultEl.textContent = "Test this selector against the current page.";
+    return;
+  }
+  if (result.error) {
+    selectorTestResultEl.textContent = `Selector test failed: ${result.error}`;
+    selectorTestResultEl.className = "selector-test-result error";
+    return;
+  }
+  selectorTestResultEl.className = "selector-test-result";
+  const summary = document.createElement("div");
+  summary.className = "selector-test-summary";
+  summary.innerHTML = `<strong>${result.visibleCount}/${result.matchedCount}</strong><span>visible / matched</span>`;
+  selectorTestResultEl.appendChild(summary);
+  if (result.chosenPreview) {
+    const preview = document.createElement("div");
+    preview.className = "selector-preview";
+    preview.textContent = `${result.chosenSelector ?? "Chosen"}: ${result.chosenPreview}`;
+    selectorTestResultEl.appendChild(preview);
+  }
+  if (result.fallbackCandidates.length > 0) {
+    const list = document.createElement("div");
+    list.className = "selector-candidates";
+    for (const candidate of result.fallbackCandidates) {
+      const item = document.createElement("div");
+      item.textContent = `${candidate.label}: ${candidate.visibleCount}/${candidate.matchedCount} visible`;
+      list.appendChild(item);
+    }
+    selectorTestResultEl.appendChild(list);
+  }
+}
+
 function makeActionButton(label: string, disabled: boolean, onClick: () => void, className?: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
@@ -380,9 +655,37 @@ async function updateActionDescription(actionId: string, description: string): P
   await refreshState();
 }
 
+async function updateSelectedAction(update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId">): Promise<void> {
+  if (!selectedActionId) return;
+  await sendMessage({ type: "UPDATE_ACTION", actionId: selectedActionId, ...update });
+  await refreshState();
+}
+
 async function updateActionSelector(actionId: string, cssSelector: string | undefined, selectorNote: string | undefined): Promise<void> {
   await sendMessage({ type: "UPDATE_ACTION", actionId, cssSelector, selectorNote });
   await refreshState();
+}
+
+async function updateCondition(): Promise<void> {
+  if (!selectedActionId) return;
+  const action = selectedAction();
+  const type = stepConditionSelect.value as NonNullable<RecordedAction["condition"]>["type"];
+  await updateSelectedAction({
+    condition: {
+      type,
+      text: stepConditionTextInput.value.trim() || undefined,
+      selector: action?.selectors
+    }
+  });
+}
+
+async function testSelectedSelector(): Promise<void> {
+  const action = selectedAction();
+  if (!action) return;
+  selectorTestResultEl.textContent = "Testing selector in the active page...";
+  const result = await sendMessage({ type: "TEST_SELECTOR", action }) as SelectorTestResult;
+  selectorTestResults = { ...selectorTestResults, [action.id]: result };
+  renderSelectorTestResult(action);
 }
 
 async function moveAction(actionId: string, direction: "up" | "down"): Promise<void> {
@@ -451,6 +754,7 @@ async function buildWorkflow(): Promise<RecordedWorkflow> {
   workflow.meta.name = workflowNameInput.value || currentWorkflow?.meta.name || "Untitled Workflow";
   workflow.meta.category = workflowCategorySelect.value as RecordedWorkflow["meta"]["category"];
   currentWorkflow = workflow;
+  workflow.quality = calculateQualityReport(workflow.actions);
   return workflow;
 }
 
@@ -480,6 +784,10 @@ function describeAction(action: RecordedAction): string {
   return action.type;
 }
 
+function selectedAction(): RecordedAction | undefined {
+  return actions.find((action) => action.id === selectedActionId);
+}
+
 function selectorConfidence(action: RecordedAction): SelectorConfidence {
   if (["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type)) {
     return { level: "manual", reason: "Manual or page-level step" };
@@ -507,6 +815,34 @@ function formatSelectors(action: RecordedAction): string {
     action.selectorNote ? `note="${action.selectorNote}"` : undefined
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" | ") : "No selector required";
+}
+
+function calculateQualityReport(inputActions: RecordedAction[]): WorkflowQualityReport {
+  const actionable = inputActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss"].includes(action.type));
+  const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
+  const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
+  const submitActions = inputActions.filter((action) => action.type === "click" && /save|submit|add|continue|confirm/i.test(action.selectors.role?.name ?? action.selectors.text ?? ""));
+  const assertionActions = inputActions.filter((action) => action.type === "assert");
+  const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertionActions.length, submitActions.length) / submitActions.length) * 100);
+  const evidenceCount = inputActions.filter((action) => action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
+  const evidenceCoverage = inputActions.length === 0 ? 100 : Math.round((evidenceCount / inputActions.length) * 100);
+  const riskySteps = inputActions.filter((action) => action.type === "click" && !action.selectors.role?.name && !action.selectors.testId).length;
+  const hardcodedValues = inputActions.filter((action) => {
+    const value = action.value ?? action.expected ?? "";
+    return value.length > 0 && !value.includes("{{") && action.type !== "assert";
+  }).length;
+  const unsupportedBrowserPreflightSteps = inputActions.filter((action) => action.type === "upload").length;
+  const penalties = riskySteps * 7 + hardcodedValues * 3 + unsupportedBrowserPreflightSteps * 8;
+  const score = Math.max(0, Math.min(100, Math.round((selectorStability * 0.35) + (assertionCoverage * 0.3) + (evidenceCoverage * 0.2) + 15 - penalties)));
+  const warnings = [
+    selectorStability < 70 ? "Several steps rely on weak selectors." : undefined,
+    assertionCoverage < 80 ? "Add validations after important submit/save actions." : undefined,
+    evidenceCoverage < 25 ? "Add screenshots for evidence and failure diagnosis." : undefined,
+    unsupportedBrowserPreflightSteps > 0 ? "Upload steps cannot be tested by the extension preflight runner." : undefined,
+    hardcodedValues > 0 ? "Review hardcoded values and parameterize tenant-specific inputs." : undefined
+  ].filter(Boolean) as string[];
+
+  return { score, selectorStability, assertionCoverage, evidenceCoverage, riskySteps, hardcodedValues, unsupportedBrowserPreflightSteps, warnings };
 }
 
 function setBusy(busy: boolean): void {

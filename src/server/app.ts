@@ -10,6 +10,7 @@ import { createFileJobStore } from "./services/fileJobStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
 import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { computeDashboardMetrics } from "./services/analytics.js";
+import { listJobArtifacts } from "./services/artifacts.js";
 import { createSchedulerStore, type ScheduleDefinition } from "./services/scheduler.js";
 import { WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
@@ -205,6 +206,24 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       response.setHeader("Content-Disposition", `attachment; filename="job-${job.id.slice(0, 8)}-results.json"`);
       response.json({ job });
     }
+  });
+
+  app.get("/api/jobs/:jobId/artifacts", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    const config = loadConfig(process.env);
+    const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
+    const artifacts = listJobArtifacts({
+      outputRoot: path.resolve("output"),
+      artifactsDir: path.resolve(config.runtime.artifactsDir),
+      job,
+      accountId
+    });
+    response.json({ artifacts });
   });
 
   app.get("/api/jobs/:jobId/stream", (request, response) => {

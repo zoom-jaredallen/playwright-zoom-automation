@@ -1121,6 +1121,62 @@ td code {
   min-height: 500px;
 }
 
+.workflow-quality-card {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+
+.workflow-quality-card > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.workflow-quality-card small {
+  color: var(--text-text-subtle-neutral);
+  font-size: 12px;
+}
+
+.workflow-quality-card ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-text-warning);
+  font-size: 12px;
+}
+
+.workflow-quality-score {
+  display: inline-grid;
+  min-width: 34px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--fill-fill-subtler-primary);
+  color: var(--text-text-primary);
+  font-weight: 700;
+}
+
+.workflow-quality-score.good {
+  background: var(--fill-fill-subtler-success);
+  color: var(--text-text-success);
+}
+
+.workflow-quality-score.warn {
+  background: var(--fill-fill-subtler-warning);
+  color: var(--text-text-warning);
+}
+
+.workflow-quality-score.bad {
+  background: var(--fill-fill-subtler-error);
+  color: var(--text-text-error);
+}
+
 .editor-header {
   display: flex;
   align-items: center;
@@ -1349,6 +1405,20 @@ td code {
   letter-spacing: 0.3px;
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.detail-sublabel {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-text-subtle-neutral);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.detail-grid.two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -3509,6 +3579,82 @@ tr:hover .copy-btn {
   max-height: 200px;
   overflow-y: auto;
   animation: logs-expand 0.15s ease-out;
+}
+
+.run-artifacts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 6px;
+  background: var(--fill-fill-neutral);
+}
+
+.run-artifacts-header,
+.run-step-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-text-neutral);
+  font-size: 12px;
+}
+
+.tertiary-button.compact {
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.artifact-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-actions > .tertiary-button {
+  justify-self: start;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-list a {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--text-text-neutral);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.artifact-list a span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-kind {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--fill-fill-subtler-neutral);
+  color: var(--text-text-subtle-neutral);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.artifact-kind.trace { background: var(--fill-fill-subtler-primary); color: var(--text-text-primary); }
+.artifact-kind.screenshot { background: var(--fill-fill-subtler-success); color: var(--text-text-success); }
+.artifact-kind.details { background: var(--fill-fill-subtler-warning); color: var(--text-text-warning); }
+.artifact-kind.log { background: var(--fill-fill-subtler-neutral); color: var(--text-text-neutral); }
+
+.run-log-empty {
+  color: var(--text-text-subtle-neutral);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 @keyframes logs-expand {

@@ -42,6 +42,11 @@ export interface RecordedAction {
   expected?: string;
   timeout?: number;
   onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  retryCount?: number;
+  retryDelayMs?: number;
+  continueOnFailure?: boolean;
+  screenshotOnFailure?: boolean;
+  condition?: StepCondition;
   screenshotLabel?: string;
   waitMs?: number;
   selectorNote?: string;
@@ -51,6 +56,27 @@ export interface RecordedAction {
   parameterHints?: ParameterHint[];
   /** Human-readable description auto-generated from the action */
   description?: string;
+}
+
+export interface StepCondition {
+  type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount";
+  text?: string;
+  selector?: SelectorStrategy;
+}
+
+export interface SelectorTestResult {
+  actionId: string;
+  matchedCount: number;
+  visibleCount: number;
+  chosenPreview?: string;
+  chosenSelector?: string;
+  fallbackCandidates: Array<{
+    selector: SelectorStrategy;
+    label: string;
+    matchedCount: number;
+    visibleCount: number;
+  }>;
+  error?: string;
 }
 
 // ─── Workflow Schema ─────────────────────────────────────────────────────────
@@ -93,6 +119,25 @@ export interface RecordedWorkflow {
     defaultTimeout: number;
     retryableErrors: string[];
   };
+  quality?: WorkflowQualityReport;
+}
+
+export interface WorkflowTestEvent {
+  timestamp: number;
+  level: "info" | "success" | "error";
+  message: string;
+  actionId?: string;
+}
+
+export interface WorkflowQualityReport {
+  score: number;
+  selectorStability: number;
+  assertionCoverage: number;
+  evidenceCoverage: number;
+  riskySteps: number;
+  hardcodedValues: number;
+  unsupportedBrowserPreflightSteps: number;
+  warnings: string[];
 }
 
 // ─── Extension Messages ──────────────────────────────────────────────────────
@@ -106,17 +151,40 @@ export type ExtensionMessage =
   | { type: "ACTION_RECORDED"; action: RecordedAction }
   | { type: "STATUS_RESPONSE"; recording: boolean; paused: boolean; actionCount: number }
   | { type: "RECORDER_STATE_UPDATED"; recording: boolean; paused: boolean; actions: RecordedAction[] }
+  | { type: "TEST_WORKFLOW_STATE_UPDATED"; running: boolean; currentActionId?: string; events: WorkflowTestEvent[] }
   | { type: "RECORDING_STARTED" }
   | { type: "RECORDING_STOPPED"; workflow: RecordedWorkflow }
   | { type: "UPDATE_PARAMETER"; actionId: string; paramIndex: number; confirmed: boolean }
-  | { type: "UPDATE_ACTION"; actionId: string; description?: string; cssSelector?: string; selectorNote?: string }
+  | {
+      type: "UPDATE_ACTION";
+      actionId: string;
+      description?: string;
+      cssSelector?: string;
+      selectorNote?: string;
+      url?: string;
+      assertionType?: RecordedAction["assertionType"];
+      expected?: string;
+      timeout?: number;
+      onFailure?: RecordedAction["onFailure"];
+      retryCount?: number;
+      retryDelayMs?: number;
+      continueOnFailure?: boolean;
+      screenshotOnFailure?: boolean;
+      condition?: RecordedAction["condition"];
+      screenshotLabel?: string;
+      waitMs?: number;
+    }
   | { type: "MOVE_ACTION"; actionId: string; direction: "up" | "down" }
   | { type: "DELETE_ACTION"; actionId: string }
-  | { type: "ADD_NAVIGATION_ACTION"; url: string }
-  | { type: "ADD_ASSERTION_ACTION"; assertionType: RecordedAction["assertionType"]; expected: string; timeout?: number; onFailure?: RecordedAction["onFailure"] }
-  | { type: "ADD_SCREENSHOT_ACTION"; label?: string }
-  | { type: "ADD_WAIT_ACTION"; waitMs: number }
+  | { type: "ADD_NAVIGATION_ACTION"; url: string; insertAfterActionId?: string | null }
+  | { type: "ADD_ASSERTION_ACTION"; assertionType: RecordedAction["assertionType"]; expected: string; timeout?: number; onFailure?: RecordedAction["onFailure"]; insertAfterActionId?: string | null }
+  | { type: "ADD_SCREENSHOT_ACTION"; label?: string; insertAfterActionId?: string | null }
+  | { type: "ADD_WAIT_ACTION"; waitMs: number; insertAfterActionId?: string | null }
   | { type: "CLEAR_ACTIONS" }
   | { type: "GET_ACTIONS" }
   | { type: "BUILD_WORKFLOW" }
+  | { type: "RUN_TEST_WORKFLOW" }
+  | { type: "GET_TEST_WORKFLOW_STATE" }
+  | { type: "EXECUTE_TEST_ACTION"; action: RecordedAction }
+  | { type: "TEST_SELECTOR"; action: RecordedAction }
   | { type: "ACTIONS_RESPONSE"; actions: RecordedAction[] };

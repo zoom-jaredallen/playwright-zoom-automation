@@ -171,7 +171,82 @@ export function StepDetail({ step, stepIndex, totalSteps, onUpdate, onDelete, on
       {/* Conditional toggle */}
       <div className="detail-section">
         <label className="detail-label">Behavior</label>
+        <div className="detail-grid two">
+          <div>
+            <label className="detail-sublabel">Timeout</label>
+            <input
+              className="detail-input-sm"
+              type="number"
+              min={500}
+              max={60000}
+              step={500}
+              value={step.timeout ?? 10000}
+              onChange={(e) => updateField("timeout", Number(e.target.value) || 10000)}
+            />
+          </div>
+          <div>
+            <label className="detail-sublabel">Retries</label>
+            <input
+              className="detail-input-sm"
+              type="number"
+              min={0}
+              max={10}
+              value={step.retryCount ?? 0}
+              onChange={(e) => updateField("retryCount", Number(e.target.value) || 0)}
+            />
+          </div>
+          <div>
+            <label className="detail-sublabel">Retry delay</label>
+            <input
+              className="detail-input-sm"
+              type="number"
+              min={0}
+              max={60000}
+              step={250}
+              value={step.retryDelayMs ?? 1000}
+              onChange={(e) => updateField("retryDelayMs", Number(e.target.value) || 1000)}
+            />
+          </div>
+          <div>
+            <label className="detail-sublabel">Condition</label>
+            <select
+              className="detail-select"
+              value={step.condition?.type ?? "none"}
+              onChange={(e) => updateField("condition", e.target.value === "none" ? undefined : { type: e.target.value as NonNullable<RecordedActionView["condition"]>["type"], text: step.condition?.text, selector: step.selectors })}
+            >
+              <option value="none">None</option>
+              <option value="textExistsSkip">If text exists, skip</option>
+              <option value="elementVisibleClick">If element visible, click</option>
+              <option value="fieldEmptyFill">If field empty, fill</option>
+              <option value="addressAlreadyExistsSkipAccount">If address exists, skip account</option>
+            </select>
+          </div>
+        </div>
+        {step.condition ? (
+          <input
+            className="detail-input"
+            value={step.condition.text ?? ""}
+            onChange={(e) => updateField("condition", { ...step.condition!, text: e.target.value, selector: step.selectors })}
+            placeholder="Condition text"
+          />
+        ) : null}
         <div className="detail-toggles">
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={step.continueOnFailure ?? false}
+              onChange={(e) => updateField("continueOnFailure", e.target.checked)}
+            />
+            <span>Continue on failure</span>
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={step.screenshotOnFailure ?? false}
+              onChange={(e) => updateField("screenshotOnFailure", e.target.checked)}
+            />
+            <span>Screenshot on failure</span>
+          </label>
           <label className="toggle-row">
             <input
               type="checkbox"

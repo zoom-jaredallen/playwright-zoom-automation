@@ -5,6 +5,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { CompileResult, RecordedAction, RecordedWorkflow, SelectorStrategy } from "./types.js";
+import { generateHealingCode } from "./selectorHealing.js";
 
 export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string): CompileResult {
   const id = slugify(workflow.meta.name || `recorded-${Date.now()}`);
@@ -41,7 +42,7 @@ export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string):
 function generatePluginFile(id: string, workflow: RecordedWorkflow): string {
   const className = pascalCase(id) + "Flow";
   return `import { ${className} } from "./flow.js";
-import type { WorkflowPlugin } from "../../workflows/types.js";
+import type { WorkflowPlugin } from "../../types.js";
 
 const plugin: WorkflowPlugin = {
   id: "${id}",
@@ -66,12 +67,12 @@ function generateFlowFile(id: string, workflow: RecordedWorkflow): string {
   return `import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Page } from "playwright";
-import type { AutomationFlow, FlowInput, FlowResult } from "../../automation/types.js";
-import type { AppConfig } from "../../config.js";
-import type { Logger } from "../../logger.js";
-import type { StorageState } from "../../zoom/auth.js";
-import { impersonateSubAccount } from "../../zoom/impersonation.js";
-import { dismissBlockingZoomPopups } from "../../zoom/businessAddressFlow.js";
+import type { AutomationFlow, FlowInput, FlowResult } from "../../../automation/types.js";
+import type { AppConfig } from "../../../config.js";
+import type { Logger } from "../../../logger.js";
+import type { StorageState } from "../../../zoom/auth.js";
+import { impersonateSubAccount } from "../../../zoom/impersonation.js";
+import { dismissBlockingZoomPopups } from "../../../zoom/businessAddressFlow.js";
 
 export interface ${className}Options {
   browser: Browser;
@@ -150,6 +151,76 @@ ${actionCode}
   private resolveValue(template: string): string {
     return template.replace(/\\{\\{([^}]+)\\}\\}/g, (_, paramName) => this.resolve(paramName.trim()));
   }
+
+${generateHealingCode()}
+
+  private async executeRecordedStep(
+    page: Page,
+    artifactBase: string,
+    description: string,
+    policy: { retryCount?: number; retryDelayMs?: number; continueOnFailure?: boolean; screenshotOnFailure?: boolean },
+    step: () => Promise<void>
+  ): Promise<void> {
+    const attempts = Math.max(1, (policy.retryCount ?? 0) + 1);
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await step();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          this.options.logger.warn("Recorded step failed; retrying", { description, attempt, attempts, error: error instanceof Error ? error.message : String(error) });
+          await page.waitForTimeout(policy.retryDelayMs ?? 1_000);
+        }
+      }
+    }
+    if (policy.screenshotOnFailure) {
+      await page.screenshot({ path: \`\${artifactBase}-\${description.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-failure.png\`, fullPage: true }).catch(() => undefined);
+    }
+    if (policy.continueOnFailure) {
+      this.options.logger.warn("Continuing after recorded step failure", { description, error: lastError instanceof Error ? lastError.message : String(lastError) });
+      return;
+    }
+    throw lastError;
+  }
+
+  private async shouldSkipRecordedStep(page: Page, condition: Record<string, any> | undefined, actionSelectors: Record<string, any>): Promise<"step" | "account" | undefined> {
+    if (!condition || condition.type === "none") return undefined;
+    const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
+    const conditionText = condition.text as string | undefined;
+    if ((condition.type === "textExistsSkip" || condition.type === "addressAlreadyExistsSkipAccount") && conditionText && bodyText.toLowerCase().includes(conditionText.toLowerCase())) {
+      return condition.type === "addressAlreadyExistsSkipAccount" ? "account" : "step";
+    }
+    if (condition.type === "addressAlreadyExistsSkipAccount" && this.targetAlreadyExists(bodyText)) {
+      return "account";
+    }
+    if (condition.type === "elementVisibleClick") {
+      return await this.isElementVisible(page, condition.selector ?? actionSelectors) ? undefined : "step";
+    }
+    if (condition.type === "fieldEmptyFill") {
+      const element = await this.findElement(page, condition.selector ?? actionSelectors, 2_000).catch(() => undefined);
+      if (!element) return "step";
+      const value = await element.inputValue({ timeout: 500 }).catch(() => "");
+      return value.trim() ? "step" : undefined;
+    }
+    return undefined;
+  }
+
+  private async isElementVisible(page: Page, selectors: Record<string, any>): Promise<boolean> {
+    try {
+      const element = await this.findElement(page, selectors, 2_000);
+      return await element.isVisible();
+    } catch {
+      return false;
+    }
+  }
+
+  private targetAlreadyExists(pageText: string): boolean {
+    const config = this.options.config.address;
+    const tokens = [config.line1, config.city, config.postalCode].filter(Boolean);
+    return tokens.length > 0 && tokens.every((token) => pageText.toLowerCase().includes(token!.toLowerCase()));
+  }
 }
 `;
 }
@@ -157,64 +228,95 @@ ${actionCode}
 function generateActionCode(action: RecordedAction, index: number, workflow: RecordedWorkflow): string {
   const indent = "      ";
   const stepComment = `${indent}// Step ${index + 1}: ${action.description ?? action.type}`;
-  const timeout = workflow.config.defaultTimeout;
+  const timeout = action.timeout ?? workflow.config.defaultTimeout;
+  const coreIndent = "        ";
+  let core: string;
 
   switch (action.type) {
     case "navigate":
-      return `${stepComment}
-${indent}await page.goto(\`\${this.options.config.zoom.webBaseUrl.replace(/\\/$/, "")}${action.url ? new URL(action.url).pathname + new URL(action.url).hash : "/"}\`, { waitUntil: "domcontentloaded", timeout: ${timeout} });
-${indent}await page.waitForLoadState("networkidle", { timeout: ${timeout} }).catch(() => undefined);
-${indent}await dismissBlockingZoomPopups(page, this.options.logger);`;
+      core = `${coreIndent}await page.goto(\`\${this.options.config.zoom.webBaseUrl.replace(/\\/$/, "")}${action.url ? new URL(action.url).pathname + new URL(action.url).hash : "/"}\`, { waitUntil: "domcontentloaded", timeout: ${timeout} });
+${coreIndent}await page.waitForLoadState("networkidle", { timeout: ${timeout} }).catch(() => undefined);
+${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
+      break;
 
     case "click":
-      return `${stepComment}
-${indent}await this.clickElement(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+      core = `${coreIndent}await this.clickElement(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+      break;
 
     case "fill": {
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)})`
         : JSON.stringify(action.value ?? "");
-      return `${stepComment}
-${indent}await this.fillField(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      core = `${coreIndent}await this.fillField(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      break;
     }
 
     case "select": {
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)})`
         : JSON.stringify(action.value ?? "");
-      return `${stepComment}
-${indent}await this.selectOption(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      core = `${coreIndent}await this.selectOption(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      break;
     }
 
     case "upload":
-      return `${stepComment}
-${indent}// File upload — path resolved from config.documents
-${indent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+      core = `${coreIndent}// File upload — path resolved from config.documents
+${coreIndent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+      break;
 
     case "wait":
-      return `${stepComment}
-${indent}await page.waitForTimeout(${Math.min(Math.max(action.waitMs ?? timeout, 250), 60_000)});`;
+      core = `${coreIndent}await page.waitForTimeout(${Math.min(Math.max(action.waitMs ?? timeout, 250), 60_000)});`;
+      break;
 
     case "assert":
-      return generateAssertionActionCode(action, indent, timeout, stepComment);
+      return wrapGeneratedAction(action, stepComment, generateAssertionActionCode(action, coreIndent, timeout), workflow);
 
     case "screenshot": {
       const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
-      return `${stepComment}
-${indent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
+      core = `${coreIndent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
+      break;
     }
 
     case "dismiss":
-      return `${stepComment}
-${indent}await dismissBlockingZoomPopups(page, this.options.logger);`;
+      core = `${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
+      break;
 
     default:
-      return `${stepComment}
-${indent}// TODO: Implement ${action.type} action`;
+      core = `${coreIndent}// TODO: Implement ${action.type} action`;
+      break;
   }
+
+  return wrapGeneratedAction(action, stepComment, core, workflow);
 }
 
-function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number, stepComment: string): string {
+function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: string, workflow: RecordedWorkflow): string {
+  const indent = "      ";
+  const condition = JSON.stringify(action.condition);
+  const selectors = JSON.stringify(action.selectors);
+  const policy = JSON.stringify({
+    retryCount: action.retryCount ?? 0,
+    retryDelayMs: action.retryDelayMs ?? workflow.config.defaultTimeout / 10,
+    continueOnFailure: action.continueOnFailure ?? action.onFailure === "skip",
+    screenshotOnFailure: action.screenshotOnFailure ?? action.onFailure === "screenshot"
+  });
+  const description = JSON.stringify(action.description ?? action.type);
+
+  return `${stepComment}
+${indent}{
+${indent}  const skip = await this.shouldSkipRecordedStep(page, ${condition}, ${selectors});
+${indent}  if (skip === "account") {
+${indent}    this.options.logger.info("Recorded workflow skip condition matched", { step: ${description} });
+${indent}    return { status: "skipped", message: "Skip condition matched" };
+${indent}  }
+${indent}  if (skip !== "step") {
+${indent}    await this.executeRecordedStep(page, artifactBase, ${description}, ${policy}, async () => {
+${core}
+${indent}    });
+${indent}  }
+${indent}}`;
+}
+
+function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number): string {
   const expected = JSON.stringify(action.expected ?? action.value ?? "");
   const actionTimeout = action.timeout ?? timeout;
   const onFailure = action.onFailure ?? "screenshot";
@@ -246,8 +348,7 @@ ${indent}if (!fieldMatched) throw new Error("Expected a field value to contain "
   })();
 
   if (onFailure === "skip") {
-    return `${stepComment}
-${indent}try {
+    return `${indent}try {
 ${assertionBody}
 ${indent}} catch (error) {
 ${indent}  this.options.logger.warn("Recorded assertion skipped after failure", { step: ${JSON.stringify(action.description ?? action.id)}, error: error instanceof Error ? error.message : String(error) });
@@ -255,13 +356,11 @@ ${indent}}`;
   }
 
   if (onFailure !== "screenshot") {
-    return `${stepComment}
-${assertionBody}`;
+    return assertionBody;
   }
 
   const label = slugify(action.description ?? action.id);
-  return `${stepComment}
-${indent}try {
+  return `${indent}try {
 ${assertionBody}
 ${indent}} catch (error) {
 ${indent}  await page.screenshot({ path: \`\${artifactBase}-${label}-assertion-failure.png\`, fullPage: true }).catch(() => undefined);

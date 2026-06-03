@@ -26,10 +26,14 @@ const btnOpenPanelReview = document.getElementById("btn-open-panel-review")!;
 
 let currentWorkflow: RecordedWorkflow | undefined;
 let currentActions: RecordedAction[] = [];
+let sidePanelTabId: number | undefined;
+let sidePanelWindowId: number | undefined;
 
 // ─── Initialization ──────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
+  await captureSidePanelOpenContext();
+
   const response = await sendMessage({ type: "GET_STATUS" });
   if (response?.recording) {
     showView("recording");
@@ -269,20 +273,45 @@ async function getServerUrl(): Promise<string> {
 
 async function openSidePanel(): Promise<void> {
   if (!chrome.sidePanel?.open) {
-    alert("Chrome side panel is not available in this browser.");
+    await openRecorderInTab();
     return;
   }
 
-  const window = await chrome.windows.getCurrent();
-  if (!window.id) {
-    alert("Could not determine the active Chrome window.");
-    return;
-  }
+  try {
+    if (sidePanelTabId !== undefined) {
+      await chrome.sidePanel.open({ tabId: sidePanelTabId });
+      await chrome.sidePanel.setOptions({
+        tabId: sidePanelTabId,
+        path: "sidepanel/sidepanel.html",
+        enabled: true
+      });
+      return;
+    }
 
-  await chrome.sidePanel.open({ windowId: window.id });
+    if (sidePanelWindowId !== undefined) {
+      await chrome.sidePanel.open({ windowId: sidePanelWindowId });
+      return;
+    }
+
+    throw new Error("No active tab or window was available for the side panel.");
+  } catch (error) {
+    console.warn("Falling back to recorder tab because side panel could not open", error);
+    await openRecorderInTab();
+  }
 }
 
-function slugify(text: string): string {
+async function captureSidePanelOpenContext(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  sidePanelTabId = tab?.id;
+  sidePanelWindowId = tab?.windowId;
+}
+
+async function openRecorderInTab(): Promise<void> {
+  const url = chrome.runtime.getURL("sidepanel/sidepanel.html");
+  await chrome.tabs.create({ url });
+}
+
+function slugify(text: string) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 

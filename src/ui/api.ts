@@ -64,6 +64,15 @@ export interface JobView {
   }>;
 }
 
+export interface ArtifactView {
+  name: string;
+  type: "trace" | "screenshot" | "details" | "log" | "other";
+  sizeBytes: number;
+  modifiedAt: string;
+  url: string;
+  downloadUrl: string;
+}
+
 // ─── Recorded Workflow Types (for Editor) ────────────────────────────────────
 
 export interface RecordedActionView {
@@ -83,6 +92,15 @@ export interface RecordedActionView {
   expected?: string;
   timeout?: number;
   onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  retryCount?: number;
+  retryDelayMs?: number;
+  continueOnFailure?: boolean;
+  screenshotOnFailure?: boolean;
+  condition?: {
+    type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount";
+    text?: string;
+    selector?: RecordedActionView["selectors"];
+  };
   screenshotLabel?: string;
   waitMs?: number;
   selectorNote?: string;
@@ -130,6 +148,18 @@ export interface RecordedWorkflowView {
     defaultTimeout: number;
     retryableErrors: string[];
   };
+  quality?: WorkflowQualityReportView;
+}
+
+export interface WorkflowQualityReportView {
+  score: number;
+  selectorStability: number;
+  assertionCoverage: number;
+  evidenceCoverage: number;
+  riskySteps: number;
+  hardcodedValues: number;
+  unsupportedBrowserPreflightSteps: number;
+  warnings: string[];
 }
 
 export async function fetchRecordedWorkflows(): Promise<{ workflows: Array<{ id: string; name: string; category: string; actionCount: number }> }> {
@@ -209,6 +239,13 @@ export async function fetchJob(jobId: string): Promise<{ job: JobView }> {
 
 export async function cancelJob(jobId: string): Promise<{ job: JobView }> {
   return requestJson(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export async function fetchJobArtifacts(jobId: string, accountId?: string): Promise<{ artifacts: ArtifactView[] }> {
+  const params = new URLSearchParams();
+  if (accountId) params.set("accountId", accountId);
+  const query = params.toString();
+  return requestJson(`/api/jobs/${jobId}/artifacts${query ? `?${query}` : ""}`);
 }
 
 /**

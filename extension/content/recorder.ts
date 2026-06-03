@@ -5,7 +5,7 @@
  */
 import { extractSelectors, getFieldContext } from "../shared/selectors.js";
 import { detectParameters } from "../shared/parameterizer.js";
-import type { RecordedAction, ExtensionMessage, ActionType } from "../shared/types.js";
+import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, SelectorTestResult } from "../shared/types.js";
 
 let recording = false;
 let paused = false;
@@ -43,6 +43,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     sendResponse({ ok: true });
   } else if (message.type === "GET_STATUS") {
     sendResponse({ recording, paused, actionCount: actionQueue.length });
+  } else if (message.type === "EXECUTE_TEST_ACTION") {
+    void executeTestAction(message.action).then(sendResponse);
+  } else if (message.type === "TEST_SELECTOR") {
+    void testSelector(message.action).then(sendResponse);
   }
   return true;
 });
@@ -345,6 +349,337 @@ function recordAction(partial: Partial<RecordedAction> & { type: ActionType; sel
     type: "ACTION_RECORDED",
     action
   } satisfies ExtensionMessage);
+}
+
+// ─── Browser Test Replay ─────────────────────────────────────────────────────
+
+async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean; error?: string; skipped?: boolean; message?: string }> {
+  try {
+    const condition = await evaluatePreflightCondition(action);
+    if (condition.skip) {
+      return { ok: true, skipped: true, message: condition.message };
+    }
+
+    switch (action.type) {
+      case "click": {
+        const element = await findReplayElement(action);
+        (element as HTMLElement).click();
+        return { ok: true };
+      }
+      case "fill": {
+        const element = await findReplayElement(action);
+        setElementValue(element, action.value ?? "");
+        return { ok: true };
+      }
+      case "select": {
+        const element = await findReplayElement(action);
+        if (element instanceof HTMLSelectElement) {
+          const option = Array.from(element.options).find((candidate) => candidate.text.includes(action.value ?? "") || candidate.value === action.value);
+          if (option) element.value = option.value;
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          return { ok: true };
+        }
+        (element as HTMLElement).click();
+        const option = await findByText(action.value ?? "", 5_000);
+        (option as HTMLElement).click();
+        return { ok: true };
+      }
+      case "wait":
+        await sleep(Math.min(Math.max(action.waitMs ?? 1_000, 250), 60_000));
+        return { ok: true };
+      case "assert":
+        await executeAssertion(action);
+        return { ok: true };
+      case "dismiss":
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        return { ok: true };
+      case "upload":
+        return { ok: false, error: "Upload steps cannot be replayed inside the extension preflight runner." };
+      case "navigate":
+      case "screenshot":
+        return { ok: true };
+      default:
+        return { ok: false, error: `Unsupported test action: ${action.type}` };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function evaluatePreflightCondition(action: RecordedAction): Promise<{ skip: boolean; message?: string }> {
+  const condition = action.condition;
+  if (!condition || condition.type === "none") {
+    return { skip: false };
+  }
+
+  if (condition.type === "textExistsSkip" || condition.type === "addressAlreadyExistsSkipAccount") {
+    const expectedText = condition.text ?? action.expected ?? action.value ?? "";
+    if (expectedText && visibleText(document.body).toLowerCase().includes(expectedText.toLowerCase())) {
+      return {
+        skip: true,
+        message: condition.type === "addressAlreadyExistsSkipAccount"
+          ? "Address already exists; skip account"
+          : `Text already exists: ${expectedText}`
+      };
+    }
+  }
+
+  if (condition.type === "elementVisibleClick") {
+    const target = findReplayElementSync({ ...action, selectors: condition.selector ?? action.selectors });
+    if (!target || !isElementVisible(target)) {
+      return { skip: true, message: "Conditional element is not visible" };
+    }
+  }
+
+  if (condition.type === "fieldEmptyFill" && action.type === "fill") {
+    const target = findReplayElementSync({ ...action, selectors: condition.selector ?? action.selectors });
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+      if (target.value.trim()) {
+        return { skip: true, message: "Field already has a value" };
+      }
+    }
+  }
+
+  return { skip: false };
+}
+
+async function testSelector(action: RecordedAction): Promise<SelectorTestResult> {
+  try {
+    const candidates = selectorCandidates(action.selectors);
+    const results = candidates.map((candidate) => {
+      const elements = resolveCandidate(candidate.selector, candidate.label);
+      return {
+        selector: candidate.selector,
+        label: candidate.label,
+        matchedCount: elements.length,
+        visibleCount: elements.filter(isElementVisible).length
+      };
+    });
+
+    const chosen = findReplayElementSync(action);
+    if (chosen) {
+      highlightElement(chosen);
+    }
+
+    return {
+      actionId: action.id,
+      matchedCount: results[0]?.matchedCount ?? 0,
+      visibleCount: results[0]?.visibleCount ?? 0,
+      chosenPreview: chosen ? elementPreview(chosen) : undefined,
+      chosenSelector: results.find((result) => result.visibleCount > 0)?.label,
+      fallbackCandidates: results
+    };
+  } catch (error) {
+    return {
+      actionId: action.id,
+      matchedCount: 0,
+      visibleCount: 0,
+      fallbackCandidates: [],
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function executeAssertion(action: RecordedAction): Promise<void> {
+  const expected = action.expected ?? action.value ?? "";
+  const timeout = action.timeout ?? 10_000;
+  switch (action.assertionType) {
+    case "urlContains":
+      if (!window.location.href.includes(expected)) {
+        throw new Error(`Expected URL to contain "${expected}"`);
+      }
+      return;
+    case "elementVisible":
+      await waitFor(() => {
+        const element = document.querySelector(expected);
+        return Boolean(element && isElementVisible(element));
+      }, timeout, `Expected selector to be visible: ${expected}`);
+      return;
+    case "fieldValue":
+      await waitFor(() => {
+        const fields = Array.from(document.querySelectorAll("input, textarea")) as Array<HTMLInputElement | HTMLTextAreaElement>;
+        return fields.some((field) => field.value.includes(expected));
+      }, timeout, `Expected a field value to contain "${expected}"`);
+      return;
+    case "tableRowContains":
+      await waitFor(() => Array.from(document.querySelectorAll("tr")).some((row) => visibleText(row).includes(expected)), timeout, `Expected table row containing "${expected}"`);
+      return;
+    case "textVisible":
+    default:
+      await findByText(expected, timeout);
+      return;
+  }
+}
+
+async function findReplayElement(action: RecordedAction): Promise<Element> {
+  const syncElement = findReplayElementSync(action);
+  if (syncElement) return syncElement;
+  if (action.selectors.text) {
+    return await findByText(action.selectors.text, action.timeout ?? 5_000);
+  }
+  throw new Error(`Could not find element for ${action.description ?? action.type}`);
+}
+
+function findReplayElementSync(action: RecordedAction): Element | undefined {
+  const selectors = action.selectors;
+  if (selectors.css) {
+    const element = document.querySelector(selectors.css);
+    if (element && isElementVisible(element)) return element;
+  }
+  if (selectors.testId) {
+    const element = document.querySelector(`[data-testid="${cssEscape(selectors.testId)}"]`);
+    if (element && isElementVisible(element)) return element;
+  }
+  if (selectors.label) {
+    const element = findByLabel(selectors.label);
+    if (element) return element;
+  }
+  if (selectors.role) {
+    const element = findByRole(selectors.role.role, selectors.role.name);
+    if (element) return element;
+  }
+  if (selectors.text) {
+    return Array.from(document.querySelectorAll("body *")).find((element) => isElementVisible(element) && visibleText(element).toLowerCase().includes(selectors.text!.toLowerCase()));
+  }
+  return undefined;
+}
+
+function selectorCandidates(selectors: SelectorStrategy): Array<{ label: string; selector: SelectorStrategy }> {
+  const candidates: Array<{ label: string; selector: SelectorStrategy }> = [];
+  if (selectors.role) candidates.push({ label: `Role: ${selectors.role.role}${selectors.role.name ? ` / ${selectors.role.name}` : ""}`, selector: { role: selectors.role } });
+  if (selectors.label) candidates.push({ label: `Label: ${selectors.label}`, selector: { label: selectors.label } });
+  if (selectors.text) candidates.push({ label: `Text: ${selectors.text}`, selector: { text: selectors.text } });
+  if (selectors.testId) candidates.push({ label: `Test ID: ${selectors.testId}`, selector: { testId: selectors.testId } });
+  if (selectors.css) candidates.push({ label: `CSS: ${selectors.css}`, selector: { css: selectors.css } });
+  return candidates;
+}
+
+function resolveCandidate(selector: SelectorStrategy, label: string): Element[] {
+  if (selector.css) return Array.from(document.querySelectorAll(selector.css));
+  if (selector.testId) return Array.from(document.querySelectorAll(`[data-testid="${cssEscape(selector.testId)}"]`));
+  if (selector.label) {
+    const target = findByLabel(selector.label);
+    return target ? [target] : [];
+  }
+  if (selector.role) {
+    const target = findByRole(selector.role.role, selector.role.name);
+    return target ? [target] : [];
+  }
+  if (selector.text) {
+    return Array.from(document.querySelectorAll("body *")).filter((element) => visibleText(element).toLowerCase().includes(selector.text!.toLowerCase()));
+  }
+  if (label) return [];
+  return [];
+}
+
+function highlightElement(element: Element): void {
+  const id = "__zoom_recorder_selector_highlight";
+  document.getElementById(id)?.remove();
+  const rect = element.getBoundingClientRect();
+  const overlay = document.createElement("div");
+  overlay.id = id;
+  overlay.style.cssText = [
+    "position: fixed",
+    `left: ${Math.max(rect.left - 3, 0)}px`,
+    `top: ${Math.max(rect.top - 3, 0)}px`,
+    `width: ${Math.max(rect.width + 6, 6)}px`,
+    `height: ${Math.max(rect.height + 6, 6)}px`,
+    "border: 3px solid #0b5cff",
+    "box-shadow: 0 0 0 3px rgba(11,92,255,0.2)",
+    "border-radius: 6px",
+    "z-index: 999998",
+    "pointer-events: none"
+  ].join(";");
+  document.body.appendChild(overlay);
+  window.setTimeout(() => overlay.remove(), 2_500);
+}
+
+function elementPreview(element: Element): string {
+  const tag = element.tagName.toLowerCase();
+  const label = element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? visibleText(element);
+  return `<${tag}> ${label.replace(/\s+/g, " ").trim().slice(0, 120)}`;
+}
+
+function findByLabel(labelText: string): Element | undefined {
+  const labels = Array.from(document.querySelectorAll("label"));
+  for (const label of labels) {
+    if (!visibleText(label).toLowerCase().includes(labelText.toLowerCase())) continue;
+    if (label.htmlFor) {
+      const target = document.getElementById(label.htmlFor);
+      if (target && isElementVisible(target)) return target;
+    }
+    const nested = label.querySelector("input, textarea, select, button, [role='button'], [role='checkbox']");
+    if (nested && isElementVisible(nested)) return nested;
+  }
+
+  const aria = Array.from(document.querySelectorAll("input, textarea, select, button, [aria-label]"));
+  return aria.find((element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? "").toLowerCase().includes(labelText.toLowerCase()) && isElementVisible(element));
+}
+
+function findByRole(role: string, name?: string): Element | undefined {
+  const selectors = role === "button"
+    ? "button, [role='button'], input[type='button'], input[type='submit']"
+    : role === "textbox"
+      ? "input, textarea, [role='textbox']"
+      : role === "checkbox"
+        ? "input[type='checkbox'], [role='checkbox'], [class*='checkbox']"
+        : `[role='${role}']`;
+  const elements = Array.from(document.querySelectorAll(selectors));
+  return elements.find((element) => {
+    if (!isElementVisible(element)) return false;
+    if (!name) return true;
+    const accessible = `${visibleText(element)} ${element.getAttribute("aria-label") ?? ""} ${(element as HTMLInputElement).value ?? ""}`.trim();
+    return accessible.toLowerCase().includes(name.toLowerCase());
+  });
+}
+
+async function findByText(text: string, timeout: number): Promise<Element> {
+  let found: Element | undefined;
+  await waitFor(() => {
+    found = Array.from(document.querySelectorAll("body *")).find((element) => {
+      if (!isElementVisible(element)) return false;
+      return visibleText(element).toLowerCase().includes(text.toLowerCase());
+    });
+    return Boolean(found);
+  }, timeout, `Expected visible text "${text}"`);
+  return found!;
+}
+
+function setElementValue(element: Element, value: string): void {
+  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+    throw new Error("Target element is not fillable");
+  }
+  element.focus();
+  element.value = value;
+  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function waitFor(predicate: () => boolean, timeout: number, errorMessage: string): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await sleep(100);
+  }
+  throw new Error(errorMessage);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isElementVisible(element: Element): boolean {
+  const rect = element.getBoundingClientRect();
+  const style = window.getComputedStyle(element);
+  return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+}
+
+function visibleText(element: Element): string {
+  return element.textContent?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function cssEscape(value: string): string {
+  return value.replace(/["\\]/g, "\\$&");
 }
 
 // ─── Recording Indicator ─────────────────────────────────────────────────────

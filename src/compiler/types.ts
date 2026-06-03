@@ -33,6 +33,11 @@ export interface RecordedAction {
   expected?: string;
   timeout?: number;
   onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  retryCount?: number;
+  retryDelayMs?: number;
+  continueOnFailure?: boolean;
+  screenshotOnFailure?: boolean;
+  condition?: StepCondition;
   screenshotLabel?: string;
   waitMs?: number;
   selectorNote?: string;
@@ -41,6 +46,12 @@ export interface RecordedAction {
   frameSelector?: string;
   parameterHints?: ParameterHint[];
   description?: string;
+}
+
+export interface StepCondition {
+  type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount";
+  text?: string;
+  selector?: SelectorStrategy;
 }
 
 export interface WorkflowParameter {
@@ -81,6 +92,18 @@ export interface RecordedWorkflow {
     defaultTimeout: number;
     retryableErrors: string[];
   };
+  quality?: WorkflowQualityReport;
+}
+
+export interface WorkflowQualityReport {
+  score: number;
+  selectorStability: number;
+  assertionCoverage: number;
+  evidenceCoverage: number;
+  riskySteps: number;
+  hardcodedValues: number;
+  unsupportedBrowserPreflightSteps: number;
+  warnings: string[];
 }
 
 export interface CompileResult {
