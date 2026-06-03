@@ -1,6 +1,6 @@
 // ─── Recorded Action Types ───────────────────────────────────────────────────
 
-export type ActionType = "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "dismiss";
+export type ActionType = "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "screenshot" | "dismiss";
 
 export interface SelectorStrategy {
   /** ARIA role + accessible name (most stable) */
@@ -38,6 +38,13 @@ export interface RecordedAction {
   value?: string;
   url?: string;
   filePath?: string;
+  assertionType?: "textVisible" | "elementVisible" | "urlContains" | "fieldValue" | "tableRowContains";
+  expected?: string;
+  timeout?: number;
+  onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  screenshotLabel?: string;
+  waitMs?: number;
+  selectorNote?: string;
   pageUrl: string;
   pageTitle: string;
   frameSelector?: string;
@@ -93,12 +100,23 @@ export interface RecordedWorkflow {
 export type ExtensionMessage =
   | { type: "START_RECORDING" }
   | { type: "STOP_RECORDING" }
+  | { type: "PAUSE_RECORDING" }
+  | { type: "RESUME_RECORDING" }
   | { type: "GET_STATUS" }
   | { type: "ACTION_RECORDED"; action: RecordedAction }
-  | { type: "STATUS_RESPONSE"; recording: boolean; actionCount: number }
+  | { type: "STATUS_RESPONSE"; recording: boolean; paused: boolean; actionCount: number }
+  | { type: "RECORDER_STATE_UPDATED"; recording: boolean; paused: boolean; actions: RecordedAction[] }
   | { type: "RECORDING_STARTED" }
   | { type: "RECORDING_STOPPED"; workflow: RecordedWorkflow }
   | { type: "UPDATE_PARAMETER"; actionId: string; paramIndex: number; confirmed: boolean }
+  | { type: "UPDATE_ACTION"; actionId: string; description?: string; cssSelector?: string; selectorNote?: string }
+  | { type: "MOVE_ACTION"; actionId: string; direction: "up" | "down" }
   | { type: "DELETE_ACTION"; actionId: string }
+  | { type: "ADD_NAVIGATION_ACTION"; url: string }
+  | { type: "ADD_ASSERTION_ACTION"; assertionType: RecordedAction["assertionType"]; expected: string; timeout?: number; onFailure?: RecordedAction["onFailure"] }
+  | { type: "ADD_SCREENSHOT_ACTION"; label?: string }
+  | { type: "ADD_WAIT_ACTION"; waitMs: number }
+  | { type: "CLEAR_ACTIONS" }
   | { type: "GET_ACTIONS" }
+  | { type: "BUILD_WORKFLOW" }
   | { type: "ACTIONS_RESPONSE"; actions: RecordedAction[] };

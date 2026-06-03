@@ -8,6 +8,7 @@ import { detectParameters } from "../shared/parameterizer.js";
 import type { RecordedAction, ExtensionMessage, ActionType } from "../shared/types.js";
 
 let recording = false;
+let paused = false;
 let actionQueue: RecordedAction[] = [];
 let lastFillTimeout: ReturnType<typeof setTimeout> | undefined;
 let lastFillElement: Element | null = null;
@@ -31,8 +32,17 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
   } else if (message.type === "STOP_RECORDING") {
     stopRecording();
     sendResponse({ ok: true });
+  } else if (message.type === "PAUSE_RECORDING") {
+    paused = true;
+    flushPendingFill();
+    showRecordingIndicator();
+    sendResponse({ ok: true });
+  } else if (message.type === "RESUME_RECORDING") {
+    paused = false;
+    showRecordingIndicator();
+    sendResponse({ ok: true });
   } else if (message.type === "GET_STATUS") {
-    sendResponse({ recording, actionCount: actionQueue.length });
+    sendResponse({ recording, paused, actionCount: actionQueue.length });
   }
   return true;
 });
@@ -41,6 +51,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
 
 function startRecording(): void {
   recording = true;
+  paused = false;
   actionQueue = [];
   impersonationDetected = detectImpersonationContext();
   attachListeners();
@@ -75,6 +86,7 @@ function startRecording(): void {
 
 function stopRecording(): void {
   recording = false;
+  paused = false;
   flushPendingFill();
   detachListeners();
   hideRecordingIndicator();
@@ -103,7 +115,7 @@ function detachListeners(): void {
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 function handleClick(event: MouseEvent): void {
-  if (!recording) return;
+  if (!recording || paused) return;
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
 
@@ -207,7 +219,7 @@ function handleClick(event: MouseEvent): void {
 }
 
 function handleInput(event: Event): void {
-  if (!recording) return;
+  if (!recording || paused) return;
   const target = event.target as HTMLInputElement | HTMLTextAreaElement;
   if (!target || !isInputElement(target)) return;
   if (isRecorderUI(target)) return;
@@ -226,7 +238,7 @@ function handleInput(event: Event): void {
 }
 
 function handleChange(event: Event): void {
-  if (!recording) return;
+  if (!recording || paused) return;
   const target = event.target as HTMLSelectElement;
   if (!target || target.tagName.toLowerCase() !== "select") return;
   if (isRecorderUI(target)) return;
@@ -248,7 +260,7 @@ function handleChange(event: Event): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (!recording) return;
+  if (!recording || paused) return;
   // Capture Enter key on buttons/links as explicit clicks
   if (event.key === "Enter") {
     const target = event.target as Element;
@@ -265,7 +277,7 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 function handleNavigation(): void {
-  if (!recording) return;
+  if (!recording || paused) return;
   
   // Skip login, sign-in, and impersonation navigation — these are handled
   // automatically by the automation engine's impersonateSubAccount() function
@@ -338,7 +350,11 @@ function recordAction(partial: Partial<RecordedAction> & { type: ActionType; sel
 // ─── Recording Indicator ─────────────────────────────────────────────────────
 
 function showRecordingIndicator(): void {
-  if (document.getElementById("__zoom_recorder_indicator")) return;
+  const existingLabel = document.querySelector("#__zoom_recorder_indicator [data-recorder-label]");
+  if (existingLabel) {
+    existingLabel.textContent = paused ? "Recording paused" : "Recording workflow...";
+    return;
+  }
   const indicator = document.createElement("div");
   indicator.id = "__zoom_recorder_indicator";
   indicator.innerHTML = `
@@ -362,7 +378,7 @@ function showRecordingIndicator(): void {
       pointer-events: none;
     ">
       <span style="width:8px;height:8px;border-radius:50%;background:white;animation:pulse 1s infinite;"></span>
-      Recording workflow…
+      <span data-recorder-label>${paused ? "Recording paused" : "Recording workflow..."}</span>
     </div>
     <style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>
   `;

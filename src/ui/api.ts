@@ -69,7 +69,7 @@ export interface JobView {
 export interface RecordedActionView {
   id: string;
   timestamp: number;
-  type: "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "dismiss";
+  type: "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "screenshot" | "dismiss";
   selectors: {
     role?: { role: string; name?: string };
     label?: string;
@@ -79,6 +79,13 @@ export interface RecordedActionView {
   };
   value?: string;
   url?: string;
+  assertionType?: "textVisible" | "elementVisible" | "urlContains" | "fieldValue" | "tableRowContains";
+  expected?: string;
+  timeout?: number;
+  onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  screenshotLabel?: string;
+  waitMs?: number;
+  selectorNote?: string;
   pageUrl: string;
   pageTitle: string;
   description?: string;

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zoom Workflow Recorder</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <div class="brand">Zoom Workflow Recorder</div>
+        <div id="recording-state" class="subtle">Ready</div>
+      </div>
+      <span id="status-pill" class="status-pill idle">Idle</span>
+    </header>
+
+    <section class="panel-section controls">
+      <button id="btn-start" class="button danger">Start</button>
+      <button id="btn-pause" class="button secondary">Pause</button>
+      <button id="btn-stop" class="button dark">Stop</button>
+      <button id="btn-clear" class="button secondary">New</button>
+    </section>
+
+    <section class="panel-section">
+      <h2>Step Palette</h2>
+
+      <label class="field-label" for="manual-url">Navigate to page</label>
+      <div class="inline-form">
+        <input id="manual-url" type="text" placeholder="/cpw/page/phoneNumbers#/business-address">
+        <button id="btn-add-navigation" class="button secondary">Add</button>
+      </div>
+
+      <label class="field-label" for="assert-expected">Validate / find value</label>
+      <div class="assert-grid">
+        <select id="assert-type">
+          <option value="textVisible">Text is visible</option>
+          <option value="urlContains">URL contains</option>
+          <option value="elementVisible">Element is visible</option>
+          <option value="fieldValue">Field has value</option>
+          <option value="tableRowContains">Table row contains</option>
+        </select>
+        <input id="assert-expected" type="text" placeholder="Expected text, URL fragment, or selector">
+        <input id="assert-timeout" type="number" min="500" max="60000" step="500" value="10000" aria-label="Assertion timeout milliseconds">
+        <select id="assert-on-failure" aria-label="Assertion failure behavior">
+          <option value="screenshot">Screenshot on failure</option>
+          <option value="fail">Fail run</option>
+          <option value="retry">Retry</option>
+          <option value="skip">Skip</option>
+        </select>
+        <button id="btn-add-assertion" class="button secondary">Add</button>
+      </div>
+
+      <label class="field-label" for="screenshot-label">Evidence screenshot</label>
+      <div class="inline-form">
+        <input id="screenshot-label" type="text" placeholder="after-save">
+        <button id="btn-add-screenshot" class="button secondary">Add</button>
+      </div>
+
+      <label class="field-label" for="wait-ms">Wait</label>
+      <div class="inline-form">
+        <input id="wait-ms" type="number" min="250" max="60000" step="250" value="1000">
+        <button id="btn-add-wait" class="button secondary">Add</button>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-heading">
+        <div>
+          <h2>Captured Steps</h2>
+          <p id="step-summary" class="subtle">0 steps captured</p>
+        </div>
+      </div>
+      <div id="action-list" class="action-list"></div>
+      <div id="empty-actions" class="empty-state">
+        <strong>No steps captured yet.</strong>
+        <span>Start recording, then click through the Zoom workflow.</span>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <h2>Workflow Details</h2>
+      <label class="field-label" for="workflow-name">Name</label>
+      <input id="workflow-name" type="text" placeholder="Add AU Contact Center Business Address">
+
+      <label class="field-label" for="workflow-category">Category</label>
+      <select id="workflow-category">
+        <option value="phone">Phone</option>
+        <option value="settings">Settings</option>
+        <option value="compliance">Compliance</option>
+        <option value="custom">Custom</option>
+      </select>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-heading">
+        <div>
+          <h2>Detected Parameters</h2>
+          <p class="subtle">Confirm reusable values before export.</p>
+        </div>
+      </div>
+      <div id="parameter-list" class="parameter-list"></div>
+    </section>
+
+    <section class="panel-section export-actions">
+      <button id="btn-copy" class="button primary">Copy JSON</button>
+      <button id="btn-download" class="button secondary">Download JSON</button>
+      <button id="btn-sync" class="button secondary">Sync to Console</button>
+    </section>
+
+    <p id="message" class="message" role="status"></p>
+  </main>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -4,12 +4,16 @@ import {
   createJob,
   fetchAddressProfiles,
   fetchJobs,
+  fetchRecordedWorkflow,
+  fetchRecordedWorkflows,
   fetchWorkflows,
   queryAccounts,
+  saveRecordedWorkflow,
   subscribeToJob,
   type AccountQueryFilters,
   type AddressProfileView,
   type JobView,
+  type RecordedWorkflowView,
   type SubAccountView,
   type WorkflowView
 } from "./api.js";
@@ -22,6 +26,7 @@ import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
 import { RunStep } from "./components/RunStep.js";
 import { ToastProvider, useToast } from "./components/Toast.js";
 import { WizardNav } from "./components/WizardNav.js";
+import { WorkflowEditor } from "./components/WorkflowEditor.js";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
 
 export function App() {
@@ -58,7 +63,7 @@ function AppContent() {
 
   // Run settings
   const [dryRun, setDryRun] = useState(true);
-  const [headless, setHeadless] = useState(true);
+  const [headless, setHeadless] = useState(false);
   const [concurrency, setConcurrency] = useState(1);
   const [retryAttempts, setRetryAttempts] = useState(2);
 
@@ -70,6 +75,12 @@ function AppContent() {
 
   // History
   const [jobHistory, setJobHistory] = useState<JobView[]>([]);
+
+  // Workflow editor
+  const [recordedWorkflows, setRecordedWorkflows] = useState<Array<{ id: string; name: string; category: string; actionCount: number }>>([]);
+  const [selectedRecordedWorkflowId, setSelectedRecordedWorkflowId] = useState<string | undefined>();
+  const [selectedRecordedWorkflow, setSelectedRecordedWorkflow] = useState<RecordedWorkflowView | undefined>();
+  const [recordedLoading, setRecordedLoading] = useState(false);
 
   // Derived
   const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
@@ -111,6 +122,20 @@ function AppContent() {
     void fetchJobs().then((r) => setJobHistory(r.jobs)).catch(() => undefined);
   }, []);
   useEffect(() => { refreshHistory(); }, []);
+
+  const refreshRecordedWorkflows = useCallback(() => {
+    setRecordedLoading(true);
+    void fetchRecordedWorkflows()
+      .then((response) => setRecordedWorkflows(response.workflows))
+      .catch((error) => addToast("error", `Workflow list failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => setRecordedLoading(false));
+  }, [addToast]);
+
+  useEffect(() => {
+    if (activeView === "editor") {
+      refreshRecordedWorkflows();
+    }
+  }, [activeView, refreshRecordedWorkflows]);
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
@@ -221,6 +246,33 @@ function AppContent() {
     addToast("info", `${failedAccountIds.length} failed accounts selected for retry`);
   };
 
+  const handleOpenRecordedWorkflow = async (workflowId: string) => {
+    setRecordedLoading(true);
+    try {
+      const response = await fetchRecordedWorkflow(workflowId);
+      setSelectedRecordedWorkflowId(workflowId);
+      setSelectedRecordedWorkflow(response.workflow);
+    } catch (error) {
+      addToast("error", `Workflow load failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRecordedLoading(false);
+    }
+  };
+
+  const handleSaveRecordedWorkflow = async (workflow: RecordedWorkflowView) => {
+    if (!selectedRecordedWorkflowId) {
+      return;
+    }
+    try {
+      await saveRecordedWorkflow(selectedRecordedWorkflowId, workflow);
+      setSelectedRecordedWorkflow(workflow);
+      refreshRecordedWorkflows();
+      addToast("success", `Workflow "${workflow.meta.name}" saved`);
+    } catch (error) {
+      addToast("error", `Workflow save failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   // Wizard step definitions
   const wizardSteps = [
     {
@@ -280,6 +332,55 @@ function AppContent() {
 
       {activeView === "history" ? (
         <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
+      ) : activeView === "editor" ? (
+        selectedRecordedWorkflow ? (
+          <WorkflowEditor
+            workflow={selectedRecordedWorkflow}
+            onSave={handleSaveRecordedWorkflow}
+            onClose={() => {
+              setSelectedRecordedWorkflow(undefined);
+              setSelectedRecordedWorkflowId(undefined);
+            }}
+          />
+        ) : (
+          <section className="panel workflow-editor-list">
+            <div className="panel-header">
+              <div>
+                <h2>Workflow editor</h2>
+                <p>Open an imported recording to inspect, reorder, and edit its steps.</p>
+              </div>
+              <div className="table-toolbar-actions">
+                <button className="tertiary-button" onClick={refreshRecordedWorkflows} disabled={recordedLoading}>
+                  {recordedLoading ? "Loading" : "Refresh"}
+                </button>
+                <button className="primary-button" onClick={() => setImportOpen(true)}>
+                  Import recorded
+                </button>
+              </div>
+            </div>
+            {recordedWorkflows.length === 0 ? (
+              <div className="empty-run">No recorded workflows imported yet.</div>
+            ) : (
+              <div className="history-list">
+                {recordedWorkflows.map((workflow) => (
+                  <button
+                    key={workflow.id}
+                    className="history-item"
+                    onClick={() => void handleOpenRecordedWorkflow(workflow.id)}
+                  >
+                    <div className="history-row">
+                      <div className="history-row-main">
+                        <strong>{workflow.name}</strong>
+                        <span className="history-row-info">{workflow.category} · {workflow.actionCount} steps</span>
+                      </div>
+                      <span className="status-badge neutral">Recorded</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        )
       ) : (
         <div className="wizard-layout">
           <WizardNav

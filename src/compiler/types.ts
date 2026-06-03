@@ -4,7 +4,7 @@
  * the compiler consumes.
  */
 
-export type ActionType = "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "dismiss";
+export type ActionType = "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "screenshot" | "dismiss";
 
 export interface SelectorStrategy {
   role?: { role: string; name?: string };
@@ -29,6 +29,13 @@ export interface RecordedAction {
   value?: string;
   url?: string;
   filePath?: string;
+  assertionType?: "textVisible" | "elementVisible" | "urlContains" | "fieldValue" | "tableRowContains";
+  expected?: string;
+  timeout?: number;
+  onFailure?: "fail" | "retry" | "skip" | "screenshot";
+  screenshotLabel?: string;
+  waitMs?: number;
+  selectorNote?: string;
   pageUrl: string;
   pageTitle: string;
   frameSelector?: string;

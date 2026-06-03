@@ -158,6 +158,49 @@ describeE2E("BusinessAddressFlow E2E", () => {
     }
   });
 
+  it("logs in when Zoom renders a hidden password input before the visible one", async () => {
+    const hiddenPasswordServer = await startMockZoomServer({ hiddenPasswordInputFirst: true });
+    try {
+      const config = createTestConfig({
+        zoom: {
+          adminEmail: "admin@test.com",
+          adminPassword: "test-password",
+          webBaseUrl: hiddenPasswordServer.baseUrl,
+          apiBaseUrl: `${hiddenPasswordServer.baseUrl}/v2`
+        }
+      });
+
+      const storageState = await loginAsMasterAdmin({ browser, config: config.zoom, logger, timeoutMs: 5_000 });
+
+      expect(storageState.cookies.map((cookie) => cookie.name)).toContain("cred");
+    } finally {
+      await hiddenPasswordServer.close();
+    }
+  });
+
+  it("logs in when password entry appears after a visible continuation button", async () => {
+    const stagedLoginServer = await startMockZoomServer({
+      passwordVisibleAfterNext: true,
+      nextButtonWithoutId: true
+    });
+    try {
+      const config = createTestConfig({
+        zoom: {
+          adminEmail: "admin@test.com",
+          adminPassword: "test-password",
+          webBaseUrl: stagedLoginServer.baseUrl,
+          apiBaseUrl: `${stagedLoginServer.baseUrl}/v2`
+        }
+      });
+
+      const storageState = await loginAsMasterAdmin({ browser, config: config.zoom, logger, timeoutMs: 5_000 });
+
+      expect(storageState.cookies.map((cookie) => cookie.name)).toContain("cred");
+    } finally {
+      await stagedLoginServer.close();
+    }
+  });
+
   it("runs the full flow with concurrency > 1", async () => {
     const config = createTestConfig();
     const masterStorageState = await loginAsMasterAdmin({ browser, config: config.zoom, logger });

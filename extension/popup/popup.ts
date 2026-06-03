@@ -20,6 +20,9 @@ const btnExportJson = document.getElementById("btn-export-json")!;
 const btnExportSync = document.getElementById("btn-export-sync")!;
 const btnCopy = document.getElementById("btn-copy")!;
 const btnNew = document.getElementById("btn-new")!;
+const btnOpenPanel = document.getElementById("btn-open-panel")!;
+const btnOpenPanelRecording = document.getElementById("btn-open-panel-recording")!;
+const btnOpenPanelReview = document.getElementById("btn-open-panel-review")!;
 
 let currentWorkflow: RecordedWorkflow | undefined;
 let currentActions: RecordedAction[] = [];
@@ -49,17 +52,31 @@ async function init(): Promise<void> {
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 btnStart.addEventListener("click", async () => {
-  await sendMessage({ type: "START_RECORDING" });
-  showView("recording");
-  actionCountEl.textContent = "0";
-  actionListEl.innerHTML = "";
+  btnStart.setAttribute("disabled", "true");
+  try {
+    const response = await sendMessage({ type: "START_RECORDING" });
+    if (!response?.ok) {
+      alert(`Could not start recording: ${response?.error ?? "Unknown error"}`);
+      showView("idle");
+      return;
+    }
+
+    showView("recording");
+    actionCountEl.textContent = "0";
+    actionListEl.innerHTML = "";
+  } catch (error) {
+    alert(`Could not start recording: ${error instanceof Error ? error.message : String(error)}`);
+    showView("idle");
+  } finally {
+    btnStart.removeAttribute("disabled");
+  }
 });
 
 btnStop.addEventListener("click", async () => {
   const response = await sendMessage({ type: "STOP_RECORDING" });
   if (response?.workflow) {
     currentWorkflow = response.workflow;
-    currentActions = currentWorkflow.actions;
+    currentActions = response.workflow.actions;
     showView("review");
     populateReview();
   }
@@ -115,6 +132,10 @@ btnNew.addEventListener("click", () => {
   chrome.storage.local.remove(["lastWorkflow", "lastActions"]);
   showView("idle");
 });
+
+btnOpenPanel.addEventListener("click", () => void openSidePanel());
+btnOpenPanelRecording.addEventListener("click", () => void openSidePanel());
+btnOpenPanelReview.addEventListener("click", () => void openSidePanel());
 
 // ─── Listen for live action updates ─────────────────────────────────────────
 
@@ -244,6 +265,21 @@ async function sendMessage(message: ExtensionMessage): Promise<any> {
 async function getServerUrl(): Promise<string> {
   const stored = await chrome.storage.local.get("serverUrl");
   return stored.serverUrl ?? "http://localhost:4174";
+}
+
+async function openSidePanel(): Promise<void> {
+  if (!chrome.sidePanel?.open) {
+    alert("Chrome side panel is not available in this browser.");
+    return;
+  }
+
+  const window = await chrome.windows.getCurrent();
+  if (!window.id) {
+    alert("Could not determine the active Chrome window.");
+    return;
+  }
+
+  await chrome.sidePanel.open({ windowId: window.id });
 }
 
 function slugify(text: string): string {

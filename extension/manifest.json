@@ -3,7 +3,7 @@
   "name": "Zoom Workflow Recorder",
   "version": "1.0.0",
   "description": "Record Zoom admin portal workflows for batch automation across sub-accounts.",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "sidePanel"],
   "host_permissions": ["https://*.zoom.us/*"],
   "action": {
     "default_popup": "popup/popup.html",
@@ -16,6 +16,9 @@
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
   },
   "content_scripts": [
     {

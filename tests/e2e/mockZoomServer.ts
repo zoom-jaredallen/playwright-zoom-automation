@@ -17,6 +17,12 @@ export interface MockZoomServerOptions {
   requireDocumentUpload?: boolean;
   /** Simulate login failure. */
   loginShouldFail?: boolean;
+  /** Render a hidden password input before the visible password field. */
+  hiddenPasswordInputFirst?: boolean;
+  /** Hide the visible password input until the email continuation button is clicked. */
+  passwordVisibleAfterNext?: boolean;
+  /** Render the email continuation button without Zoom's historic ID. */
+  nextButtonWithoutId?: boolean;
   /** Simulate impersonation failure. */
   impersonationShouldFail?: boolean;
 }
@@ -60,7 +66,13 @@ export async function startMockZoomServer(options: MockZoomServerOptions = {}): 
       res.send(loginPageHtml("Incorrect email or password"));
       return;
     }
-    res.send(loginPageHtml());
+    res.send(
+      loginPageHtml(undefined, {
+        hiddenPasswordInputFirst: options.hiddenPasswordInputFirst,
+        passwordVisibleAfterNext: options.passwordVisibleAfterNext,
+        nextButtonWithoutId: options.nextButtonWithoutId
+      })
+    );
   });
 
   // --- Web: Sign-in form submission ---
@@ -140,7 +152,16 @@ export async function startMockZoomServer(options: MockZoomServerOptions = {}): 
   });
 }
 
-function loginPageHtml(error?: string): string {
+function loginPageHtml(
+  error?: string,
+  options: {
+    hiddenPasswordInputFirst?: boolean;
+    passwordVisibleAfterNext?: boolean;
+    nextButtonWithoutId?: boolean;
+  } = {}
+): string {
+  const nextButtonId = options.nextButtonWithoutId ? "" : `id="signin_btn_next"`;
+  const visiblePasswordStyle = options.passwordVisibleAfterNext ? `style="display:none"` : "";
   return `<!DOCTYPE html>
 <html>
 <head><title>Zoom Sign In</title></head>
@@ -148,10 +169,17 @@ function loginPageHtml(error?: string): string {
   ${error ? `<div class="error">${error}</div>` : ""}
   <form action="/signin" method="POST">
     <input id="email" name="account" type="email" placeholder="Email" />
-    <button id="signin_btn_next" type="button">Next</button>
-    <input type="password" name="password" placeholder="Password" />
+    <button ${nextButtonId} type="button" data-next>Continue</button>
+    ${options.hiddenPasswordInputFirst ? `<input type="password" name="password" style="display:none" tabindex="-1" />` : ""}
+    <input data-visible-password type="password" name="password" placeholder="Password" ${visiblePasswordStyle} />
     <button id="signin_btn" type="submit">Sign In</button>
   </form>
+  <script>
+    document.querySelector("[data-next]")?.addEventListener("click", () => {
+      const input = document.querySelector("[data-visible-password]");
+      if (input) input.style.display = "";
+    });
+  </script>
 </body>
 </html>`;
 }

@@ -191,6 +191,19 @@ ${indent}await this.selectOption(page, ${JSON.stringify(action.selectors)}, ${va
 ${indent}// File upload — path resolved from config.documents
 ${indent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
 
+    case "wait":
+      return `${stepComment}
+${indent}await page.waitForTimeout(${Math.min(Math.max(action.waitMs ?? timeout, 250), 60_000)});`;
+
+    case "assert":
+      return generateAssertionActionCode(action, indent, timeout, stepComment);
+
+    case "screenshot": {
+      const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
+      return `${stepComment}
+${indent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
+    }
+
     case "dismiss":
       return `${stepComment}
 ${indent}await dismissBlockingZoomPopups(page, this.options.logger);`;
@@ -199,6 +212,61 @@ ${indent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       return `${stepComment}
 ${indent}// TODO: Implement ${action.type} action`;
   }
+}
+
+function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number, stepComment: string): string {
+  const expected = JSON.stringify(action.expected ?? action.value ?? "");
+  const actionTimeout = action.timeout ?? timeout;
+  const onFailure = action.onFailure ?? "screenshot";
+  const assertionBody = (() => {
+    switch (action.assertionType) {
+      case "urlContains":
+        return `${indent}if (!page.url().includes(${expected})) throw new Error("Expected URL to contain " + ${expected});`;
+      case "elementVisible":
+        return `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+      case "fieldValue":
+        return `${indent}const expectedValue = ${expected};
+${indent}const fields = page.locator("input, textarea");
+${indent}const fieldCount = await fields.count();
+${indent}let fieldMatched = false;
+${indent}for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++) {
+${indent}  const fieldValue = await fields.nth(fieldIndex).inputValue({ timeout: 1_000 }).catch(() => "");
+${indent}  if (fieldValue.includes(expectedValue)) {
+${indent}    fieldMatched = true;
+${indent}    break;
+${indent}  }
+${indent}}
+${indent}if (!fieldMatched) throw new Error("Expected a field value to contain " + expectedValue);`;
+      case "tableRowContains":
+        return `${indent}await page.locator("tr", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+      case "textVisible":
+      default:
+        return `${indent}await page.getByText(${expected}, { exact: false }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+    }
+  })();
+
+  if (onFailure === "skip") {
+    return `${stepComment}
+${indent}try {
+${assertionBody}
+${indent}} catch (error) {
+${indent}  this.options.logger.warn("Recorded assertion skipped after failure", { step: ${JSON.stringify(action.description ?? action.id)}, error: error instanceof Error ? error.message : String(error) });
+${indent}}`;
+  }
+
+  if (onFailure !== "screenshot") {
+    return `${stepComment}
+${assertionBody}`;
+  }
+
+  const label = slugify(action.description ?? action.id);
+  return `${stepComment}
+${indent}try {
+${assertionBody}
+${indent}} catch (error) {
+${indent}  await page.screenshot({ path: \`\${artifactBase}-${label}-assertion-failure.png\`, fullPage: true }).catch(() => undefined);
+${indent}  throw error;
+${indent}}`;
 }
 
 function generateTestFile(id: string, workflow: RecordedWorkflow): string {
@@ -248,7 +316,7 @@ function validateParameters(workflow: RecordedWorkflow): boolean {
 function validateSelectors(workflow: RecordedWorkflow, warnings: string[]): boolean {
   let allValid = true;
   for (const action of workflow.actions) {
-    if (action.type === "navigate") continue;
+    if (["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type)) continue;
     const s = action.selectors;
     const hasStable = Boolean(s.role || s.label || s.text || s.testId);
     if (!hasStable && s.css) {

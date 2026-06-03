@@ -43,6 +43,11 @@ const entryPoints = [
     outfile: `${outdir}/popup/popup.js`,
     ...commonOptions,
   },
+  {
+    entryPoints: ["sidepanel/sidepanel.ts"],
+    outfile: `${outdir}/sidepanel/sidepanel.js`,
+    ...commonOptions,
+  },
 ];
 
 async function build() {
@@ -62,6 +67,9 @@ async function build() {
     cpSync("manifest.json", `${outdir}/manifest.json`);
     cpSync("popup/popup.html", `${outdir}/popup/popup.html`);
     cpSync("popup/popup.css", `${outdir}/popup/popup.css`);
+    mkdirSync(`${outdir}/sidepanel`, { recursive: true });
+    cpSync("sidepanel/sidepanel.html", `${outdir}/sidepanel/sidepanel.html`);
+    cpSync("sidepanel/sidepanel.css", `${outdir}/sidepanel/sidepanel.css`);
     mkdirSync(`${outdir}/icons`, { recursive: true });
     cpSync("icons", `${outdir}/icons`, { recursive: true });
 

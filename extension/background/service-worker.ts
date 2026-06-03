@@ -5,6 +5,7 @@
 import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowAssertion, WorkflowParameter } from "../shared/types.js";
 
 let recording = false;
+let paused = false;
 let actions: RecordedAction[] = [];
 let recordingStartTime = 0;
 let recordingStartUrl = "";
@@ -15,28 +16,23 @@ let impersonationDetected = false;
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
   switch (message.type) {
     case "START_RECORDING":
-      recording = true;
-      actions = [];
-      recordingStartTime = Date.now();
-      recordingStartUrl = "";
-      // Forward to content script
-      forwardToActiveTab(message);
-      updateBadge();
-      sendResponse({ ok: true });
+      void startRecording(message).then(sendResponse);
       break;
 
     case "STOP_RECORDING":
-      recording = false;
-      forwardToActiveTab(message);
-      updateBadge();
-      const workflow = buildWorkflow();
-      sendResponse({ ok: true, workflow });
-      // Store the workflow for the popup to retrieve
-      chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
+      void stopRecording(message).then(sendResponse);
+      break;
+
+    case "PAUSE_RECORDING":
+      void setPaused(true).then(sendResponse);
+      break;
+
+    case "RESUME_RECORDING":
+      void setPaused(false).then(sendResponse);
       break;
 
     case "ACTION_RECORDED":
-      if (recording) {
+      if (recording && !paused) {
         // Detect impersonation context from the first action's description
         if (message.action.description?.includes("sub-account context")) {
           impersonationDetected = true;
@@ -49,27 +45,82 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
           recordingStartUrl = message.action.url;
         }
         updateBadge();
-        // Notify popup of new action count
-        chrome.runtime.sendMessage({
-          type: "STATUS_RESPONSE",
-          recording: true,
-          actionCount: actions.length
-        } satisfies ExtensionMessage).catch(() => undefined);
+        broadcastRecorderState();
       }
       sendResponse({ ok: true });
       break;
 
     case "GET_STATUS":
-      sendResponse({ recording, actionCount: actions.length });
+      sendResponse({ recording, paused, actionCount: actions.length });
       break;
 
     case "GET_ACTIONS":
       sendResponse({ actions });
       break;
 
+    case "BUILD_WORKFLOW":
+      sendResponse({ workflow: buildWorkflow() });
+      break;
+
     case "DELETE_ACTION":
       actions = actions.filter((a) => a.id !== message.actionId);
       updateBadge();
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "UPDATE_ACTION":
+      updateAction(message.actionId, {
+        description: message.description,
+        cssSelector: message.cssSelector,
+        selectorNote: message.selectorNote
+      });
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "MOVE_ACTION":
+      moveAction(message.actionId, message.direction);
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "ADD_NAVIGATION_ACTION":
+      addNavigationAction(message.url);
+      updateBadge();
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "ADD_ASSERTION_ACTION":
+      addAssertionAction(message.assertionType, message.expected, message.timeout, message.onFailure);
+      updateBadge();
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "ADD_SCREENSHOT_ACTION":
+      addScreenshotAction(message.label);
+      updateBadge();
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "ADD_WAIT_ACTION":
+      addWaitAction(message.waitMs);
+      updateBadge();
+      broadcastRecorderState();
+      sendResponse({ ok: true });
+      break;
+
+    case "CLEAR_ACTIONS":
+      actions = [];
+      recordingStartUrl = "";
+      recordingStartTime = Date.now();
+      paused = false;
+      updateBadge();
+      chrome.storage.local.remove(["lastWorkflow", "lastActions"]);
+      broadcastRecorderState();
       sendResponse({ ok: true });
       break;
 
@@ -78,6 +129,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
       if (action?.parameterHints?.[message.paramIndex]) {
         action.parameterHints[message.paramIndex].confirmed = message.confirmed;
       }
+      broadcastRecorderState();
       sendResponse({ ok: true });
       break;
 
@@ -86,6 +138,195 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
   }
   return true;
 });
+
+async function startRecording(message: Extract<ExtensionMessage, { type: "START_RECORDING" }>): Promise<{ ok: boolean; error?: string }> {
+  const tab = await getActiveTab();
+  if (!tab.id) {
+    return { ok: false, error: "No active tab found" };
+  }
+
+  recording = true;
+  paused = false;
+  actions = [];
+  impersonationDetected = false;
+  recordingStartTime = Date.now();
+  recordingStartUrl = "";
+  updateBadge();
+
+  try {
+    await ensureContentRecorder(tab.id);
+    await chrome.tabs.sendMessage(tab.id, message);
+    broadcastRecorderState();
+    return { ok: true };
+  } catch (error) {
+    recording = false;
+    paused = false;
+    updateBadge();
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function stopRecording(message: Extract<ExtensionMessage, { type: "STOP_RECORDING" }>): Promise<{ ok: boolean; workflow?: RecordedWorkflow; error?: string }> {
+  try {
+    const tab = await getActiveTab();
+    if (tab.id) {
+      await chrome.tabs.sendMessage(tab.id, message).catch(() => undefined);
+    }
+  } finally {
+    recording = false;
+    paused = false;
+    updateBadge();
+  }
+
+  const workflow = buildWorkflow();
+  await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
+  broadcastRecorderState();
+  return { ok: true, workflow };
+}
+
+async function setPaused(nextPaused: boolean): Promise<{ ok: boolean; error?: string }> {
+  if (!recording) {
+    return { ok: false, error: "Recording is not active" };
+  }
+
+  paused = nextPaused;
+  const tab = await getActiveTab().catch(() => undefined);
+  if (tab?.id) {
+    await chrome.tabs
+      .sendMessage(tab.id, { type: nextPaused ? "PAUSE_RECORDING" : "RESUME_RECORDING" } satisfies ExtensionMessage)
+      .catch(() => undefined);
+  }
+  broadcastRecorderState();
+  return { ok: true };
+}
+
+function updateAction(actionId: string, update: { description?: string; cssSelector?: string; selectorNote?: string }): void {
+  const action = actions.find((candidate) => candidate.id === actionId);
+  if (!action) return;
+
+  if (update.description !== undefined) {
+    action.description = update.description;
+  }
+  if (update.cssSelector !== undefined) {
+    const cssSelector = update.cssSelector.trim();
+    if (cssSelector) {
+      action.selectors.css = cssSelector;
+    } else {
+      delete action.selectors.css;
+    }
+  }
+  if (update.selectorNote !== undefined) {
+    action.selectorNote = update.selectorNote.trim() || undefined;
+  }
+}
+
+function moveAction(actionId: string, direction: "up" | "down"): void {
+  const currentIndex = actions.findIndex((action) => action.id === actionId);
+  if (currentIndex === -1) return;
+
+  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+  if (nextIndex < 0 || nextIndex >= actions.length) return;
+
+  const [action] = actions.splice(currentIndex, 1);
+  actions.splice(nextIndex, 0, action);
+}
+
+function addNavigationAction(rawUrl: string): void {
+  const url = normalizeNavigationUrl(rawUrl);
+  const action: RecordedAction = {
+    id: `manual_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: Date.now(),
+    type: "navigate",
+    selectors: {},
+    url,
+    pageUrl: url,
+    pageTitle: "Manual navigation",
+    description: `Navigate to ${url}`
+  };
+
+  actions.push(action);
+  if (!recordingStartUrl) {
+    recordingStartUrl = url;
+  }
+}
+
+function addAssertionAction(
+  assertionType: RecordedAction["assertionType"],
+  expected: string,
+  timeout = 10_000,
+  onFailure: RecordedAction["onFailure"] = "screenshot"
+): void {
+  const normalizedType = assertionType ?? "textVisible";
+  const action: RecordedAction = {
+    id: createManualActionId("assert"),
+    timestamp: Date.now(),
+    type: "assert",
+    selectors: {},
+    assertionType: normalizedType,
+    expected: expected.trim(),
+    timeout,
+    onFailure,
+    pageUrl: recordingStartUrl,
+    pageTitle: "Manual assertion",
+    description: `Assert ${formatAssertionType(normalizedType)}: ${expected.trim()}`
+  };
+
+  actions.push(action);
+}
+
+function addScreenshotAction(label?: string): void {
+  const normalizedLabel = label?.trim() || "evidence";
+  const action: RecordedAction = {
+    id: createManualActionId("screenshot"),
+    timestamp: Date.now(),
+    type: "screenshot",
+    selectors: {},
+    screenshotLabel: normalizedLabel,
+    pageUrl: recordingStartUrl,
+    pageTitle: "Manual screenshot",
+    description: `Take screenshot: ${normalizedLabel}`
+  };
+
+  actions.push(action);
+}
+
+function addWaitAction(waitMs: number): void {
+  const normalizedWaitMs = Math.min(Math.max(Math.round(waitMs), 250), 60_000);
+  const action: RecordedAction = {
+    id: createManualActionId("wait"),
+    timestamp: Date.now(),
+    type: "wait",
+    selectors: {},
+    waitMs: normalizedWaitMs,
+    pageUrl: recordingStartUrl,
+    pageTitle: "Manual wait",
+    description: `Wait ${normalizedWaitMs}ms`
+  };
+
+  actions.push(action);
+}
+
+function createManualActionId(prefix: string): string {
+  return `manual_${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatAssertionType(type: NonNullable<RecordedAction["assertionType"]>): string {
+  return type.replace(/([A-Z])/g, " $1").toLowerCase();
+}
+
+function normalizeNavigationUrl(rawUrl: string): string {
+  const value = rawUrl.trim();
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+  if (value.startsWith("/")) {
+    return `https://zoom.us${value}`;
+  }
+  if (value.startsWith("#")) {
+    return `https://zoom.us/cpw/page/phoneNumbers${value}`;
+  }
+  return `https://zoom.us/${value.replace(/^\/+/, "")}`;
+}
 
 // ─── Workflow Builder ────────────────────────────────────────────────────────
 
@@ -161,6 +402,16 @@ function generateAssertions(actions: RecordedAction[]): WorkflowAssertion[] {
   const assertions: WorkflowAssertion[] = [];
 
   for (const action of actions) {
+    if (action.type === "assert" && action.expected && action.assertionType) {
+      assertions.push({
+        afterAction: action.id,
+        type: action.assertionType === "tableRowContains" ? "textVisible" : action.assertionType,
+        expected: action.expected,
+        timeout: action.timeout ?? 10_000,
+        onFailure: action.onFailure ?? "screenshot"
+      });
+    }
+
     // After click on Save/Submit buttons, add success assertion
     if (action.type === "click") {
       const name = action.selectors.role?.name ?? action.selectors.text ?? "";
@@ -206,7 +457,9 @@ function generateDescription(actions: RecordedAction[]): string {
   const fills = actions.filter((a) => a.type === "fill").length;
   const clicks = actions.filter((a) => a.type === "click").length;
   const navigations = actions.filter((a) => a.type === "navigate").length;
-  return `Recorded workflow: ${navigations} navigation(s), ${fills} field fill(s), ${clicks} click(s).`;
+  const assertions = actions.filter((a) => a.type === "assert").length;
+  const screenshots = actions.filter((a) => a.type === "screenshot").length;
+  return `Recorded workflow: ${navigations} navigation(s), ${fills} field fill(s), ${clicks} click(s), ${assertions} assertion(s), ${screenshots} screenshot(s).`;
 }
 
 function inferCategory(actions: RecordedAction[]): RecordedWorkflow["meta"]["category"] {
@@ -230,22 +483,65 @@ function extractRelativeStartUrl(fullUrl: string): string {
 
 function updateBadge(): void {
   if (recording) {
-    chrome.action.setBadgeText({ text: String(actions.length) });
-    chrome.action.setBadgeBackgroundColor({ color: "#e53935" });
+    chrome.action.setBadgeText({ text: paused ? "II" : String(actions.length) });
+    chrome.action.setBadgeBackgroundColor({ color: paused ? "#7a869a" : "#e53935" });
   } else {
     chrome.action.setBadgeText({ text: "" });
   }
 }
 
+function broadcastRecorderState(): void {
+  chrome.runtime.sendMessage({
+    type: "STATUS_RESPONSE",
+    recording,
+    paused,
+    actionCount: actions.length
+  } satisfies ExtensionMessage).catch(() => undefined);
+
+  chrome.runtime.sendMessage({
+    type: "RECORDER_STATE_UPDATED",
+    recording,
+    paused,
+    actions
+  } satisfies ExtensionMessage).catch(() => undefined);
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-async function forwardToActiveTab(message: ExtensionMessage): Promise<void> {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      await chrome.tabs.sendMessage(tab.id, message);
+async function getActiveTab(): Promise<chrome.tabs.Tab> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) {
+    throw new Error("No active tab found");
+  }
+  return tab;
+}
+
+async function ensureContentRecorder(tabId: number): Promise<void> {
+  if (await contentRecorderResponds(tabId)) {
+    return;
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content/recorder.js"]
+  });
+
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (await contentRecorderResponds(tabId)) {
+      return;
     }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error("Recorder content script did not initialize in the active tab");
+}
+
+async function contentRecorderResponds(tabId: number): Promise<boolean> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "GET_STATUS" } satisfies ExtensionMessage);
+    return true;
   } catch {
-    // Tab may not have content script loaded
+    return false;
   }
 }

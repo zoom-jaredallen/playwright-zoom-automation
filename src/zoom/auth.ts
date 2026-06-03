@@ -1,4 +1,6 @@
-import type { Browser, BrowserContext, Page } from "playwright";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Browser, BrowserContext, Locator, Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { MASTER_REQUIRED_COOKIES, validateCookies } from "./cookies.js";
@@ -24,17 +26,16 @@ export async function loginAsMasterAdmin(options: LoginOptions): Promise<Storage
     await acceptCookies(page);
 
     options.logger.info("Submitting Zoom admin email");
-    await page.locator('input#email, input[name="account"]').first().fill(options.config.adminEmail, {
-      timeout: timeoutMs
-    });
-    await page.locator("#signin_btn_next").click({ timeout: timeoutMs });
+    const emailField = page.locator('input#email:visible, input[name="account"]:visible, input[type="email"]:visible').first();
+    await emailField.waitFor({ state: "visible", timeout: timeoutMs });
+    await emailField.fill(options.config.adminEmail, { timeout: timeoutMs });
+    await clickEmailNext(page, timeoutMs);
     await page.waitForLoadState("domcontentloaded", { timeout: timeoutMs }).catch(() => undefined);
     await page.waitForTimeout(1_000);
     assertNoUnsupportedSso(page.url(), baseUrl);
 
     options.logger.info("Submitting Zoom admin password");
-    const passwordField = page.locator('input[type="password"], input[name="password"]').first();
-    await passwordField.waitFor({ state: "visible", timeout: timeoutMs });
+    const passwordField = await waitForVisiblePasswordField(page, baseUrl, timeoutMs);
     await passwordField.fill(options.config.adminPassword, { timeout: timeoutMs });
     await clickSignIn(page, timeoutMs);
 
@@ -65,9 +66,68 @@ async function acceptCookies(page: Page): Promise<void> {
   );
 }
 
+async function clickEmailNext(page: Page, timeoutMs: number): Promise<void> {
+  const candidates = [
+    page.locator("#signin_btn_next:visible").first(),
+    page.getByRole("button", { name: /next|continue/i }).first()
+  ];
+
+  for (const candidate of candidates) {
+    if (await candidate.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await candidate.click({ timeout: timeoutMs });
+      return;
+    }
+  }
+
+  await page.keyboard.press("Enter");
+}
+
 async function clickSignIn(page: Page, timeoutMs: number): Promise<void> {
-  const signInButton = page.locator("#signin_btn, button:has-text('Sign in'), button:has-text('Sign In')").first();
+  const signInButton = page
+    .locator("#signin_btn:visible, button:visible:has-text('Sign in'), button:visible:has-text('Sign In')")
+    .first();
   await signInButton.click({ timeout: timeoutMs });
+}
+
+async function waitForVisiblePasswordField(page: Page, baseUrl: string, timeoutMs: number): Promise<Locator> {
+  const deadline = Date.now() + timeoutMs;
+  const passwordField = page.locator('input[type="password"]:visible, input[name="password"]:visible').first();
+
+  while (Date.now() < deadline) {
+    assertNoUnsupportedSso(page.url(), baseUrl);
+
+    if (await passwordField.isVisible({ timeout: 500 }).catch(() => false)) {
+      return passwordField;
+    }
+
+    const currentText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+    const blockingReason = getZoomLoginBlockingReason(currentText);
+    if (blockingReason) {
+      throw new Error(blockingReason);
+    }
+
+    await clickPasswordContinuationIfVisible(page);
+    await page.waitForTimeout(500);
+  }
+
+  await writeLoginDebugArtifacts(page, "password-field-not-visible").catch(() => undefined);
+  const visibleText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+  throw new Error(
+    `Zoom login did not render a visible password field after submitting the admin email. Current URL: ${page.url()}. Visible text sample: ${visibleText
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500)}`
+  );
+}
+
+async function clickPasswordContinuationIfVisible(page: Page): Promise<void> {
+  const button = page
+    .getByRole("button", { name: /sign in with password|use password|enter password|continue|next/i })
+    .first();
+
+  if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
+    await button.click({ timeout: 2_000 }).catch(() => undefined);
+  }
 }
 
 async function waitForAuthenticatedSession(page: Page, baseUrl: string, timeoutMs: number): Promise<void> {
@@ -90,6 +150,29 @@ async function waitForAuthenticatedSession(page: Page, baseUrl: string, timeoutM
   }
 
   await page.goto(`${baseUrl}/profile`, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+}
+
+async function writeLoginDebugArtifacts(page: Page, reason: string): Promise<void> {
+  const dir = path.resolve("output/artifacts/login");
+  await mkdir(dir, { recursive: true });
+  const basePath = path.join(dir, `${reason}-${Date.now()}`);
+  const bodyText = await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "");
+  await page.screenshot({ path: `${basePath}.png`, fullPage: true }).catch(() => undefined);
+  await writeFile(
+    `${basePath}.json`,
+    `${JSON.stringify(
+      {
+        timestamp: new Date().toISOString(),
+        reason,
+        url: page.url(),
+        title: await page.title().catch(() => ""),
+        visibleTextSample: bodyText.slice(0, 12_000)
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
 }
 
 export function getZoomLoginBlockingReason(pageText: string): string | undefined {
