@@ -17,6 +17,7 @@ import { AccountQueryPanel } from "./components/AccountQueryPanel.js";
 import { AppShell } from "./components/AppShell.js";
 import { ConfigureStep } from "./components/ConfigureStep.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { ImportWorkflow } from "./components/ImportWorkflow.js";
 import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
 import { RunStep } from "./components/RunStep.js";
 import { ToastProvider, useToast } from "./components/Toast.js";
@@ -65,6 +66,7 @@ function AppContent() {
   const [job, setJob] = useState<JobView | undefined>();
   const [jobError, setJobError] = useState<string | undefined>();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   // History
   const [jobHistory, setJobHistory] = useState<JobView[]>([]);
@@ -257,6 +259,25 @@ function AppContent() {
         onCancel={() => setConfirmOpen(false)}
       />
 
+      {importOpen ? (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <ImportWorkflow
+              onImported={(result) => {
+                setImportOpen(false);
+                addToast("success", `Workflow "${result.name}" imported and compiled`);
+                if (result.warnings && result.warnings.length > 0) {
+                  addToast("warning", `${result.warnings.length} warning(s): ${result.warnings[0]}`);
+                }
+                // Refresh workflows list
+                void fetchWorkflows().then((r) => setWorkflows(r.workflows)).catch(() => undefined);
+              }}
+              onCancel={() => setImportOpen(false)}
+            />
+          </div>
+        </div>
+      ) : null}
+
       {activeView === "history" ? (
         <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
       ) : (
@@ -312,6 +333,7 @@ function AppContent() {
                 onHeadlessChange={setHeadless}
                 onConcurrencyChange={setConcurrency}
                 onRetryAttemptsChange={setRetryAttempts}
+                onImportWorkflow={() => setImportOpen(true)}
                 onBack={() => setWizardStep("accounts")}
                 onNext={handleStartRequest}
               />

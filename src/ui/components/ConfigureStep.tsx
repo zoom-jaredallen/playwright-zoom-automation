@@ -20,6 +20,7 @@ interface ConfigureStepProps {
   onHeadlessChange(value: boolean): void;
   onConcurrencyChange(value: number): void;
   onRetryAttemptsChange(value: number): void;
+  onImportWorkflow(): void;
   onBack(): void;
   onNext(): void;
 }
@@ -29,7 +30,7 @@ export function ConfigureStep({
   dryRun, headless, concurrency, retryAttempts, accountCount,
   onToggleWorkflow, onReorderPipeline, onProfileChange,
   onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange,
-  onBack, onNext
+  onImportWorkflow, onBack, onNext
 }: ConfigureStepProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const canProceed = pipelineOrder.length > 0 && selectedProfileId;
@@ -57,7 +58,10 @@ export function ConfigureStep({
       <div className="configure-grid">
         {/* Workflows */}
         <section className="configure-section">
-          <h3>Select Workflows</h3>
+          <div className="configure-section-header">
+            <h3>Select Workflows</h3>
+            <button className="tertiary-button" onClick={onImportWorkflow}>+ Import recorded</button>
+          </div>
           <p className="configure-hint">Choose one or more workflows to run on {accountCount} account{accountCount !== 1 ? "s" : ""}.</p>
 
           {pipelineOrder.length > 0 ? (
