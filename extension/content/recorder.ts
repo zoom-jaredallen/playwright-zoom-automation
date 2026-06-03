@@ -12,6 +12,7 @@ let actionQueue: RecordedAction[] = [];
 let lastFillTimeout: ReturnType<typeof setTimeout> | undefined;
 let lastFillElement: Element | null = null;
 let lastFillValue = "";
+let impersonationDetected = false;
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -33,16 +34,35 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
 function startRecording(): void {
   recording = true;
   actionQueue = [];
+  impersonationDetected = detectImpersonationContext();
   attachListeners();
   showRecordingIndicator();
   
-  // Record initial navigation
-  recordAction({
-    type: "navigate",
-    url: window.location.href,
-    selectors: {},
-    description: `Navigate to ${document.title}`
-  });
+  // Record initial navigation (skip if it's a login/impersonation page)
+  if (!isLoginOrImpersonationUrl(window.location.href)) {
+    recordAction({
+      type: "navigate",
+      url: window.location.href,
+      selectors: {},
+      description: `Navigate to ${document.title}`
+    });
+  }
+
+  // Notify background about impersonation context
+  chrome.runtime.sendMessage({
+    type: "ACTION_RECORDED",
+    action: {
+      id: `meta_${Date.now().toString(36)}`,
+      timestamp: Date.now(),
+      type: "navigate",
+      selectors: {},
+      pageUrl: window.location.href,
+      pageTitle: document.title,
+      description: impersonationDetected
+        ? "Recording started in sub-account context (impersonation handled automatically)"
+        : "Recording started in master account context"
+    }
+  } satisfies ExtensionMessage);
 }
 
 function stopRecording(): void {
@@ -166,6 +186,20 @@ function handleKeydown(event: KeyboardEvent): void {
 
 function handleNavigation(): void {
   if (!recording) return;
+  
+  // Skip login, sign-in, and impersonation navigation — these are handled
+  // automatically by the automation engine's impersonateSubAccount() function
+  if (isLoginOrImpersonationUrl(window.location.href)) {
+    return;
+  }
+
+  // Detect if we just entered an impersonated context
+  if (!impersonationDetected && detectImpersonationContext()) {
+    impersonationDetected = true;
+    // Don't record this navigation — the engine handles impersonation
+    return;
+  }
+
   flushPendingFill();
   recordAction({
     type: "navigate",
@@ -272,4 +306,32 @@ function isRecorderUI(el: Element): boolean {
 
 function generateId(): string {
   return `act_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Detect if the current page is within an impersonated sub-account context.
+ * Zoom shows "submanage" in the URL or "Not a master account" in the page
+ * when impersonating.
+ */
+function detectImpersonationContext(): boolean {
+  const url = window.location.href;
+  if (url.includes("/submanage") || url.includes("/sub/")) return true;
+  
+  // Check for Zoom's impersonation indicator in the page
+  const bodyText = document.body?.innerText ?? "";
+  if (bodyText.includes("Not a master account")) return true;
+  
+  // Check for the sub-account switcher UI element
+  const subAccountBadge = document.querySelector('[class*="sub-account"], [class*="subaccount"]');
+  if (subAccountBadge) return true;
+  
+  return false;
+}
+
+/**
+ * Check if a URL is a login, sign-in, or impersonation URL that should
+ * be filtered from recordings (the automation engine handles these).
+ */
+function isLoginOrImpersonationUrl(url: string): boolean {
+  return /\/(signin|login|account\/sub\/[^/]+\/login|oauth)/.test(url);
 }

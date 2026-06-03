@@ -8,6 +8,7 @@ let recording = false;
 let actions: RecordedAction[] = [];
 let recordingStartTime = 0;
 let recordingStartUrl = "";
+let impersonationDetected = false;
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -36,9 +37,16 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
 
     case "ACTION_RECORDED":
       if (recording) {
-        actions.push(message.action);
-        if (!recordingStartUrl && message.action.type === "navigate") {
-          recordingStartUrl = message.action.url ?? "";
+        // Detect impersonation context from the first action's description
+        if (message.action.description?.includes("sub-account context")) {
+          impersonationDetected = true;
+        }
+        // Filter out meta-only actions (impersonation detection notices)
+        if (!message.action.id.startsWith("meta_")) {
+          actions.push(message.action);
+        }
+        if (!recordingStartUrl && message.action.type === "navigate" && message.action.url) {
+          recordingStartUrl = message.action.url;
         }
         updateBadge();
         // Notify popup of new action count
@@ -105,7 +113,7 @@ function buildWorkflow(): RecordedWorkflow {
     assertions,
     config: {
       startUrl,
-      requiresImpersonation: true,
+      requiresImpersonation: impersonationDetected || true, // Default true for sub-account workflows
       defaultTimeout: 10_000,
       retryableErrors: [
         "timeout",

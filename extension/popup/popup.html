@@ -19,7 +19,18 @@
     <section id="idle-view" class="view">
       <div class="status-card">
         <div class="status-icon idle">⏺</div>
-        <p>Ready to record. Navigate to the Zoom admin page where you want to start, then click Record.</p>
+        <p>Ready to record a reusable workflow.</p>
+      </div>
+      <div class="instructions">
+        <h4>How it works:</h4>
+        <ol>
+          <li><strong>Navigate</strong> to any sub-account page in Zoom admin</li>
+          <li><strong>Click Record</strong> below</li>
+          <li><strong>Perform the workflow</strong> once (fill forms, click buttons)</li>
+          <li><strong>Stop</strong> when done — account-specific values are auto-detected</li>
+          <li><strong>Export</strong> → the workflow runs on any sub-account automatically</li>
+        </ol>
+        <p class="note">💡 You don't need to record login or account switching — the automation engine handles impersonation for each sub-account automatically.</p>
       </div>
       <button id="btn-start" class="btn btn-record">
         <span class="record-dot"></span>
@@ -69,8 +80,19 @@
 
       <div class="export-actions">
         <button id="btn-export-json" class="btn btn-primary">Download JSON</button>
-        <button id="btn-export-sync" class="btn btn-secondary">Sync to Console</button>
+        <button id="btn-export-sync" class="btn btn-secondary">Sync & Run in Console</button>
         <button id="btn-copy" class="btn btn-tertiary">Copy JSON</button>
+      </div>
+
+      <div class="run-info">
+        <h4>What happens next?</h4>
+        <p>After export, open the Automation Console to:</p>
+        <ol>
+          <li>Query sub-accounts from the master account</li>
+          <li>Select which accounts to run this workflow against</li>
+          <li>Choose address profile (for parameterized values)</li>
+          <li>Start the batch — each account is impersonated automatically</li>
+        </ol>
       </div>
 
       <button id="btn-new" class="btn btn-link">Record another workflow</button>

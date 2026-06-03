@@ -93,7 +93,9 @@ btnExportSync.addEventListener("click", async () => {
       return;
     }
     const result = await response.json();
-    alert(`✓ Workflow synced! ID: ${result.id}\n${result.warnings?.join("\n") ?? ""}`);
+    // Open the automation console so the user can select accounts and run
+    chrome.tabs.create({ url: `${serverUrl}/#workflows` });
+    alert(`✓ Workflow "${currentWorkflow.meta.name}" synced!\nID: ${result.id}\n\nThe Automation Console is opening — select sub-accounts and start a run.`);
   } catch (error) {
     alert(`Sync failed: ${error instanceof Error ? error.message : String(error)}`);
   }

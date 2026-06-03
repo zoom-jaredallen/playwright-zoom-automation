@@ -244,6 +244,64 @@ body {
 .param-btn.confirmed { background: #e8f5e9; border-color: #43a047; color: #43a047; }
 .param-btn.dismissed { background: #ffebee; border-color: #e53935; color: #e53935; }
 
+.instructions {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+}
+
+.instructions h4 {
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: #333;
+}
+
+.instructions ol {
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #555;
+}
+
+.instructions .note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #2d8cff;
+  background: #f0f7ff;
+  padding: 8px;
+  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.run-info {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f8f9fa;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+}
+
+.run-info h4 {
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #333;
+}
+
+.run-info p {
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.run-info ol {
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #555;
+}
+
 .export-actions {
   display: grid;
   gap: 8px;
