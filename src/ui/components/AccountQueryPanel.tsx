@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AccountQueryFilters, SubAccountView } from "../api.js";
 import { paginateItems } from "../pagination.js";
 import { ChevronRightIcon, RefreshIcon, SearchIcon } from "./Icons.js";
+
+type SortColumn = "name" | "owner" | "id" | "status";
+type SortDirection = "asc" | "desc";
 
 interface AccountQueryPanelProps {
   filters: AccountQueryFilters;
@@ -32,10 +35,71 @@ export function AccountQueryPanel({
 }: AccountQueryPanelProps) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const pagination = useMemo(() => paginateItems(accounts, { page, pageSize }), [accounts, page, pageSize]);
+  const [sortColumn, setSortColumn] = useState<SortColumn | undefined>();
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+
+  const sortedAccounts = useMemo(() => {
+    if (!sortColumn) return accounts;
+    const sorted = [...accounts].sort((a, b) => {
+      let aVal = "";
+      let bVal = "";
+      switch (sortColumn) {
+        case "name": aVal = a.name; bVal = b.name; break;
+        case "owner": aVal = a.ownerEmail ?? a.ownerName ?? ""; bVal = b.ownerEmail ?? b.ownerName ?? ""; break;
+        case "id": aVal = a.id; bVal = b.id; break;
+        case "status": {
+          const aStatus = accountStatuses?.get(a.id)?.status ?? "ready";
+          const bStatus = accountStatuses?.get(b.id)?.status ?? "ready";
+          aVal = aStatus; bVal = bStatus; break;
+        }
+      }
+      const cmp = aVal.localeCompare(bVal, undefined, { sensitivity: "base" });
+      return sortDirection === "asc" ? cmp : -cmp;
+    });
+    return sorted;
+  }, [accounts, sortColumn, sortDirection, accountStatuses]);
+
+  const pagination = useMemo(() => paginateItems(sortedAccounts, { page, pageSize }), [sortedAccounts, page, pageSize]);
   const visibleAccounts = pagination.items;
   const visibleAccountIds = visibleAccounts.map((account) => account.id);
   const pageSelected = visibleAccounts.length > 0 && visibleAccounts.every((account) => selectedIds.has(account.id));
+
+  const handleSort = useCallback((column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((d) => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+    setPage(1);
+  }, [sortColumn]);
+
+  const handleExportCsv = useCallback(() => {
+    const rows = [["Account Name", "Owner", "Account ID", "Status"]];
+    for (const account of sortedAccounts) {
+      const status = accountStatuses?.get(account.id)?.status ?? "Ready";
+      rows.push([
+        account.name,
+        account.ownerEmail ?? account.ownerName ?? "",
+        account.id,
+        status
+      ]);
+    }
+    const csv = rows.map((row) => row.map((cell) => {
+      if (cell.includes(",") || cell.includes('"') || cell.includes("\n")) {
+        return `"${cell.replace(/"/g, '""')}"`;
+      }
+      return cell;
+    }).join(",")).join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `accounts-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [sortedAccounts, accountStatuses]);
 
   useEffect(() => {
     setPage(1);
@@ -146,6 +210,14 @@ export function AccountQueryPanel({
           >
             {accounts.length > 0 && accounts.every((a) => selectedIds.has(a.id)) ? "Deselect all" : "Select all"}
           </button>
+          <button
+            className="tertiary-button"
+            onClick={handleExportCsv}
+            disabled={accounts.length === 0}
+            title="Export accounts to CSV"
+          >
+            ↓ CSV
+          </button>
         </div>
       </div>
 
@@ -161,10 +233,10 @@ export function AccountQueryPanel({
                   onChange={() => onTogglePage(visibleAccountIds, !pageSelected)}
                 />
               </th>
-              <th>Account</th>
-              <th>Owner</th>
-              <th>Account ID</th>
-              <th>Status</th>
+              <SortableHeader column="name" label="Account" sortColumn={sortColumn} sortDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader column="owner" label="Owner" sortColumn={sortColumn} sortDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader column="id" label="Account ID" sortColumn={sortColumn} sortDirection={sortDirection} onSort={handleSort} />
+              <SortableHeader column="status" label="Status" sortColumn={sortColumn} sortDirection={sortDirection} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
@@ -271,4 +343,28 @@ function statusBadgeClass(status: string): string {
   if (status === "skipped") return "neutral";
   if (status === "running") return "primary";
   return "neutral";
+}
+
+function SortableHeader({ column, label, sortColumn, sortDirection, onSort }: {
+  column: SortColumn;
+  label: string;
+  sortColumn: SortColumn | undefined;
+  sortDirection: SortDirection;
+  onSort(column: SortColumn): void;
+}) {
+  const active = sortColumn === column;
+  return (
+    <th
+      className={`sortable-th ${active ? "sorted" : ""}`}
+      onClick={() => onSort(column)}
+      aria-sort={active ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <span className="th-content">
+        {label}
+        <span className="sort-indicator">
+          {active ? (sortDirection === "asc" ? "↑" : "↓") : "⇅"}
+        </span>
+      </span>
+    </th>
+  );
 }

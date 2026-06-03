@@ -568,6 +568,38 @@ tbody tr:hover {
   background: var(--state-state-subtle-neutral-hover);
 }
 
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.sortable-th:hover {
+  background: var(--state-state-subtle-neutral-hover);
+}
+
+.sortable-th.sorted {
+  color: var(--text-text-primary);
+}
+
+.th-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sort-indicator {
+  font-size: 11px;
+  color: var(--text-text-subtle-neutral);
+  opacity: 0.5;
+}
+
+.sortable-th:hover .sort-indicator,
+.sortable-th.sorted .sort-indicator {
+  opacity: 1;
+  color: var(--text-text-primary);
+}
+
 td code {
   color: var(--text-text-subtle-neutral);
   font-size: 12px;
