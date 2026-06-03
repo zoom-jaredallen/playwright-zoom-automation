@@ -59,6 +59,84 @@ export interface JobView {
   }>;
 }
 
+// ─── Recorded Workflow Types (for Editor) ────────────────────────────────────
+
+export interface RecordedActionView {
+  id: string;
+  timestamp: number;
+  type: "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "dismiss";
+  selectors: {
+    role?: { role: string; name?: string };
+    label?: string;
+    text?: string;
+    testId?: string;
+    css?: string;
+  };
+  value?: string;
+  url?: string;
+  pageUrl: string;
+  pageTitle: string;
+  description?: string;
+  optional?: boolean;
+  skipIfExists?: boolean;
+  parameterHints?: Array<{
+    originalValue: string;
+    suggestedName: string;
+    reason: string;
+    confirmed?: boolean;
+  }>;
+}
+
+export interface RecordedWorkflowView {
+  version: number;
+  meta: {
+    name: string;
+    description: string;
+    recordedAt: string;
+    recordedOnUrl: string;
+    durationMs: number;
+    category: "phone" | "settings" | "compliance" | "custom";
+  };
+  parameters: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+    description: string;
+    source: string;
+  }>;
+  actions: RecordedActionView[];
+  assertions: Array<{
+    afterAction: string;
+    type: string;
+    expected: string;
+    timeout: number;
+    onFailure: string;
+  }>;
+  config: {
+    startUrl: string;
+    requiresImpersonation: boolean;
+    defaultTimeout: number;
+    retryableErrors: string[];
+  };
+}
+
+export async function fetchRecordedWorkflows(): Promise<{ workflows: Array<{ id: string; name: string; category: string; actionCount: number }> }> {
+  return requestJson("/api/workflows/recorded");
+}
+
+export async function fetchRecordedWorkflow(id: string): Promise<{ workflow: RecordedWorkflowView }> {
+  return requestJson(`/api/workflows/recorded/${id}`);
+}
+
+export async function saveRecordedWorkflow(id: string, workflow: RecordedWorkflowView): Promise<{ ok: boolean }> {
+  return requestJson(`/api/workflows/recorded/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ workflow })
+  });
+}
+
+// ─── Account Query Types ─────────────────────────────────────────────────────
+
 export interface AccountQueryFilters {
   ownerRange?: {
     from: string;

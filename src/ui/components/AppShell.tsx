@@ -4,8 +4,8 @@ import { ThemeToggle } from "./ThemeToggle.js";
 
 interface AppShellProps {
   children: ReactNode;
-  activeView?: "run" | "history";
-  onViewChange?(view: "run" | "history"): void;
+  activeView?: "run" | "history" | "editor";
+  onViewChange?(view: "run" | "history" | "editor"): void;
 }
 
 export function AppShell({ children, activeView = "run", onViewChange }: AppShellProps) {
@@ -45,6 +45,13 @@ export function AppShell({ children, activeView = "run", onViewChange }: AppShel
               >
                 <BoltIcon />
                 New run
+              </button>
+              <button
+                className={`feature-nav-item ${activeView === "editor" ? "active" : ""}`}
+                onClick={() => onViewChange?.("editor")}
+              >
+                <SettingsIcon />
+                Workflow editor
               </button>
               <button
                 className={`feature-nav-item ${activeView === "history" ? "active" : ""}`}

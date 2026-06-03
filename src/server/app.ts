@@ -48,6 +48,55 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.json({ workflows: workflowRegistry.list() });
   });
 
+  app.get("/api/workflows/recorded", (_request, response) => {
+    const recordedDir = path.resolve("src/workflows/recorded");
+    try {
+      const { readdirSync, readFileSync, statSync } = require("node:fs") as typeof import("node:fs");
+      const entries = readdirSync(recordedDir).filter((entry: string) => {
+        try { return statSync(path.join(recordedDir, entry)).isDirectory(); } catch { return false; }
+      });
+      const workflows = entries.map((id: string) => {
+        try {
+          const schema = JSON.parse(readFileSync(path.join(recordedDir, id, "schema.json"), "utf8"));
+          return { id, name: schema.meta?.name ?? id, category: schema.meta?.category ?? "custom", actionCount: schema.actions?.length ?? 0 };
+        } catch { return { id, name: id, category: "custom", actionCount: 0 }; }
+      });
+      response.json({ workflows });
+    } catch {
+      response.json({ workflows: [] });
+    }
+  });
+
+  app.get("/api/workflows/recorded/:id", (request, response) => {
+    const schemaPath = path.resolve("src/workflows/recorded", request.params.id, "schema.json");
+    try {
+      const { readFileSync } = require("node:fs") as typeof import("node:fs");
+      const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+      response.json({ workflow: schema });
+    } catch {
+      response.status(404).json({ error: "Recorded workflow not found" });
+    }
+  });
+
+  app.put("/api/workflows/recorded/:id", (request, response, next) => {
+    try {
+      const { writeFileSync, mkdirSync } = require("node:fs") as typeof import("node:fs");
+      const workflow = request.body?.workflow;
+      if (!workflow) {
+        response.status(400).json({ error: "workflow is required in request body" });
+        return;
+      }
+      const dir = path.resolve("src/workflows/recorded", request.params.id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(path.join(dir, "schema.json"), JSON.stringify(workflow, null, 2) + "\n", "utf8");
+      // Re-compile
+      const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"));
+      response.json({ ok: true, compiled: result.id });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/workflows/import", (request, response, next) => {
     try {
       const body = request.body as { workflow?: RecordedWorkflow; options?: { compile?: boolean; enableImmediately?: boolean } };

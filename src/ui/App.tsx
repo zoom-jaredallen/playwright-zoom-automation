@@ -4,18 +4,23 @@ import {
   createJob,
   fetchAddressProfiles,
   fetchJobs,
+  fetchRecordedWorkflow,
+  fetchRecordedWorkflows,
   fetchWorkflows,
   queryAccounts,
+  saveRecordedWorkflow,
   subscribeToJob,
   type AccountQueryFilters,
   type AddressProfileView,
   type JobView,
+  type RecordedWorkflowView,
   type SubAccountView,
   type WorkflowView
 } from "./api.js";
 import { AccountDrawer } from "./components/AccountDrawer.js";
 import { AccountQueryPanel } from "./components/AccountQueryPanel.js";
 import { StepIndicator } from "./components/StepIndicator.js";
+import { WorkflowEditor } from "./components/WorkflowEditor.js";
 import { AddressProfilePanel } from "./components/AddressProfilePanel.js";
 import { AppShell } from "./components/AppShell.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
@@ -53,8 +58,10 @@ function AppContent() {
   const [jobError, setJobError] = useState<string | undefined>();
   const [jobHistory, setJobHistory] = useState<JobView[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [activeView, setActiveView] = useState<"run" | "history">("run");
+  const [activeView, setActiveView] = useState<"run" | "history" | "editor">("run");
   const [drawerAccountId, setDrawerAccountId] = useState<string | undefined>();
+  const [editingWorkflow, setEditingWorkflow] = useState<RecordedWorkflowView | undefined>();
+  const [recordedWorkflowList, setRecordedWorkflowList] = useState<Array<{ id: string; name: string; category: string; actionCount: number }>>([]);
 
   const isRunning = Boolean(job && ["queued", "running"].includes(job.status));
 
@@ -129,6 +136,12 @@ function AppContent() {
   };
 
   useEffect(() => { refreshHistory(); }, []);
+
+  useEffect(() => {
+    if (activeView === "editor" && !editingWorkflow) {
+      void fetchRecordedWorkflows().then((r) => setRecordedWorkflowList(r.workflows)).catch(() => undefined);
+    }
+  }, [activeView, editingWorkflow]);
 
   const updateFilters = (nextFilters: AccountQueryFilters) => {
     const ownerRange = nextFilters.ownerRange;
@@ -298,7 +311,63 @@ function AppContent() {
         </div>
       </div>
 
-      {activeView === "history" ? (
+      {activeView === "editor" && editingWorkflow ? (
+        <WorkflowEditor
+          workflow={editingWorkflow}
+          onSave={async (updated) => {
+            const id = updated.meta.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+            try {
+              await saveRecordedWorkflow(id, updated);
+              setEditingWorkflow(updated);
+              addToast("success", `Workflow "${updated.meta.name}" saved and recompiled`);
+            } catch (error) {
+              addToast("error", `Save failed: ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }}
+          onClose={() => { setEditingWorkflow(undefined); setActiveView("run"); }}
+        />
+      ) : activeView === "editor" ? (
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <h2>Workflow Editor</h2>
+              <p>Select a recorded workflow to edit its steps, selectors, and parameters.</p>
+            </div>
+            <button className="primary-button" onClick={async () => {
+              const response = await fetchRecordedWorkflows();
+              setRecordedWorkflowList(response.workflows);
+            }}>
+              Refresh list
+            </button>
+          </div>
+          <div className="workflow-list">
+            {recordedWorkflowList.length === 0 ? (
+              <div className="empty-run">No recorded workflows found. Record one with the Chrome extension.</div>
+            ) : (
+              recordedWorkflowList.map((wf) => (
+                <button
+                  key={wf.id}
+                  className="workflow-item"
+                  onClick={async () => {
+                    try {
+                      const response = await fetchRecordedWorkflow(wf.id);
+                      setEditingWorkflow(response.workflow);
+                    } catch (error) {
+                      addToast("error", `Failed to load workflow: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                  }}
+                >
+                  <span className="workflow-check">✎</span>
+                  <span className="workflow-copy">
+                    <strong>{wf.name}</strong>
+                    <small>{wf.actionCount} steps • {wf.category}</small>
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : activeView === "history" ? (
         <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
       ) : (
         <>
