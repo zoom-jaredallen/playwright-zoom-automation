@@ -10,12 +10,15 @@ import type {
   JobStore,
   JobSummary
 } from "./inMemoryJobStore.js";
+import type { JobEventEmitter } from "./jobEvents.js";
 
 export interface FileJobStoreOptions {
   /** Directory where job JSON files are stored. Defaults to "output/jobs". */
   directory: string;
   /** Maximum number of jobs to keep in memory cache. Defaults to 50. */
   maxCacheSize?: number;
+  /** Optional event emitter for real-time job update notifications. */
+  events?: JobEventEmitter;
 }
 
 /**
@@ -24,7 +27,7 @@ export interface FileJobStoreOptions {
  * fast reads and writes through to disk on every mutation.
  */
 export function createFileJobStore(options: FileJobStoreOptions): JobStore {
-  const { directory, maxCacheSize = 50 } = options;
+  const { directory, maxCacheSize = 50, events } = options;
   mkdirSync(directory, { recursive: true });
 
   const cache = new Map<string, AutomationJob>();
@@ -35,6 +38,7 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
     const tempPath = `${filePath}.tmp`;
     writeFileSync(tempPath, `${JSON.stringify(job, null, 2)}\n`, "utf8");
     renameSync(tempPath, filePath);
+    events?.emit(job);
   };
 
   const getMutableJob = (id: string): AutomationJob => {

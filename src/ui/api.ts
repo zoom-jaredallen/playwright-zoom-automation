@@ -112,6 +112,43 @@ export async function fetchJob(jobId: string): Promise<{ job: JobView }> {
   return requestJson(`/api/jobs/${jobId}`);
 }
 
+export async function cancelJob(jobId: string): Promise<{ job: JobView }> {
+  return requestJson(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+/**
+ * Subscribe to real-time job updates via Server-Sent Events.
+ * Returns an unsubscribe function to close the connection.
+ */
+export function subscribeToJob(
+  jobId: string,
+  onUpdate: (job: JobView) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as { job: JobView };
+      onUpdate(data.job);
+    } catch (error) {
+      onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
+  eventSource.onerror = () => {
+    // EventSource auto-reconnects on transient errors.
+    // Only report if the connection is fully closed.
+    if (eventSource.readyState === EventSource.CLOSED) {
+      onError?.(new Error("Job stream connection closed"));
+    }
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}
+
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...init,

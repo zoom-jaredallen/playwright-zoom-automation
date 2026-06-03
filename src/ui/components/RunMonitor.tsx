@@ -11,6 +11,7 @@ interface RunMonitorProps {
   onDryRunChange(value: boolean): void;
   onHeadlessChange(value: boolean): void;
   onStart(): void;
+  onCancel?(): void;
 }
 
 export function RunMonitor({
@@ -22,19 +23,27 @@ export function RunMonitor({
   running,
   onDryRunChange,
   onHeadlessChange,
-  onStart
+  onStart,
+  onCancel
 }: RunMonitorProps) {
   return (
     <section className="panel run-panel" id="run">
       <div className="panel-header">
         <div>
           <h2>Run monitor</h2>
-          <p>Start a batch and watch account-level progress in memory.</p>
+          <p>Start a batch and watch account-level progress in real time.</p>
         </div>
-        <button className="primary-button" onClick={onStart} disabled={selectedCount === 0 || running}>
-          <PlayIcon />
-          {running ? "Running" : "Start run"}
-        </button>
+        <div className="panel-header-actions">
+          {running && onCancel ? (
+            <button className="danger-button" onClick={onCancel}>
+              Cancel
+            </button>
+          ) : null}
+          <button className="primary-button" onClick={onStart} disabled={selectedCount === 0 || running}>
+            <PlayIcon />
+            {running ? "Running" : "Start run"}
+          </button>
+        </div>
       </div>
 
       <div className="run-controls">
@@ -80,6 +89,10 @@ export function RunMonitor({
           })
         )}
       </div>
+
+      {job?.status === "cancelled" ? (
+        <div className="banner warning">Run was cancelled. Accounts already in progress finished normally.</div>
+      ) : null}
     </section>
   );
 }
@@ -97,6 +110,9 @@ function statusClass(status: string): string {
   }
   if (status === "running") {
     return "primary";
+  }
+  if (status === "cancelled") {
+    return "warning";
   }
   return "neutral";
 }

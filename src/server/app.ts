@@ -5,7 +5,8 @@ import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
-import { startAutomationJob } from "./services/jobRunner.js";
+import { createJobEventEmitter } from "./services/jobEvents.js";
+import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
@@ -23,7 +24,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   dotenv.config({ path: options.envPath ?? process.env.ENV_PATH ?? ".env" });
 
   const app = express();
-  const jobStore = createFileJobStore({ directory: path.resolve("output/jobs") });
+  const jobEvents = createJobEventEmitter();
+  const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
   const workflowRegistry = createWorkflowRegistry();
   let cachedAccounts: SubAccount[] = [];
 
@@ -90,6 +92,51 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       return;
     }
     response.json({ job });
+  });
+
+  app.get("/api/jobs/:jobId/stream", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
+    });
+
+    // Send current state immediately
+    response.write(`data: ${JSON.stringify({ job })}\n\n`);
+
+    // Subscribe to future updates
+    const unsubscribe = jobEvents.subscribe(request.params.jobId, (updatedJob) => {
+      response.write(`data: ${JSON.stringify({ job: updatedJob })}\n\n`);
+    });
+
+    // Clean up on client disconnect
+    request.on("close", () => {
+      unsubscribe();
+    });
+  });
+
+  app.post("/api/jobs/:jobId/cancel", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    if (!["queued", "running"].includes(job.status)) {
+      response.json({ job, message: "Job is already finished" });
+      return;
+    }
+
+    const wasCancelled = cancelRunningJob(request.params.jobId);
+    const updatedJob = jobStore.markJob(request.params.jobId, "cancelled", "Cancelled by user");
+    response.json({ job: updatedJob, message: wasCancelled ? "Cancellation signalled" : "Job marked cancelled" });
   });
 
   app.post("/api/jobs", (request, response, next) => {

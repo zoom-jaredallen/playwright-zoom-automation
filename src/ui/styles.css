@@ -376,6 +376,31 @@ a:focus-visible {
   color: var(--text-text-disabled);
 }
 
+.danger-button {
+  height: 32px;
+  border: 0;
+  border-radius: 12px;
+  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--fill-fill-error, #e53935);
+  font-weight: 510;
+}
+
+.danger-button:hover {
+  opacity: 0.9;
+}
+
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .tertiary-button {
   padding: 6px 8px;
   color: var(--text-text-primary);
@@ -571,6 +596,11 @@ td code {
 .status-badge.primary {
   color: var(--text-text-primary);
   background: var(--fill-fill-subtler-primary);
+}
+
+.status-badge.warning {
+  color: var(--text-text-warning, #e65100);
+  background: var(--fill-fill-subtler-warning, #fff3e0);
 }
 
 .workflow-list {

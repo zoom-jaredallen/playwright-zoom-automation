@@ -1,13 +1,10 @@
 import { chromium } from "playwright";
-import type { AutomationFlow, ProgressAdapter, SubAccount } from "../../automation/types.js";
+import type { ProgressAdapter, SubAccount } from "../../automation/types.js";
 import { AutomationRunner } from "../../automation/runner.js";
-import { loadConfig, type AppConfig } from "../../config.js";
-import { consoleLogger } from "../../logger.js";
+import { loadConfig } from "../../config.js";
+import { createLogger, parseLogLevel } from "../../logger.js";
 import { validateDocumentFiles } from "../../preflight.js";
 import { loginAsMasterAdmin } from "../../zoom/auth.js";
-import { BusinessAddressFlow } from "../../zoom/businessAddressFlow.js";
-import { BusinessAddressStatusFlow } from "../../zoom/businessAddressStatusFlow.js";
-import { TokenManager } from "../../zoom/oauth.js";
 import type { JobStore } from "./inMemoryJobStore.js";
 import type { WorkflowRegistry } from "./workflowRegistry.js";
 
@@ -28,11 +25,32 @@ export interface StartJobOptions {
   cancellation?: { cancelled: boolean };
 }
 
+/** Map of active job cancellation tokens, keyed by job ID. */
+const activeJobCancellations = new Map<string, { cancelled: boolean }>();
+
 export function startAutomationJob(options: StartJobOptions): void {
-  void runAutomationJob(options).catch((error) => {
+  const cancellation = options.cancellation ?? { cancelled: false };
+  activeJobCancellations.set(options.jobId, cancellation);
+
+  void runAutomationJob({ ...options, cancellation }).catch((error) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
     options.store.markJob(options.jobId, "failed", normalizedError.message);
+  }).finally(() => {
+    activeJobCancellations.delete(options.jobId);
   });
+}
+
+/**
+ * Cancel a running job by setting its cancellation token.
+ * Returns true if the job was actively running and cancellation was signalled.
+ */
+export function cancelRunningJob(jobId: string): boolean {
+  const cancellation = activeJobCancellations.get(jobId);
+  if (!cancellation) {
+    return false;
+  }
+  cancellation.cancelled = true;
+  return true;
 }
 
 async function runAutomationJob(options: StartJobOptions): Promise<void> {
@@ -51,6 +69,12 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
     await validateDocumentFiles(config.documents);
   }
 
+  const logger = createLogger({
+    level: parseLogLevel(process.env.LOG_LEVEL),
+    filePath: `${config.runtime.artifactsDir}/logs/job-${options.jobId}.jsonl`,
+    baseMeta: { jobId: options.jobId, workflow: workflow.id }
+  });
+
   options.store.markJob(options.jobId, "running", `Running ${workflow.name}`);
 
   const browser = await chromium.launch({ headless: options.headless });
@@ -58,13 +82,13 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
     const masterStorageState = await loginAsMasterAdmin({
       browser,
       config: config.zoom,
-      logger: consoleLogger
+      logger
     });
-    const flow = createWorkflowFlow(workflow.id, {
+    const flow = options.registry.createFlow(workflow.id, {
       browser,
       masterStorageState,
       config,
-      logger: consoleLogger
+      logger
     });
     const runner = new AutomationRunner({
       flow,
@@ -107,16 +131,4 @@ function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: st
   };
 }
 
-function createWorkflowFlow(
-  workflowId: string,
-  options: ConstructorParameters<typeof BusinessAddressFlow>[0]
-): AutomationFlow {
-  if (workflowId === "add-business-address") {
-    return new BusinessAddressFlow(options);
-  }
-  if (workflowId === "check-business-address-status") {
-    return new BusinessAddressStatusFlow(options);
-  }
 
-  throw new Error(`No runner is implemented for workflow: ${workflowId}`);
-}

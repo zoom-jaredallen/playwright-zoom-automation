@@ -3,7 +3,7 @@ import { filterAccountsByOwnerRange } from "./automation/accountFilters.js";
 import { AutomationRunner } from "./automation/runner.js";
 import { ProgressStore } from "./automation/progressStore.js";
 import { loadConfigFromEnvFile } from "./config.js";
-import { consoleLogger } from "./logger.js";
+import { createLogger, parseLogLevel } from "./logger.js";
 import { validateDocumentFiles } from "./preflight.js";
 import { ZoomApiClient } from "./zoom/api.js";
 import { loginAsMasterAdmin } from "./zoom/auth.js";
@@ -12,6 +12,14 @@ import { TokenManager } from "./zoom/oauth.js";
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvFile(process.env.ENV_PATH ?? ".env");
+
+  const runId = `run-${Date.now()}`;
+  const logger = createLogger({
+    level: parseLogLevel(process.env.LOG_LEVEL),
+    filePath: `${config.runtime.artifactsDir}/logs/${runId}.jsonl`,
+    baseMeta: { runId }
+  });
+
   if (!config.runtime.dryRun) {
     await validateDocumentFiles(config.documents);
   }
@@ -34,9 +42,9 @@ async function main(): Promise<void> {
     accounts = accounts.slice(0, config.runtime.accountLimit);
   }
 
-  consoleLogger.info("Loaded Zoom sub accounts", { count: accounts.length });
+  logger.info("Loaded Zoom sub accounts", { count: accounts.length });
   if (accounts.length === 0) {
-    consoleLogger.warn("No sub accounts matched the configured filters");
+    logger.warn("No sub accounts matched the configured filters");
     return;
   }
 
@@ -46,19 +54,19 @@ async function main(): Promise<void> {
     const masterStorageState = await loginAsMasterAdmin({
       browser,
       config: config.zoom,
-      logger: consoleLogger
+      logger
     });
     const progress = new ProgressStore(config.runtime.progressPath);
     const flow = new BusinessAddressFlow({
       browser,
       masterStorageState,
       config,
-      logger: consoleLogger
+      logger
     });
     const cancellation = { cancelled: false };
     const shutdown = () => {
       if (!cancellation.cancelled) {
-        consoleLogger.warn("Shutdown signal received, finishing current accounts...");
+        logger.warn("Shutdown signal received, finishing current accounts...");
         cancellation.cancelled = true;
       }
     };
@@ -81,7 +89,7 @@ async function main(): Promise<void> {
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
 
-    consoleLogger.info("Automation run finished", { ...summary });
+    logger.info("Automation run finished", { ...summary });
     if (summary.failed > 0) {
       process.exitCode = 1;
     }
@@ -92,7 +100,8 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   const normalizedError = error instanceof Error ? error : new Error(String(error));
-  consoleLogger.error("Automation run failed", {
+  const fallbackLogger = createLogger({ level: parseLogLevel(process.env.LOG_LEVEL) });
+  fallbackLogger.error("Automation run failed", {
     error: normalizedError.message,
     stack: normalizedError.stack
   });

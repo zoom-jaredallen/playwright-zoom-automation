@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  cancelJob,
   createJob,
   fetchAddressProfiles,
-  fetchJob,
   fetchWorkflows,
   queryAccounts,
+  subscribeToJob,
   type AccountQueryFilters,
   type AddressProfileView,
   type JobView,
@@ -52,13 +53,13 @@ export function App() {
     if (!job || !["queued", "running"].includes(job.status)) {
       return undefined;
     }
-    const interval = window.setInterval(() => {
-      void fetchJob(job.id)
-        .then((response) => setJob(response.job))
-        .catch((error) => setJobError(error instanceof Error ? error.message : String(error)));
-    }, 1500);
-    return () => window.clearInterval(interval);
-  }, [job]);
+    const unsubscribe = subscribeToJob(
+      job.id,
+      (updatedJob) => setJob(updatedJob),
+      (error) => setJobError(error.message)
+    );
+    return () => unsubscribe();
+  }, [job?.id, job?.status]);
 
   const accountsById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
 
@@ -140,6 +141,18 @@ export function App() {
     }
   };
 
+  const handleCancelJob = async () => {
+    if (!job) {
+      return;
+    }
+    try {
+      const response = await cancelJob(job.id);
+      setJob(response.job);
+    } catch (error) {
+      setJobError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <AppShell>
       <div className="content-header">
@@ -177,6 +190,7 @@ export function App() {
             onDryRunChange={setDryRun}
             onHeadlessChange={setHeadless}
             onStart={handleStartJob}
+            onCancel={handleCancelJob}
           />
           {jobError ? <div className="banner error">{jobError}</div> : null}
         </div>
