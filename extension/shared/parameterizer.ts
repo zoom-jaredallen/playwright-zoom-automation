@@ -56,12 +56,41 @@ export function detectParameters(value: string, fieldContext: FieldContext): Par
     });
   }
 
-  // Country selections
-  if (isCountryField(fieldContext)) {
+  // Country selections (by field label OR by matching known country names)
+  if (isCountryField(fieldContext) || isKnownCountry(trimmed)) {
     hints.push({
       originalValue: trimmed,
       suggestedName: "address.country",
       reason: "looks_like_country"
+    });
+    return hints; // Don't also match as state/city
+  }
+
+  // State/Province selections (by field label OR by matching patterns)
+  if (isStateField(fieldContext) || isKnownStatePattern(trimmed)) {
+    hints.push({
+      originalValue: trimmed,
+      suggestedName: "address.state",
+      reason: "looks_like_address"
+    });
+    return hints;
+  }
+
+  // City selections (by field label: "Area Code", "City", or city-like context)
+  if (isCityField(fieldContext)) {
+    hints.push({
+      originalValue: trimmed,
+      suggestedName: "address.city",
+      reason: "looks_like_address"
+    });
+  }
+
+  // Business address selections (contains street number + street name pattern)
+  if (isBusinessAddressSelection(trimmed, fieldContext)) {
+    hints.push({
+      originalValue: trimmed,
+      suggestedName: "businessAddress",
+      reason: "looks_like_address"
     });
   }
 
@@ -99,6 +128,59 @@ function isNameField(ctx: FieldContext): boolean {
 function isCountryField(ctx: FieldContext): boolean {
   const text = fieldText(ctx);
   return /country|region/i.test(text);
+}
+
+function isStateField(ctx: FieldContext): boolean {
+  const text = fieldText(ctx);
+  return /state|province|territory/i.test(text);
+}
+
+function isCityField(ctx: FieldContext): boolean {
+  const text = fieldText(ctx);
+  return /city|area code|suburb|locality/i.test(text);
+}
+
+/**
+ * Match known country names to detect country selections even when
+ * the field label doesn't say "Country".
+ */
+function isKnownCountry(value: string): boolean {
+  const countries = [
+    "australia", "singapore", "united states", "united kingdom",
+    "canada", "new zealand", "japan", "germany", "france", "india",
+    "brazil", "mexico", "south korea", "hong kong", "taiwan",
+    "indonesia", "malaysia", "thailand", "philippines", "vietnam"
+  ];
+  return countries.includes(value.toLowerCase());
+}
+
+/**
+ * Detect state/province patterns like "New South Wales (NSW)" or "California"
+ */
+function isKnownStatePattern(value: string): boolean {
+  // Pattern: "Name (ABBREV)" — common for Australian/US states
+  if (/^[A-Z][a-z].*\([A-Z]{2,4}\)$/.test(value)) return true;
+  // Known state names
+  const states = [
+    "new south wales", "victoria", "queensland", "western australia",
+    "south australia", "tasmania", "california", "new york", "texas"
+  ];
+  return states.some((s) => value.toLowerCase().includes(s));
+}
+
+/**
+ * Detect business address selections (street number + name, possibly with suite/level)
+ */
+function isBusinessAddressSelection(value: string, ctx: FieldContext): boolean {
+  const text = fieldText(ctx);
+  // Field context suggests address
+  if (/emergency|address|location/i.test(text)) {
+    // Value looks like a street address
+    if (/^\d+\s+[A-Z]/.test(value) || /^[A-Z].*\d/.test(value)) return true;
+    // Contains common address words
+    if (/\b(st|street|rd|road|ave|avenue|blvd|level|suite|floor)\b/i.test(value)) return true;
+  }
+  return false;
 }
 
 function inferPhoneParamName(ctx: FieldContext): string {

@@ -1,0 +1,284 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "Add Phone Number",
+    "description": "Navigates to Phone Numbers, opens the Get Number wizard, selects country/state/city, searches for available numbers, selects the first result, assigns it to a business address, and completes the provisioning.",
+    "recordedAt": "2026-06-03T03:03:10.660Z",
+    "recordedOnUrl": "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+    "durationMs": 66734,
+    "category": "phone"
+  },
+  "parameters": [
+    {
+      "name": "address.country",
+      "type": "select",
+      "required": true,
+      "description": "Country to provision the phone number in",
+      "options": ["Australia", "Singapore", "United States"],
+      "source": "addressProfile"
+    },
+    {
+      "name": "address.state",
+      "type": "string",
+      "required": false,
+      "description": "State or province (e.g., 'New South Wales (NSW)')",
+      "source": "addressProfile"
+    },
+    {
+      "name": "address.city",
+      "type": "string",
+      "required": true,
+      "description": "City to search for numbers in (e.g., 'Sydney')",
+      "source": "addressProfile"
+    },
+    {
+      "name": "businessAddress",
+      "type": "string",
+      "required": true,
+      "description": "Business address to assign the number to (must already exist in the account)",
+      "defaultValue": "9 Castlereagh St, Level 1",
+      "source": "addressProfile"
+    }
+  ],
+  "actions": [
+    {
+      "id": "act_01_navigate",
+      "timestamp": 1780455723930,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      "pageTitle": "Phone Numbers - Zoom",
+      "type": "navigate",
+      "url": "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      "selectors": {},
+      "description": "Navigate to Phone Numbers page"
+    },
+    {
+      "id": "act_02_click_get_number",
+      "timestamp": 1780455746247,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      "pageTitle": "Phone Numbers - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": { "role": "button", "name": "Get Number" },
+        "text": "Get Number",
+        "css": "#wizard-get-number-2"
+      },
+      "description": "Click 'Get Number' button to open the wizard"
+    },
+    {
+      "id": "act_03_select_product",
+      "timestamp": 1780455751110,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "select",
+      "selectors": {
+        "role": { "role": "combobox", "name": "Product" },
+        "label": "Product"
+      },
+      "value": "Phone",
+      "description": "Select 'Phone' as the product type"
+    },
+    {
+      "id": "act_04_select_country",
+      "timestamp": 1780455753759,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "select",
+      "selectors": {
+        "role": { "role": "combobox", "name": "Country/Region" },
+        "label": "Country/Region",
+        "text": "Country"
+      },
+      "value": "{{address.country}}",
+      "parameterHints": [
+        {
+          "originalValue": "Australia",
+          "suggestedName": "address.country",
+          "reason": "looks_like_country",
+          "confirmed": true
+        }
+      ],
+      "description": "Select country from address profile"
+    },
+    {
+      "id": "act_05_select_state",
+      "timestamp": 1780455758081,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "select",
+      "selectors": {
+        "role": { "role": "combobox", "name": "State/Province" },
+        "label": "State/Province",
+        "text": "State"
+      },
+      "value": "{{address.state}}",
+      "optional": true,
+      "parameterHints": [
+        {
+          "originalValue": "New South Wales (NSW)",
+          "suggestedName": "address.state",
+          "reason": "looks_like_address",
+          "confirmed": true
+        }
+      ],
+      "description": "Select state/province (optional — not all countries have states)"
+    },
+    {
+      "id": "act_06_fill_city",
+      "timestamp": 1780455761958,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "fill",
+      "selectors": {
+        "role": { "role": "combobox", "name": "Area Code - City" },
+        "label": "Area Code - City"
+      },
+      "value": "{{address.city}}",
+      "parameterHints": [
+        {
+          "originalValue": "sydney",
+          "suggestedName": "address.city",
+          "reason": "looks_like_address",
+          "confirmed": true
+        }
+      ],
+      "description": "Type city name to filter area codes"
+    },
+    {
+      "id": "act_07_select_city_option",
+      "timestamp": 1780455762851,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "text": "{{address.city}}",
+        "role": { "role": "option", "name": "{{address.city}}" }
+      },
+      "value": "{{address.city}}",
+      "description": "Select the city from the filtered dropdown results"
+    },
+    {
+      "id": "act_08_click_search",
+      "timestamp": 1780455764014,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": { "role": "button", "name": "Search" },
+        "text": "Search"
+      },
+      "description": "Click 'Search' to find available numbers"
+    },
+    {
+      "id": "act_09_select_first_number",
+      "timestamp": 1780455766460,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": { "role": "checkbox" },
+        "css": "span.cpzui-checkbox:first-of-type span.cpzui-checkbox__inner"
+      },
+      "description": "Select the first available phone number from results"
+    },
+    {
+      "id": "act_10_click_continue",
+      "timestamp": 1780455768153,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": { "role": "button", "name": "Continue" },
+        "text": "Continue"
+      },
+      "description": "Click 'Continue' to proceed to address assignment"
+    },
+    {
+      "id": "act_11_select_emergency_address",
+      "timestamp": 1780455772990,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "select",
+      "selectors": {
+        "role": { "role": "combobox", "name": "Emergency Address" },
+        "label": "Emergency Address",
+        "text": "Emergency"
+      },
+      "value": "{{address.city}}",
+      "description": "Select the emergency address city"
+    },
+    {
+      "id": "act_12_select_business_address",
+      "timestamp": 1780455774917,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "text": "{{businessAddress}}",
+        "role": { "role": "option", "name": "{{businessAddress}}" }
+      },
+      "value": "{{businessAddress}}",
+      "parameterHints": [
+        {
+          "originalValue": "9 Castlereagh St, Level 1",
+          "suggestedName": "businessAddress",
+          "reason": "looks_like_address",
+          "confirmed": true
+        }
+      ],
+      "description": "Select the business address to assign to this number"
+    },
+    {
+      "id": "act_13_click_done",
+      "timestamp": 1780455777132,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+      "pageTitle": "Get Number - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": { "role": "button", "name": "Done" },
+        "text": "Done"
+      },
+      "description": "Click 'Done' to complete phone number provisioning"
+    }
+  ],
+  "assertions": [
+    {
+      "afterAction": "act_01_navigate",
+      "type": "urlContains",
+      "expected": "#/number-list",
+      "timeout": 15000,
+      "onFailure": "fail"
+    },
+    {
+      "afterAction": "act_08_click_search",
+      "type": "textVisible",
+      "expected": "checkbox|select|available",
+      "timeout": 15000,
+      "onFailure": "retry"
+    },
+    {
+      "afterAction": "act_10_click_continue",
+      "type": "textVisible",
+      "expected": "Emergency|Address|Additional",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "act_13_click_done",
+      "type": "textVisible",
+      "expected": "success|assigned|added|completed",
+      "timeout": 15000,
+      "onFailure": "screenshot"
+    }
+  ],
+  "config": {
+    "startUrl": "/cpw/page/phoneNumbers#/number-list",
+    "requiresImpersonation": true,
+    "defaultTimeout": 10000,
+    "retryableErrors": [
+      "timeout",
+      "temporarily unavailable",
+      "net::",
+      "target closed"
+    ]
+  }
+}

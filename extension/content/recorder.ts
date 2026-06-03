@@ -14,6 +14,14 @@ let lastFillElement: Element | null = null;
 let lastFillValue = "";
 let impersonationDetected = false;
 
+// Click deduplication state
+let lastClickTarget: Element | null = null;
+let lastClickTime = 0;
+const CLICK_DEDUP_THRESHOLD_MS = 500;
+
+// Combobox interaction tracking
+let activeCombobox: { element: Element; label: string | undefined; openedAt: number } | null = null;
+
 // ─── Message Handling ────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
@@ -99,15 +107,25 @@ function handleClick(event: MouseEvent): void {
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
 
+  // ─── Click Deduplication ─────────────────────────────────────────────
+  // Suppress rapid repeated clicks on the same element (user clicking
+  // multiple times because UI is slow to respond)
+  const now = Date.now();
+  if (lastClickTarget && isSameOrChildOf(target, lastClickTarget) && (now - lastClickTime) < CLICK_DEDUP_THRESHOLD_MS) {
+    return; // Duplicate click — skip
+  }
+  lastClickTarget = target;
+  lastClickTime = now;
+
   flushPendingFill();
 
   // Skip clicks on input fields (they'll be captured as fill actions)
   if (isInputElement(target)) return;
 
   const selectors = extractSelectors(target);
-  const text = target.textContent?.trim().slice(0, 60);
-  
-  // Detect file upload clicks
+  const text = selectors.text ?? selectors.role?.name ?? target.textContent?.trim().slice(0, 60);
+
+  // ─── File Upload Detection ───────────────────────────────────────────
   const fileInput = target.closest("label")?.querySelector('input[type="file"]') ??
                     target.querySelector('input[type="file"]');
   if (fileInput) {
@@ -119,10 +137,72 @@ function handleClick(event: MouseEvent): void {
     return;
   }
 
+  // ─── Combobox/Dropdown Detection ─────────────────────────────────────
+  // If clicking opens a Zoom combobox dropdown, track it so the next click
+  // (selecting an option) gets recorded as a "select" action instead of "click"
+  const comboboxWrapper = target.closest(
+    '[class*="cpzui-select"]:not([class*="option"]), ' +
+    '[class*="cpzui-virtual-filter-select"]:not([class*="option"]), ' +
+    '[role="combobox"]'
+  );
+  if (comboboxWrapper && !isInsideDropdownList(target)) {
+    activeCombobox = {
+      element: comboboxWrapper,
+      label: selectors.label ?? selectors.role?.name,
+      openedAt: now
+    };
+    // Don't record the "open combobox" click — we'll record the selection instead
+    return;
+  }
+
+  // ─── Option Selection Detection ──────────────────────────────────────
+  // If we have an active combobox and the user clicks an option, record as "select"
+  if (activeCombobox && isInsideDropdownList(target)) {
+    const optionText = getOptionText(target);
+    if (optionText) {
+      const fieldCtx = getFieldContext(activeCombobox.element);
+      const params = detectParameters(optionText, fieldCtx);
+
+      recordAction({
+        type: "select",
+        selectors: {
+          role: { role: "combobox", name: activeCombobox.label },
+          label: activeCombobox.label,
+          text: optionText
+        },
+        value: optionText,
+        parameterHints: params.length > 0 ? params : undefined,
+        description: `Select "${optionText}" in ${activeCombobox.label ?? "dropdown"}`
+      });
+      activeCombobox = null;
+      return;
+    }
+  }
+
+  // ─── Checkbox Detection ──────────────────────────────────────────────
+  const checkbox = target.closest('[class*="cpzui-checkbox"], [role="checkbox"], input[type="checkbox"]');
+  if (checkbox) {
+    recordAction({
+      type: "click",
+      selectors: {
+        role: { role: "checkbox", name: selectors.role?.name },
+        ...selectors
+      },
+      description: `Toggle checkbox "${selectors.role?.name ?? selectors.label ?? ""}"`
+    });
+    return;
+  }
+
+  // ─── Regular Click ───────────────────────────────────────────────────
+  // Clear active combobox if clicking elsewhere
+  if (activeCombobox && (now - activeCombobox.openedAt) > 5000) {
+    activeCombobox = null;
+  }
+
   recordAction({
     type: "click",
     selectors,
-    description: `Click "${text ?? selectors.role?.name ?? "element"}"`
+    description: `Click "${text ?? "element"}"`
   });
 }
 
@@ -298,6 +378,41 @@ function hideRecordingIndicator(): void {
 function isInputElement(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
   return tag === "input" || tag === "textarea" || el.getAttribute("contenteditable") === "true";
+}
+
+/**
+ * Check if target is the same element or a child of the reference element.
+ * Used for click deduplication — clicking an SVG inside a button counts as
+ * the same click as clicking the button itself.
+ */
+function isSameOrChildOf(target: Element, reference: Element): boolean {
+  return target === reference || reference.contains(target) || target.contains(reference);
+}
+
+/**
+ * Check if an element is inside a dropdown/option list (not the combobox trigger).
+ */
+function isInsideDropdownList(element: Element): boolean {
+  return Boolean(element.closest(
+    '[class*="select-option"], [class*="dropdown-item"], [class*="option__content"], ' +
+    '[role="option"], [role="listbox"], [class*="select__list"], [class*="popper"]'
+  ));
+}
+
+/**
+ * Extract the visible text of a dropdown option, handling Zoom's nested structure.
+ */
+function getOptionText(element: Element): string | undefined {
+  // Look for the content/tooltip wrapper first
+  const optionWrapper = element.closest('[class*="select-option"], [role="option"]');
+  if (!optionWrapper) return element.textContent?.trim().slice(0, 80) || undefined;
+
+  // Try specific content elements
+  const contentEl = optionWrapper.querySelector(
+    '[class*="option__content"], [class*="tooltip__trigger"], [class*="cp-w-full"]'
+  );
+  const text = (contentEl ?? optionWrapper).textContent?.trim();
+  return text && text.length > 0 && text.length < 100 ? text : undefined;
 }
 
 function isRecorderUI(el: Element): boolean {
