@@ -190,8 +190,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       }
 
       const workflowIds = body.workflowIds ?? ["add-business-address"];
-      if (workflowIds.length !== 1) {
-        response.status(400).json({ error: "Run one workflow at a time in this release" });
+      if (workflowIds.length === 0) {
+        response.status(400).json({ error: "Select at least one workflow" });
         return;
       }
       for (const workflowId of workflowIds) {

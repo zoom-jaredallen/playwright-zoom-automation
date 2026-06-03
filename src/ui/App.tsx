@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cancelJob,
   createJob,
@@ -13,7 +13,9 @@ import {
   type SubAccountView,
   type WorkflowView
 } from "./api.js";
+import { AccountDrawer } from "./components/AccountDrawer.js";
 import { AccountQueryPanel } from "./components/AccountQueryPanel.js";
+import { StepIndicator } from "./components/StepIndicator.js";
 import { AddressProfilePanel } from "./components/AddressProfilePanel.js";
 import { AppShell } from "./components/AppShell.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
@@ -21,6 +23,7 @@ import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
 import { RunMonitor } from "./components/RunMonitor.js";
 import { ToastProvider, useToast } from "./components/Toast.js";
 import { WorkflowPicker } from "./components/WorkflowPicker.js";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
 
 function AppContent() {
   const { addToast } = useToast();
@@ -28,6 +31,7 @@ function AppContent() {
   const [selectedProfileId, setSelectedProfileId] = useState("australia_sydney");
   const [workflows, setWorkflows] = useState<WorkflowView[]>([]);
   const [selectedWorkflowIds, setSelectedWorkflowIds] = useState(new Set(["add-business-address"]));
+  const [pipelineOrder, setPipelineOrder] = useState<string[]>(["add-business-address"]);
   const [filters, setFilters] = useState<AccountQueryFilters>({
     ownerRange: {
       from: "michael.chen@lab494-s301.zoomdemos.com",
@@ -50,6 +54,24 @@ function AppContent() {
   const [jobHistory, setJobHistory] = useState<JobView[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [activeView, setActiveView] = useState<"run" | "history">("run");
+  const [drawerAccountId, setDrawerAccountId] = useState<string | undefined>();
+
+  const isRunning = Boolean(job && ["queued", "running"].includes(job.status));
+
+  useKeyboardShortcuts({
+    onStartRun: useCallback(() => {
+      if (selectedIds.size > 0 && !isRunning) handleStartRequest();
+    }, [selectedIds.size, isRunning]),
+    onQueryAccounts: useCallback(() => {
+      if (!queryLoading) void handleQuery();
+    }, [queryLoading]),
+    onCancelRun: useCallback(() => {
+      if (isRunning) void handleCancelJob();
+    }, [isRunning]),
+    onToggleHistory: useCallback(() => {
+      setActiveView((v) => v === "history" ? "run" : "history");
+    }, [])
+  });
 
   useEffect(() => {
     void Promise.all([fetchAddressProfiles(), fetchWorkflows()])
@@ -162,10 +184,23 @@ function AppContent() {
 
   const handleToggleWorkflow = (workflowId: string) => {
     const workflow = workflows.find((item) => item.id === workflowId);
-    if (!workflow?.enabled) {
-      return;
-    }
-    setSelectedWorkflowIds(new Set([workflowId]));
+    if (!workflow?.enabled) return;
+
+    setSelectedWorkflowIds((current) => {
+      const next = new Set(current);
+      if (next.has(workflowId)) {
+        next.delete(workflowId);
+        setPipelineOrder((order) => order.filter((id) => id !== workflowId));
+      } else {
+        next.add(workflowId);
+        setPipelineOrder((order) => [...order, workflowId]);
+      }
+      return next;
+    });
+  };
+
+  const handleReorderPipeline = (order: string[]) => {
+    setPipelineOrder(order);
   };
 
   const handleStartRequest = () => {
@@ -185,7 +220,7 @@ function AppContent() {
       const response = await createJob({
         accounts: selectedAccounts,
         accountIds: selectedAccounts.map((account) => account.id),
-        workflowIds: Array.from(selectedWorkflowIds),
+        workflowIds: pipelineOrder.length > 0 ? pipelineOrder : Array.from(selectedWorkflowIds),
         addressProfile: selectedProfileId,
         dryRun,
         headless,
@@ -241,6 +276,13 @@ function AppContent() {
         onCancel={() => setConfirmOpen(false)}
       />
 
+      <AccountDrawer
+        open={Boolean(drawerAccountId)}
+        account={drawerAccountId ? accountsById.get(drawerAccountId) : undefined}
+        accountState={drawerAccountId ? job?.accounts.find((a) => a.accountId === drawerAccountId) : undefined}
+        onClose={() => setDrawerAccountId(undefined)}
+      />
+
       <div className="content-header">
         <div>
           <h1>{activeView === "history" ? "Run history" : "Automation runs"}</h1>
@@ -259,6 +301,13 @@ function AppContent() {
       {activeView === "history" ? (
         <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
       ) : (
+        <>
+        <StepIndicator steps={[
+          { label: "Query accounts", complete: accounts.length > 0, active: accounts.length === 0 },
+          { label: "Select workflow", complete: selectedWorkflowIds.size > 0, active: accounts.length > 0 && selectedWorkflowIds.size === 0 },
+          { label: "Configure", complete: selectedIds.size > 0, active: accounts.length > 0 && selectedWorkflowIds.size > 0 && selectedIds.size === 0 },
+          { label: "Run", complete: Boolean(job && !["queued", "running"].includes(job.status)), active: selectedIds.size > 0 && !isRunning }
+        ]} />
         <div className="content-grid">
           <div className="primary-column">
             <AccountQueryPanel
@@ -293,6 +342,7 @@ function AppContent() {
               onAccountDelayMsChange={setAccountDelayMs}
               onStart={handleStartRequest}
               onCancel={handleCancelJob}
+              onAccountClick={setDrawerAccountId}
             />
             {jobError ? <div className="banner error">{jobError}</div> : null}
           </div>
@@ -301,7 +351,9 @@ function AppContent() {
             <WorkflowPicker
               workflows={workflows}
               selectedWorkflowIds={selectedWorkflowIds}
+              pipelineOrder={pipelineOrder}
               onToggle={handleToggleWorkflow}
+              onReorder={handleReorderPipeline}
             />
             <AddressProfilePanel
               profiles={profiles}
@@ -310,6 +362,7 @@ function AppContent() {
             />
           </aside>
         </div>
+        </>
       )}
     </AppShell>
   );

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { BoltIcon, CheckIcon, SearchIcon, SettingsIcon } from "./Icons.js";
+import { ThemeToggle } from "./ThemeToggle.js";
 
 interface AppShellProps {
   children: ReactNode;
@@ -19,6 +20,7 @@ export function AppShell({ children, activeView = "run", onViewChange }: AppShel
           </div>
         </div>
         <div className="topbar-spacer" />
+        <ThemeToggle />
         <button className="icon-button" aria-label="Run activity">
           <BoltIcon />
         </button>

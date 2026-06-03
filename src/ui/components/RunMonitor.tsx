@@ -21,6 +21,7 @@ interface RunMonitorProps {
   onAccountDelayMsChange(value: number): void;
   onStart(): void;
   onCancel?(): void;
+  onAccountClick?(accountId: string): void;
 }
 
 export function RunMonitor({
@@ -41,7 +42,8 @@ export function RunMonitor({
   onRetryBaseDelayMsChange,
   onAccountDelayMsChange,
   onStart,
-  onCancel
+  onCancel,
+  onAccountClick
 }: RunMonitorProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -86,7 +88,12 @@ export function RunMonitor({
               Cancel
             </button>
           ) : null}
-          <button className="primary-button" onClick={onStart} disabled={selectedCount === 0 || running}>
+          <button
+            className="primary-button"
+            onClick={onStart}
+            disabled={selectedCount === 0 || running}
+            title="Start run (Ctrl+Enter)"
+          >
             <PlayIcon />
             {running ? "Running" : "Start run"}
           </button>
@@ -158,11 +165,11 @@ export function RunMonitor({
         </div>
       ) : null}
 
-      <div className="summary-grid">
+      <div className="summary-grid" role="status" aria-live="polite" aria-atomic="true">
         {(["queued", "running", "completed", "skipped", "failed"] as const).map((key) => (
           <div key={key} className="summary-tile">
             <span>{labelForStatus(key)}</span>
-            <strong>{job?.summary[key] ?? 0}</strong>
+            <strong aria-label={`${labelForStatus(key)}: ${job?.summary[key] ?? 0}`}>{job?.summary[key] ?? 0}</strong>
           </div>
         ))}
       </div>
@@ -174,7 +181,14 @@ export function RunMonitor({
           job.accounts.map((accountState) => {
             const account = accountsById.get(accountState.accountId);
             return (
-              <div key={accountState.accountId} className={`run-row ${rowClass(accountState.status)}`}>
+              <div
+                key={accountState.accountId}
+                className={`run-row ${rowClass(accountState.status)} ${onAccountClick ? "run-row-clickable" : ""}`}
+                onClick={() => onAccountClick?.(accountState.accountId)}
+                role={onAccountClick ? "button" : undefined}
+                tabIndex={onAccountClick ? 0 : undefined}
+                onKeyDown={(e) => { if (e.key === "Enter" && onAccountClick) onAccountClick(accountState.accountId); }}
+              >
                 <div>
                   <strong>{account?.name ?? accountState.accountId}</strong>
                   <small>{account?.ownerEmail ?? accountState.accountId}</small>

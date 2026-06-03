@@ -54,7 +54,7 @@ export function cancelRunningJob(jobId: string): boolean {
 }
 
 async function runAutomationJob(options: StartJobOptions): Promise<void> {
-  const workflow = options.registry.getEnabled(options.workflowIds[0]);
+  const workflows = options.workflowIds.map((id) => options.registry.getEnabled(id));
   const config = loadConfig({
     ...(options.env ?? process.env),
     ADDRESS_PROFILE: options.addressProfile,
@@ -72,10 +72,11 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
   const logger = createLogger({
     level: parseLogLevel(process.env.LOG_LEVEL),
     filePath: `${config.runtime.artifactsDir}/logs/job-${options.jobId}.jsonl`,
-    baseMeta: { jobId: options.jobId, workflow: workflow.id }
+    baseMeta: { jobId: options.jobId, workflows: options.workflowIds }
   });
 
-  options.store.markJob(options.jobId, "running", `Running ${workflow.name}`);
+  const pipelineLabel = workflows.map((w) => w.name).join(" → ");
+  options.store.markJob(options.jobId, "running", `Running: ${pipelineLabel}`);
 
   const browser = await chromium.launch({ headless: options.headless });
   try {
@@ -84,29 +85,46 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
       config: config.zoom,
       logger
     });
-    const flow = options.registry.createFlow(workflow.id, {
-      browser,
-      masterStorageState,
-      config,
-      logger
-    });
-    const runner = new AutomationRunner({
-      flow,
-      progress: createJobProgressAdapter(options.store, options.jobId, workflow.id),
-      retry: {
-        attempts: options.retryAttempts,
-        baseDelayMs: options.retryBaseDelayMs
-      },
-      accountDelayMs: options.accountDelayMs,
-      concurrency: options.concurrency ?? 1,
-      cancellation: options.cancellation
-    });
 
-    const summary = await runner.run(options.accounts);
+    let totalCompleted = 0;
+    let totalSkipped = 0;
+    let totalFailed = 0;
+
+    for (const workflow of workflows) {
+      if (options.cancellation?.cancelled) break;
+
+      logger.info(`Starting pipeline step: ${workflow.name}`, { workflowId: workflow.id });
+      options.store.markJob(options.jobId, "running", `Running step: ${workflow.name}`);
+
+      const flow = options.registry.createFlow(workflow.id, {
+        browser,
+        masterStorageState,
+        config,
+        logger
+      });
+      const runner = new AutomationRunner({
+        flow,
+        progress: createJobProgressAdapter(options.store, options.jobId, workflow.id),
+        retry: {
+          attempts: options.retryAttempts,
+          baseDelayMs: options.retryBaseDelayMs
+        },
+        accountDelayMs: options.accountDelayMs,
+        concurrency: options.concurrency ?? 1,
+        cancellation: options.cancellation
+      });
+
+      const summary = await runner.run(options.accounts);
+      totalCompleted += summary.completed;
+      totalSkipped += summary.skipped;
+      totalFailed += summary.failed;
+    }
+
+    const finalStatus = totalFailed > 0 ? "failed" : "completed";
     options.store.markJob(
       options.jobId,
-      summary.failed > 0 ? "failed" : "completed",
-      `Finished ${workflow.name}: ${summary.completed} completed, ${summary.skipped} skipped, ${summary.failed} failed`
+      finalStatus,
+      `Finished pipeline (${pipelineLabel}): ${totalCompleted} completed, ${totalSkipped} skipped, ${totalFailed} failed`
     );
   } finally {
     await browser.close();
