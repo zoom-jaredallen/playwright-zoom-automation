@@ -8,7 +8,7 @@ import { validateDocumentFiles } from "./preflight.js";
 import { ZoomApiClient } from "./zoom/api.js";
 import { loginAsMasterAdmin } from "./zoom/auth.js";
 import { BusinessAddressFlow } from "./zoom/businessAddressFlow.js";
-import { resolveZoomApiAccessToken } from "./zoom/oauth.js";
+import { TokenManager } from "./zoom/oauth.js";
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvFile(process.env.ENV_PATH ?? ".env");
@@ -16,9 +16,9 @@ async function main(): Promise<void> {
     await validateDocumentFiles(config.documents);
   }
 
-  const accessToken = await resolveZoomApiAccessToken(config.zoom);
+  const tokenManager = new TokenManager(config.zoom);
   const apiClient = new ZoomApiClient({
-    accessToken,
+    accessToken: tokenManager,
     baseUrl: config.zoom.apiBaseUrl
   });
 
@@ -55,6 +55,16 @@ async function main(): Promise<void> {
       config,
       logger: consoleLogger
     });
+    const cancellation = { cancelled: false };
+    const shutdown = () => {
+      if (!cancellation.cancelled) {
+        consoleLogger.warn("Shutdown signal received, finishing current accounts...");
+        cancellation.cancelled = true;
+      }
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
     const runner = new AutomationRunner({
       flow,
       progress,
@@ -62,9 +72,14 @@ async function main(): Promise<void> {
         attempts: config.runtime.flowRetryAttempts,
         baseDelayMs: config.runtime.flowRetryBaseDelayMs
       },
-      accountDelayMs: config.runtime.accountDelayMs
+      accountDelayMs: config.runtime.accountDelayMs,
+      concurrency: config.runtime.concurrency,
+      cancellation
     });
     const summary = await runner.run(accounts);
+
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
 
     consoleLogger.info("Automation run finished", { ...summary });
     if (summary.failed > 0) {

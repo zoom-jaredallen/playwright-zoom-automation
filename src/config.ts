@@ -46,6 +46,7 @@ export interface AppConfig {
     flowRetryAttempts: number;
     flowRetryBaseDelayMs: number;
     accountDelayMs: number;
+    concurrency: number;
   };
 }
 
@@ -95,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const flowRetryBaseDelayMs =
     parseOptionalNonNegativeInteger(env.FLOW_RETRY_BASE_DELAY_MS, "FLOW_RETRY_BASE_DELAY_MS") ?? 5_000;
   const accountDelayMs = parseOptionalNonNegativeInteger(env.ACCOUNT_DELAY_MS, "ACCOUNT_DELAY_MS") ?? 0;
+  const concurrency = parseOptionalPositiveInteger(env.CONCURRENCY, "CONCURRENCY") ?? 1;
   const address = resolveAddressConfig(env, profile);
   const documents = resolveDocumentConfig(env, profile);
 
@@ -125,7 +127,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       ownerRange,
       flowRetryAttempts,
       flowRetryBaseDelayMs,
-      accountDelayMs
+      accountDelayMs,
+      concurrency
     }
   };
 }

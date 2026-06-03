@@ -6,16 +6,34 @@ export interface AutomationRunnerOptions {
   progress: ProgressAdapter;
   retry?: RetryOptions;
   accountDelayMs?: number;
+  /** Number of accounts to process in parallel. Defaults to 1 (sequential). */
+  concurrency?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Cancellation token — set `cancelled` to true to stop processing new accounts. */
+  cancellation?: { cancelled: boolean };
 }
 
 export class AutomationRunner {
   constructor(private readonly options: AutomationRunnerOptions) {}
 
   async run(accounts: SubAccount[]): Promise<RunSummary> {
+    const concurrency = Math.max(1, this.options.concurrency ?? 1);
+
+    if (concurrency === 1) {
+      return this.runSequential(accounts);
+    }
+
+    return this.runParallel(accounts, concurrency);
+  }
+
+  private async runSequential(accounts: SubAccount[]): Promise<RunSummary> {
     const summary: RunSummary = { completed: 0, failed: 0, skipped: 0 };
 
     for (const account of accounts) {
+      if (this.options.cancellation?.cancelled) {
+        break;
+      }
+
       if (await this.options.progress.shouldSkip(account)) {
         summary.skipped += 1;
         continue;
@@ -42,6 +60,53 @@ export class AutomationRunner {
 
       await this.delayBetweenAccounts();
     }
+
+    return summary;
+  }
+
+  private async runParallel(accounts: SubAccount[], concurrency: number): Promise<RunSummary> {
+    const summary: RunSummary = { completed: 0, failed: 0, skipped: 0 };
+    let index = 0;
+
+    const processNext = async (): Promise<void> => {
+      while (index < accounts.length) {
+        if (this.options.cancellation?.cancelled) {
+          break;
+        }
+
+        const currentIndex = index;
+        index += 1;
+        const account = accounts[currentIndex];
+
+        if (await this.options.progress.shouldSkip(account)) {
+          summary.skipped += 1;
+          continue;
+        }
+
+        try {
+          await this.options.progress.markRunning(account);
+          const result = await this.runFlowWithRetry(account);
+
+          if (result.status === "skipped") {
+            await this.options.progress.markSkipped(account, result.message);
+            summary.skipped += 1;
+          } else {
+            await this.options.progress.markCompleted(account, result.message);
+            summary.completed += 1;
+          }
+        } catch (error) {
+          const normalizedError = error instanceof Error ? error : new Error(String(error));
+          const retryable = Boolean((normalizedError as Error & { retryable?: boolean }).retryable);
+          await this.options.progress.markFailed(account, normalizedError, retryable);
+          summary.failed += 1;
+        }
+
+        await this.delayBetweenAccounts();
+      }
+    };
+
+    const workers = Array.from({ length: concurrency }, () => processNext());
+    await Promise.all(workers);
 
     return summary;
   }

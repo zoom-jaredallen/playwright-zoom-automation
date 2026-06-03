@@ -28,10 +28,19 @@ export class ProgressStore implements ProgressAdapter {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as ProgressSnapshot;
-      return {
-        version: 1,
-        accounts: parsed.accounts ?? {}
-      };
+      const accounts = parsed.accounts ?? {};
+
+      // Reset accounts stuck in "running" from a previous interrupted run
+      for (const entry of Object.values(accounts)) {
+        if (entry.status === "running") {
+          entry.status = "failed";
+          entry.error = "Process interrupted while account was running";
+          entry.retryable = true;
+          entry.failedAt = entry.failedAt ?? new Date().toISOString();
+        }
+      }
+
+      return { version: 1, accounts };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return { version: 1, accounts: {} };

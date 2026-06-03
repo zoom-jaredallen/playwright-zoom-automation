@@ -1,10 +1,13 @@
 import { retry } from "../automation/retry.js";
 import type { SubAccount } from "../automation/types.js";
+import type { TokenManager } from "./oauth.js";
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
+export type TokenProvider = string | TokenManager;
+
 export interface ZoomApiClientOptions {
-  accessToken: string;
+  accessToken: TokenProvider;
   baseUrl: string;
   fetchImpl?: FetchLike;
   sleep?: (ms: number) => Promise<void>;
@@ -84,13 +87,22 @@ export class ZoomApiClient {
     return accounts;
   }
 
+  private async resolveToken(): Promise<string> {
+    const provider = this.options.accessToken;
+    if (typeof provider === "string") {
+      return provider;
+    }
+    return provider.getAccessToken();
+  }
+
   private async getJson<T>(url: string): Promise<T> {
     return retry(
       async () => {
+        const token = await this.resolveToken();
         const response = await this.fetchImpl(url, {
           method: "GET",
           headers: {
-            Authorization: `Bearer ${this.options.accessToken}`,
+            Authorization: `Bearer ${token}`,
             Accept: "application/json"
           }
         });

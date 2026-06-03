@@ -4,12 +4,12 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
-import { createJobStore } from "./services/inMemoryJobStore.js";
+import { createFileJobStore } from "./services/fileJobStore.js";
 import { startAutomationJob } from "./services/jobRunner.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
-import { resolveZoomApiAccessToken } from "../zoom/oauth.js";
+import { TokenManager } from "../zoom/oauth.js";
 import type { SubAccount } from "../automation/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +23,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   dotenv.config({ path: options.envPath ?? process.env.ENV_PATH ?? ".env" });
 
   const app = express();
-  const jobStore = createJobStore();
+  const jobStore = createFileJobStore({ directory: path.resolve("output/jobs") });
   const workflowRegistry = createWorkflowRegistry();
   let cachedAccounts: SubAccount[] = [];
 
@@ -57,13 +57,14 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     });
   });
 
+  const serverTokenManager = new TokenManager(loadConfig(process.env).zoom);
+
   app.post("/api/accounts/query", async (request, response, next) => {
     try {
       const filters = request.body?.filters as AccountSelectionFilters | undefined;
       const config = loadConfig(process.env);
-      const accessToken = await resolveZoomApiAccessToken(config.zoom);
       const client = new ZoomApiClient({
-        accessToken,
+        accessToken: serverTokenManager,
         baseUrl: config.zoom.apiBaseUrl
       });
       cachedAccounts = await client.listSubAccounts();
@@ -103,6 +104,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         retryAttempts?: number;
         retryBaseDelayMs?: number;
         accountDelayMs?: number;
+        concurrency?: number;
       };
       const accountIds = body.accountIds ?? [];
       const sourceAccounts = body.accounts && body.accounts.length > 0 ? body.accounts : cachedAccounts;
@@ -138,6 +140,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         retryAttempts: body.retryAttempts ?? 2,
         retryBaseDelayMs: body.retryBaseDelayMs ?? 5_000,
         accountDelayMs: body.accountDelayMs ?? 2_000,
+        concurrency: body.concurrency ?? 1,
         store: jobStore,
         registry: workflowRegistry
       });

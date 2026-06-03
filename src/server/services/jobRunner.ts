@@ -7,6 +7,7 @@ import { validateDocumentFiles } from "../../preflight.js";
 import { loginAsMasterAdmin } from "../../zoom/auth.js";
 import { BusinessAddressFlow } from "../../zoom/businessAddressFlow.js";
 import { BusinessAddressStatusFlow } from "../../zoom/businessAddressStatusFlow.js";
+import { TokenManager } from "../../zoom/oauth.js";
 import type { JobStore } from "./inMemoryJobStore.js";
 import type { WorkflowRegistry } from "./workflowRegistry.js";
 
@@ -20,9 +21,11 @@ export interface StartJobOptions {
   retryAttempts: number;
   retryBaseDelayMs: number;
   accountDelayMs: number;
+  concurrency?: number;
   store: JobStore;
   registry: WorkflowRegistry;
   env?: NodeJS.ProcessEnv;
+  cancellation?: { cancelled: boolean };
 }
 
 export function startAutomationJob(options: StartJobOptions): void {
@@ -70,7 +73,9 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
         attempts: options.retryAttempts,
         baseDelayMs: options.retryBaseDelayMs
       },
-      accountDelayMs: options.accountDelayMs
+      accountDelayMs: options.accountDelayMs,
+      concurrency: options.concurrency ?? 1,
+      cancellation: options.cancellation
     });
 
     const summary = await runner.run(options.accounts);
