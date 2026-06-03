@@ -94,6 +94,34 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.json({ job });
   });
 
+  app.get("/api/jobs/:jobId/export", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+
+    const format = (request.query.format as string) ?? "json";
+    if (format === "csv") {
+      const rows = ["Account ID,Status,Workflow,Message,Error"];
+      for (const account of job.accounts) {
+        rows.push([
+          account.accountId,
+          account.status,
+          account.workflowId ?? "",
+          csvEscape(account.message ?? ""),
+          csvEscape(account.error ?? "")
+        ].join(","));
+      }
+      response.setHeader("Content-Type", "text/csv");
+      response.setHeader("Content-Disposition", `attachment; filename="job-${job.id.slice(0, 8)}-results.csv"`);
+      response.send(rows.join("\n"));
+    } else {
+      response.setHeader("Content-Disposition", `attachment; filename="job-${job.id.slice(0, 8)}-results.json"`);
+      response.json({ job });
+    }
+  });
+
   app.get("/api/jobs/:jobId/stream", (request, response) => {
     const job = jobStore.getJob(request.params.jobId);
     if (!job) {
@@ -208,4 +236,11 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
 
 export function resolveBuiltUiPath(): string {
   return path.resolve(__dirname, "../../dist/ui");
+}
+
+function csvEscape(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
 }

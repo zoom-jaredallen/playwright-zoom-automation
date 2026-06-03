@@ -10,6 +10,7 @@ interface AccountQueryPanelProps {
   loading: boolean;
   error?: string;
   total?: number;
+  accountStatuses?: Map<string, { status: string; message?: string }>;
   onFiltersChange(filters: AccountQueryFilters): void;
   onQuery(): void;
   onToggle(accountId: string): void;
@@ -23,6 +24,7 @@ export function AccountQueryPanel({
   loading,
   error,
   total,
+  accountStatuses,
   onFiltersChange,
   onQuery,
   onToggle,
@@ -160,28 +162,36 @@ export function AccountQueryPanel({
                 </td>
               </tr>
             ) : (
-              visibleAccounts.map((account) => (
-                <tr key={account.id} className={selectedIds.has(account.id) ? "selected-row" : ""}>
-                  <td className="checkbox-cell">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${account.name}`}
-                      checked={selectedIds.has(account.id)}
-                      onChange={() => onToggle(account.id)}
-                    />
-                  </td>
-                  <td>
-                    <strong>{account.name}</strong>
-                  </td>
-                  <td>{account.ownerEmail ?? account.ownerName ?? "Not returned"}</td>
-                  <td>
-                    <code>{account.id}</code>
-                  </td>
-                  <td>
-                    <span className="status-badge neutral">Ready</span>
-                  </td>
-                </tr>
-              ))
+              visibleAccounts.map((account) => {
+                const lastStatus = accountStatuses?.get(account.id);
+                const badge = lastStatus
+                  ? { label: lastStatus.status, cls: statusBadgeClass(lastStatus.status) }
+                  : { label: "Ready", cls: "neutral" };
+                return (
+                  <tr key={account.id} className={selectedIds.has(account.id) ? "selected-row" : ""}>
+                    <td className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${account.name}`}
+                        checked={selectedIds.has(account.id)}
+                        onChange={() => onToggle(account.id)}
+                      />
+                    </td>
+                    <td>
+                      <strong>{account.name}</strong>
+                    </td>
+                    <td>{account.ownerEmail ?? account.ownerName ?? "—"}</td>
+                    <td>
+                      <code>{account.id}</code>
+                    </td>
+                    <td>
+                      <span className={`status-badge ${badge.cls}`} title={lastStatus?.message}>
+                        {badge.label.charAt(0).toUpperCase() + badge.label.slice(1)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -226,4 +236,12 @@ export function AccountQueryPanel({
       </div>
     </section>
   );
+}
+
+function statusBadgeClass(status: string): string {
+  if (status === "completed") return "success";
+  if (status === "failed") return "error";
+  if (status === "skipped") return "neutral";
+  if (status === "running") return "primary";
+  return "neutral";
 }

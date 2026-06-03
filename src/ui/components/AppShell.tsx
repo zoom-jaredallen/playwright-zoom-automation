@@ -3,9 +3,11 @@ import { BoltIcon, CheckIcon, SearchIcon, SettingsIcon } from "./Icons.js";
 
 interface AppShellProps {
   children: ReactNode;
+  activeView?: "run" | "history";
+  onViewChange?(view: "run" | "history"): void;
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, activeView = "run", onViewChange }: AppShellProps) {
   return (
     <div className="app-frame">
       <header className="topbar standalone-topbar">
@@ -16,16 +18,12 @@ export function AppShell({ children }: AppShellProps) {
             <small>Standalone web app</small>
           </div>
         </div>
-        <div className="topbar-search">
-          <SearchIcon />
-          <span>Search runs, accounts, or workflows</span>
-        </div>
         <div className="topbar-spacer" />
         <button className="icon-button" aria-label="Run activity">
           <BoltIcon />
         </button>
         <div className="avatar" aria-label="Signed in user">
-          ZA
+          JA
         </div>
       </header>
 
@@ -37,34 +35,32 @@ export function AppShell({ children }: AppShellProps) {
                 <p className="eyebrow">Automation</p>
                 <h1>Run console</h1>
               </div>
-              <button className="fab" aria-label="Create run">
-                +
-              </button>
             </div>
             <nav className="feature-nav">
-              <a className="feature-nav-item active" href="#accounts">
-                <SearchIcon />
-                Accounts
-              </a>
-              <a className="feature-nav-item" href="#workflows">
+              <button
+                className={`feature-nav-item ${activeView === "run" ? "active" : ""}`}
+                onClick={() => onViewChange?.("run")}
+              >
                 <BoltIcon />
-                Workflows
-              </a>
-              <a className="feature-nav-item" href="#run">
+                New run
+              </button>
+              <button
+                className={`feature-nav-item ${activeView === "history" ? "active" : ""}`}
+                onClick={() => onViewChange?.("history")}
+              >
                 <CheckIcon />
-                Current run
-              </a>
-              <a className="feature-nav-item" href="#settings">
-                <SettingsIcon />
-                Settings
-              </a>
+                Run history
+              </button>
             </nav>
             <div className="left-nav-section">
-              <p className="section-label">Saved scopes</p>
-              <button className="scope-chip active">Lab494 s301-s350</button>
-              <button className="scope-chip">Manual selection</button>
+              <p className="section-label">Quick links</p>
+              <a className="scope-chip" href="#accounts">Accounts</a>
+              <a className="scope-chip" href="#workflows">Workflows</a>
+              <a className="scope-chip" href="#settings">Settings</a>
             </div>
-            <div className="left-nav-footer">Local in-memory release</div>
+            <div className="left-nav-footer">
+              <SearchIcon /> <SettingsIcon />
+            </div>
           </aside>
 
           <section className="content-area">{children}</section>

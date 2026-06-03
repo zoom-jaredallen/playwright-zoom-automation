@@ -98,6 +98,7 @@ export async function createJob(input: {
   addressProfile: string;
   dryRun: boolean;
   headless: boolean;
+  concurrency?: number;
   retryAttempts: number;
   retryBaseDelayMs: number;
   accountDelayMs: number;
@@ -106,6 +107,10 @@ export async function createJob(input: {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export async function fetchJobs(): Promise<{ jobs: JobView[] }> {
+  return requestJson("/api/jobs");
 }
 
 export async function fetchJob(jobId: string): Promise<{ job: JobView }> {

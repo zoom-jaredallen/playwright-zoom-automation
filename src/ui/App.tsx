@@ -3,6 +3,7 @@ import {
   cancelJob,
   createJob,
   fetchAddressProfiles,
+  fetchJobs,
   fetchWorkflows,
   queryAccounts,
   subscribeToJob,
@@ -15,10 +16,14 @@ import {
 import { AccountQueryPanel } from "./components/AccountQueryPanel.js";
 import { AddressProfilePanel } from "./components/AddressProfilePanel.js";
 import { AppShell } from "./components/AppShell.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
 import { RunMonitor } from "./components/RunMonitor.js";
+import { ToastProvider, useToast } from "./components/Toast.js";
 import { WorkflowPicker } from "./components/WorkflowPicker.js";
 
-export function App() {
+function AppContent() {
+  const { addToast } = useToast();
   const [profiles, setProfiles] = useState<AddressProfileView[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("australia_sydney");
   const [workflows, setWorkflows] = useState<WorkflowView[]>([]);
@@ -36,8 +41,15 @@ export function App() {
   const [queryError, setQueryError] = useState<string | undefined>();
   const [dryRun, setDryRun] = useState(true);
   const [headless, setHeadless] = useState(true);
+  const [concurrency, setConcurrency] = useState(1);
+  const [retryAttempts, setRetryAttempts] = useState(2);
+  const [retryBaseDelayMs, setRetryBaseDelayMs] = useState(5_000);
+  const [accountDelayMs, setAccountDelayMs] = useState(2_000);
   const [job, setJob] = useState<JobView | undefined>();
   const [jobError, setJobError] = useState<string | undefined>();
+  const [jobHistory, setJobHistory] = useState<JobView[]>([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [activeView, setActiveView] = useState<"run" | "history">("run");
 
   useEffect(() => {
     void Promise.all([fetchAddressProfiles(), fetchWorkflows()])
@@ -46,7 +58,11 @@ export function App() {
         setSelectedProfileId(profileResponse.selectedProfile);
         setWorkflows(workflowResponse.workflows);
       })
-      .catch((error) => setQueryError(error instanceof Error ? error.message : String(error)));
+      .catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        setQueryError(msg);
+        addToast("error", `Failed to load configuration: ${msg}`);
+      });
   }, []);
 
   useEffect(() => {
@@ -55,13 +71,42 @@ export function App() {
     }
     const unsubscribe = subscribeToJob(
       job.id,
-      (updatedJob) => setJob(updatedJob),
+      (updatedJob) => {
+        setJob(updatedJob);
+        if (updatedJob.status === "completed") {
+          addToast("success", `Run completed: ${updatedJob.summary.completed} succeeded, ${updatedJob.summary.skipped} skipped`);
+          refreshHistory();
+        } else if (updatedJob.status === "failed") {
+          addToast("error", `Run finished with ${updatedJob.summary.failed} failures`);
+          refreshHistory();
+        } else if (updatedJob.status === "cancelled") {
+          addToast("warning", "Run was cancelled");
+          refreshHistory();
+        }
+      },
       (error) => setJobError(error.message)
     );
     return () => unsubscribe();
   }, [job?.id, job?.status]);
 
   const accountsById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+
+  const accountStatuses = useMemo(() => {
+    if (!job) return undefined;
+    const map = new Map<string, { status: string; message?: string }>();
+    for (const a of job.accounts) {
+      if (a.status !== "queued") {
+        map.set(a.accountId, { status: a.status, message: a.message ?? a.error });
+      }
+    }
+    return map.size > 0 ? map : undefined;
+  }, [job]);
+
+  const refreshHistory = () => {
+    void fetchJobs().then((response) => setJobHistory(response.jobs)).catch(() => undefined);
+  };
+
+  useEffect(() => { refreshHistory(); }, []);
 
   const updateFilters = (nextFilters: AccountQueryFilters) => {
     const ownerRange = nextFilters.ownerRange;
@@ -79,8 +124,11 @@ export function App() {
       setAccounts(response.accounts);
       setTotalAccounts(response.total);
       setSelectedIds(new Set(response.accounts.map((account) => account.id)));
+      addToast("info", `Found ${response.accounts.length} accounts (${response.total} total)`);
     } catch (error) {
-      setQueryError(error instanceof Error ? error.message : String(error));
+      const msg = error instanceof Error ? error.message : String(error);
+      setQueryError(msg);
+      addToast("error", msg);
     } finally {
       setQueryLoading(false);
     }
@@ -120,8 +168,18 @@ export function App() {
     setSelectedWorkflowIds(new Set([workflowId]));
   };
 
-  const handleStartJob = async () => {
+  const handleStartRequest = () => {
+    if (!dryRun && selectedIds.size > 0) {
+      setConfirmOpen(true);
+    } else {
+      void executeStartJob();
+    }
+  };
+
+  const executeStartJob = async () => {
+    setConfirmOpen(false);
     setJobError(undefined);
+    setActiveView("run");
     const selectedAccounts = accounts.filter((account) => selectedIds.has(account.id));
     try {
       const response = await createJob({
@@ -131,34 +189,66 @@ export function App() {
         addressProfile: selectedProfileId,
         dryRun,
         headless,
-        retryAttempts: 2,
-        retryBaseDelayMs: 5_000,
-        accountDelayMs: 2_000
+        concurrency,
+        retryAttempts,
+        retryBaseDelayMs,
+        accountDelayMs
       });
       setJob(response.job);
+      addToast("info", `${dryRun ? "Dry run" : "Run"} started for ${selectedAccounts.length} accounts`);
     } catch (error) {
-      setJobError(error instanceof Error ? error.message : String(error));
+      const msg = error instanceof Error ? error.message : String(error);
+      setJobError(msg);
+      addToast("error", msg);
     }
   };
 
   const handleCancelJob = async () => {
-    if (!job) {
-      return;
-    }
+    if (!job) return;
     try {
       const response = await cancelJob(job.id);
       setJob(response.job);
+      addToast("warning", "Cancellation signalled — finishing current accounts");
     } catch (error) {
-      setJobError(error instanceof Error ? error.message : String(error));
+      const msg = error instanceof Error ? error.message : String(error);
+      setJobError(msg);
+      addToast("error", msg);
     }
   };
 
+  const handleRetryFailed = (failedJob: JobView) => {
+    const failedAccountIds = failedJob.accounts
+      .filter((a) => a.status === "failed")
+      .map((a) => a.accountId);
+    if (failedAccountIds.length === 0) return;
+    setSelectedIds(new Set(failedAccountIds));
+    setActiveView("run");
+    addToast("info", `Selected ${failedAccountIds.length} failed accounts for retry`);
+  };
+
+  const selectedWorkflowName = workflows.find((w) => selectedWorkflowIds.has(w.id))?.name ?? "workflow";
+
   return (
-    <AppShell>
+    <AppShell activeView={activeView} onViewChange={setActiveView}>
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Start live automation run?"
+        message={`You're about to run "${selectedWorkflowName}" on ${selectedIds.size} account${selectedIds.size !== 1 ? "s" : ""}. This is NOT a dry run — changes will be made to real Zoom accounts.`}
+        confirmLabel="Start run"
+        cancelLabel="Go back"
+        variant="danger"
+        onConfirm={executeStartJob}
+        onCancel={() => setConfirmOpen(false)}
+      />
+
       <div className="content-header">
         <div>
-          <h1>Automation runs</h1>
-          <p>Query sub accounts, select workflows, and monitor account-level progress.</p>
+          <h1>{activeView === "history" ? "Run history" : "Automation runs"}</h1>
+          <p>
+            {activeView === "history"
+              ? "View past runs, inspect results, and retry failed accounts."
+              : "Query sub accounts, select workflows, and monitor account-level progress."}
+          </p>
         </div>
         <div className="header-metric">
           <span>Selected accounts</span>
@@ -166,48 +256,69 @@ export function App() {
         </div>
       </div>
 
-      <div className="content-grid">
-        <div className="primary-column">
-          <AccountQueryPanel
-            filters={filters}
-            accounts={accounts}
-            selectedIds={selectedIds}
-            loading={queryLoading}
-            error={queryError}
-            total={totalAccounts}
-            onFiltersChange={updateFilters}
-            onQuery={handleQuery}
-            onToggle={handleToggleAccount}
-            onTogglePage={handleTogglePage}
-          />
-          <RunMonitor
-            selectedCount={selectedIds.size}
-            job={job}
-            accountsById={accountsById}
-            dryRun={dryRun}
-            headless={headless}
-            running={Boolean(job && ["queued", "running"].includes(job.status))}
-            onDryRunChange={setDryRun}
-            onHeadlessChange={setHeadless}
-            onStart={handleStartJob}
-            onCancel={handleCancelJob}
-          />
-          {jobError ? <div className="banner error">{jobError}</div> : null}
-        </div>
+      {activeView === "history" ? (
+        <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
+      ) : (
+        <div className="content-grid">
+          <div className="primary-column">
+            <AccountQueryPanel
+              filters={filters}
+              accounts={accounts}
+              selectedIds={selectedIds}
+              loading={queryLoading}
+              error={queryError}
+              total={totalAccounts}
+              accountStatuses={accountStatuses}
+              onFiltersChange={updateFilters}
+              onQuery={handleQuery}
+              onToggle={handleToggleAccount}
+              onTogglePage={handleTogglePage}
+            />
+            <RunMonitor
+              selectedCount={selectedIds.size}
+              job={job}
+              accountsById={accountsById}
+              dryRun={dryRun}
+              headless={headless}
+              concurrency={concurrency}
+              retryAttempts={retryAttempts}
+              retryBaseDelayMs={retryBaseDelayMs}
+              accountDelayMs={accountDelayMs}
+              running={Boolean(job && ["queued", "running"].includes(job.status))}
+              onDryRunChange={setDryRun}
+              onHeadlessChange={setHeadless}
+              onConcurrencyChange={setConcurrency}
+              onRetryAttemptsChange={setRetryAttempts}
+              onRetryBaseDelayMsChange={setRetryBaseDelayMs}
+              onAccountDelayMsChange={setAccountDelayMs}
+              onStart={handleStartRequest}
+              onCancel={handleCancelJob}
+            />
+            {jobError ? <div className="banner error">{jobError}</div> : null}
+          </div>
 
-        <aside className="secondary-column">
-          <WorkflowPicker
-            workflows={workflows}
-            selectedWorkflowIds={selectedWorkflowIds}
-            onToggle={handleToggleWorkflow}
-          />
-          <AddressProfilePanel
-            profiles={profiles}
-            selectedProfileId={selectedProfileId}
-            onChange={setSelectedProfileId}
-          />
-        </aside>
-      </div>
+          <aside className="secondary-column">
+            <WorkflowPicker
+              workflows={workflows}
+              selectedWorkflowIds={selectedWorkflowIds}
+              onToggle={handleToggleWorkflow}
+            />
+            <AddressProfilePanel
+              profiles={profiles}
+              selectedProfileId={selectedProfileId}
+              onChange={setSelectedProfileId}
+            />
+          </aside>
+        </div>
+      )}
     </AppShell>
+  );
+}
+
+export function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
   );
 }
