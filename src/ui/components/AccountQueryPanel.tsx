@@ -127,13 +127,26 @@ export function AccountQueryPanel({
           {selectedIds.size} / {accounts.length} selected
           {typeof total === "number" && total !== accounts.length ? ` (${total} total)` : ""}
         </span>
-        <button
-          className="tertiary-button"
-          onClick={() => onTogglePage(visibleAccountIds, !pageSelected)}
-          disabled={visibleAccounts.length === 0}
-        >
-          {pageSelected ? "Clear page" : "Select page"}
-        </button>
+        <div className="table-toolbar-actions">
+          <button
+            className="tertiary-button"
+            onClick={() => onTogglePage(visibleAccountIds, !pageSelected)}
+            disabled={visibleAccounts.length === 0}
+          >
+            {pageSelected ? "Clear page" : "Select page"}
+          </button>
+          <button
+            className="tertiary-button"
+            onClick={() => {
+              const allIds = accounts.map((a) => a.id);
+              const allSelected = allIds.every((id) => selectedIds.has(id));
+              onTogglePage(allIds, !allSelected);
+            }}
+            disabled={accounts.length === 0}
+          >
+            {accounts.length > 0 && accounts.every((a) => selectedIds.has(a.id)) ? "Deselect all" : "Select all"}
+          </button>
+        </div>
       </div>
 
       <div className="table-wrap">
@@ -183,8 +196,20 @@ export function AccountQueryPanel({
                     <td title={account.ownerEmail ?? account.ownerName ?? ""}>
                       {account.ownerEmail ?? account.ownerName ?? "—"}
                     </td>
-                    <td title={account.id}>
+                    <td title={account.id} className="account-id-cell">
                       <code>{account.id}</code>
+                      <button
+                        className="copy-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(account.id);
+                          const btn = e.currentTarget;
+                          btn.textContent = "✓";
+                          setTimeout(() => { btn.textContent = "⎘"; }, 1500);
+                        }}
+                        aria-label={`Copy account ID ${account.id}`}
+                        title="Copy ID"
+                      >⎘</button>
                     </td>
                     <td>
                       <span className={`status-badge ${badge.cls}`} title={lastStatus?.message}>

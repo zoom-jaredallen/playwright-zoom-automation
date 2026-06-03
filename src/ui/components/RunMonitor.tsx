@@ -95,7 +95,7 @@ export function RunMonitor({
             title="Start run (Ctrl+Enter)"
           >
             <PlayIcon />
-            {running ? "Running" : "Start run"}
+            {running ? "Running…" : selectedCount > 0 ? `Start run (${selectedCount})` : "Start run"}
           </button>
         </div>
       </div>

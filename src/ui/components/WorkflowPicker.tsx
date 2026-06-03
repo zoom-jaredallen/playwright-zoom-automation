@@ -34,14 +34,16 @@ export function WorkflowPicker({ workflows, selectedWorkflowIds, pipelineOrder, 
         <div>
           <h2>Workflows</h2>
           <p>
-            {isPipeline
-              ? `Pipeline: ${pipelineOrder.length} workflows will run in sequence.`
-              : "Choose one or more workflows. Multiple selections create a pipeline."}
+            {pipelineOrder.length === 0
+              ? "Select one or more workflows to run on each account."
+              : pipelineOrder.length === 1
+              ? `1 workflow selected. Add more to create a pipeline.`
+              : `Pipeline: ${pipelineOrder.length} workflows will run in sequence per account.`}
           </p>
         </div>
       </div>
 
-      {isPipeline ? (
+      {pipelineOrder.length > 0 ? (
         <div className="pipeline-order">
           {pipelineOrder.map((id, index) => {
             const workflow = workflows.find((w) => w.id === id);
@@ -50,14 +52,25 @@ export function WorkflowPicker({ workflows, selectedWorkflowIds, pipelineOrder, 
               <div key={id} className="pipeline-step">
                 <span className="pipeline-step-number">{index + 1}</span>
                 <span className="pipeline-step-name">{workflow.name}</span>
-                <div className="pipeline-step-actions">
-                  <button className="icon-button" onClick={() => moveUp(id)} disabled={index === 0} aria-label="Move up">↑</button>
-                  <button className="icon-button" onClick={() => moveDown(id)} disabled={index === pipelineOrder.length - 1} aria-label="Move down">↓</button>
-                  <button className="icon-button" onClick={() => onToggle(id)} aria-label="Remove">×</button>
-                </div>
+                {isPipeline ? (
+                  <div className="pipeline-step-actions">
+                    <button className="icon-button" onClick={() => moveUp(id)} disabled={index === 0} aria-label="Move up">↑</button>
+                    <button className="icon-button" onClick={() => moveDown(id)} disabled={index === pipelineOrder.length - 1} aria-label="Move down">↓</button>
+                    <button className="icon-button" onClick={() => onToggle(id)} aria-label="Remove">×</button>
+                  </div>
+                ) : (
+                  <div className="pipeline-step-actions">
+                    <button className="icon-button" onClick={() => onToggle(id)} aria-label="Remove">×</button>
+                  </div>
+                )}
               </div>
             );
           })}
+          {isPipeline ? (
+            <div className="pipeline-connector">
+              <small>Workflows run top → bottom for each account</small>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
