@@ -9,6 +9,9 @@ import { filterSelectableAccounts, type AccountSelectionFilters } from "./servic
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
 import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
+import { computeDashboardMetrics } from "./services/analytics.js";
+import { createSchedulerStore, type ScheduleDefinition } from "./services/scheduler.js";
+import { WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
@@ -29,6 +32,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const jobEvents = createJobEventEmitter();
   const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
   const workflowRegistry = createWorkflowRegistry();
+  const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
+  const webhookService = new WebhookService();
   let cachedAccounts: SubAccount[] = [];
 
   app.use(express.json({ limit: "1mb" }));
@@ -256,6 +261,125 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       next(error);
     }
   });
+
+  // ─── Scheduler Endpoints ──────────────────────────────────────────────────
+
+  app.get("/api/schedules", (_request, response) => {
+    response.json({ schedules: schedulerStore.list() });
+  });
+
+  app.get("/api/schedules/:id", (request, response) => {
+    const schedule = schedulerStore.get(request.params.id);
+    if (!schedule) {
+      response.status(404).json({ error: "Schedule not found" });
+      return;
+    }
+    response.json({ schedule });
+  });
+
+  app.post("/api/schedules", (request, response, next) => {
+    try {
+      const body = request.body as Partial<ScheduleDefinition>;
+      if (!body.name || !body.cron || !body.jobConfig) {
+        response.status(400).json({ error: "name, cron, and jobConfig are required" });
+        return;
+      }
+      const schedule = schedulerStore.create({
+        name: body.name,
+        cron: body.cron,
+        enabled: body.enabled ?? true,
+        jobConfig: body.jobConfig,
+        notifications: body.notifications
+      });
+      response.status(201).json({ schedule });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/schedules/:id", (request, response, next) => {
+    try {
+      const schedule = schedulerStore.update(request.params.id, request.body);
+      response.json({ schedule });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/schedules/:id", (request, response) => {
+    const deleted = schedulerStore.delete(request.params.id);
+    if (!deleted) {
+      response.status(404).json({ error: "Schedule not found" });
+      return;
+    }
+    response.json({ ok: true });
+  });
+
+  app.post("/api/schedules/:id/run", (request, response) => {
+    const schedule = schedulerStore.get(request.params.id);
+    if (!schedule) {
+      response.status(404).json({ error: "Schedule not found" });
+      return;
+    }
+    response.json({ message: "Manual trigger queued", scheduleId: schedule.id });
+  });
+
+  // ─── Dashboard & Analytics ─────────────────────────────────────────────────
+
+  app.get("/api/dashboard", (_request, response) => {
+    const jobs = jobStore.listJobs();
+    const metrics = computeDashboardMetrics(jobs);
+    response.json(metrics);
+  });
+
+  // ─── Webhooks ─────────────────────────────────────────────────────────────
+
+  app.get("/api/webhooks", (_request, response) => {
+    response.json({ webhooks: webhookService.listWebhooks() });
+  });
+
+  app.get("/api/webhooks/deliveries", (_request, response) => {
+    response.json({ deliveries: webhookService.getDeliveryLog() });
+  });
+
+  app.post("/api/webhooks", (request, response) => {
+    const body = request.body;
+    if (!body.name || !body.url || !body.events) {
+      response.status(400).json({ error: "name, url, and events are required" });
+      return;
+    }
+    const config = {
+      id: `wh_${Date.now().toString(36)}`,
+      name: body.name,
+      url: body.url,
+      events: body.events,
+      enabled: body.enabled ?? true,
+      secret: body.secret,
+      maxRetries: body.maxRetries ?? 3,
+      headers: body.headers
+    };
+    webhookService.addWebhook(config);
+    response.status(201).json({ webhook: config });
+  });
+
+  app.delete("/api/webhooks/:id", (request, response) => {
+    webhookService.removeWebhook(request.params.id);
+    response.json({ ok: true });
+  });
+
+  // ─── Rate Limiter Stats ───────────────────────────────────────────────────
+
+  app.get("/api/system/health", (_request, response) => {
+    response.json({
+      status: "ok",
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      schedules: schedulerStore.list().filter((s) => s.enabled).length,
+      activeJobs: jobStore.listJobs().filter((j) => j.status === "running").length
+    });
+  });
+
+  // ─── Error Handler ────────────────────────────────────────────────────────
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
