@@ -703,6 +703,10 @@ td code {
   line-height: 18px;
 }
 
+.workflow-item.selected .workflow-copy small {
+  color: var(--text-text-subtle-neutral);
+}
+
 .profile-summary {
   margin: 0;
   padding: 16px;

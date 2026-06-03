@@ -124,8 +124,8 @@ export function AccountQueryPanel({
 
       <div className="table-toolbar">
         <span>
-          {pagination.start}-{pagination.end} shown from {accounts.length}
-          {typeof total === "number" ? ` filtered from ${total}` : ""}. {selectedIds.size} selected.
+          {selectedIds.size} / {accounts.length} selected
+          {typeof total === "number" && total !== accounts.length ? ` (${total} total)` : ""}
         </span>
         <button
           className="tertiary-button"
@@ -180,8 +180,10 @@ export function AccountQueryPanel({
                     <td>
                       <strong>{account.name}</strong>
                     </td>
-                    <td>{account.ownerEmail ?? account.ownerName ?? "—"}</td>
-                    <td>
+                    <td title={account.ownerEmail ?? account.ownerName ?? ""}>
+                      {account.ownerEmail ?? account.ownerName ?? "—"}
+                    </td>
+                    <td title={account.id}>
                       <code>{account.id}</code>
                     </td>
                     <td>
