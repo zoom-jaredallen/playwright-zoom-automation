@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zoom Workflow Recorder</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-text">zoom</span>
+        <span class="logo-sub">Workflow Recorder</span>
+      </div>
+    </header>
+
+    <!-- Idle State -->
+    <section id="idle-view" class="view">
+      <div class="status-card">
+        <div class="status-icon idle">⏺</div>
+        <p>Ready to record. Navigate to the Zoom admin page where you want to start, then click Record.</p>
+      </div>
+      <button id="btn-start" class="btn btn-record">
+        <span class="record-dot"></span>
+        Start Recording
+      </button>
+    </section>
+
+    <!-- Recording State -->
+    <section id="recording-view" class="view hidden">
+      <div class="status-card recording">
+        <div class="status-icon recording">●</div>
+        <p>Recording… <span id="action-count">0</span> actions captured</p>
+      </div>
+      <div id="action-list" class="action-list"></div>
+      <button id="btn-stop" class="btn btn-stop">
+        ■ Stop Recording
+      </button>
+    </section>
+
+    <!-- Review State -->
+    <section id="review-view" class="view hidden">
+      <div class="status-card complete">
+        <div class="status-icon complete">✓</div>
+        <p>Recording complete! Review parameters and export.</p>
+      </div>
+
+      <div class="form-group">
+        <label for="workflow-name">Workflow Name</label>
+        <input id="workflow-name" type="text" placeholder="e.g., Add AU Toll Business Address">
+      </div>
+
+      <div class="form-group">
+        <label for="workflow-category">Category</label>
+        <select id="workflow-category">
+          <option value="phone">Phone</option>
+          <option value="settings">Settings</option>
+          <option value="compliance">Compliance</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+
+      <div id="parameters-section" class="parameters-section">
+        <h3>Detected Parameters</h3>
+        <p class="hint">These values will become template variables. Confirm or dismiss each one.</p>
+        <div id="parameter-list"></div>
+      </div>
+
+      <div class="export-actions">
+        <button id="btn-export-json" class="btn btn-primary">Download JSON</button>
+        <button id="btn-export-sync" class="btn btn-secondary">Sync to Console</button>
+        <button id="btn-copy" class="btn btn-tertiary">Copy JSON</button>
+      </div>
+
+      <button id="btn-new" class="btn btn-link">Record another workflow</button>
+    </section>
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

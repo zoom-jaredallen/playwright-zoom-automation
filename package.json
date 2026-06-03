@@ -14,6 +14,7 @@
     "test:watch": "vitest",
     "serve:ui": "UI_DEV=false tsx src/server/index.ts",
     "start": "tsx src/main.ts",
+    "workflow:compile": "tsx src/compiler/cli.ts",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

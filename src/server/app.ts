@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
+import { compileWorkflow } from "../compiler/compiler.js";
+import type { RecordedWorkflow } from "../compiler/types.js";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
@@ -39,6 +41,35 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
 
   app.get("/api/workflows", (_request, response) => {
     response.json({ workflows: workflowRegistry.list() });
+  });
+
+  app.post("/api/workflows/import", (request, response, next) => {
+    try {
+      const body = request.body as { workflow?: RecordedWorkflow; options?: { compile?: boolean; enableImmediately?: boolean } };
+      if (!body.workflow || !body.workflow.version || !body.workflow.actions) {
+        response.status(400).json({ error: "Invalid workflow JSON — missing version or actions" });
+        return;
+      }
+
+      const workflow = body.workflow;
+      if (!workflow.meta.name) {
+        response.status(400).json({ error: "Workflow must have a name" });
+        return;
+      }
+
+      const outputBase = path.resolve("src/workflows/recorded");
+      const result = compileWorkflow(workflow, outputBase);
+
+      response.status(201).json({
+        id: result.id,
+        outputDir: result.outputDir,
+        warnings: result.warnings,
+        testResults: result.testResults,
+        message: `Workflow "${workflow.meta.name}" compiled to ${result.outputDir}. Add it to src/workflows/index.ts to enable.`
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/address-profiles", (_request, response) => {
