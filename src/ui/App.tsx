@@ -199,17 +199,22 @@ function AppContent() {
     const workflow = workflows.find((item) => item.id === workflowId);
     if (!workflow?.enabled) return;
 
-    setSelectedWorkflowIds((current) => {
-      const next = new Set(current);
-      if (next.has(workflowId)) {
+    const isSelected = selectedWorkflowIds.has(workflowId);
+    if (isSelected) {
+      setSelectedWorkflowIds((current) => {
+        const next = new Set(current);
         next.delete(workflowId);
-        setPipelineOrder((order) => order.filter((id) => id !== workflowId));
-      } else {
+        return next;
+      });
+      setPipelineOrder((order) => order.filter((id) => id !== workflowId));
+    } else {
+      setSelectedWorkflowIds((current) => {
+        const next = new Set(current);
         next.add(workflowId);
-        setPipelineOrder((order) => [...order, workflowId]);
-      }
-      return next;
-    });
+        return next;
+      });
+      setPipelineOrder((order) => [...order, workflowId]);
+    }
   };
 
   const handleReorderPipeline = (order: string[]) => {
