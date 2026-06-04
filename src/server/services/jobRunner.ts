@@ -19,6 +19,8 @@ export interface StartJobOptions {
   retryBaseDelayMs: number;
   accountDelayMs: number;
   concurrency?: number;
+  /** Per-account parameter values keyed by account id, then parameter name. */
+  accountValues?: Record<string, Record<string, string>>;
   store: JobStore;
   registry: WorkflowRegistry;
   env?: NodeJS.ProcessEnv;
@@ -64,6 +66,10 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
     FLOW_RETRY_BASE_DELAY_MS: String(options.retryBaseDelayMs),
     ACCOUNT_DELAY_MS: String(options.accountDelayMs)
   });
+
+  if (options.accountValues) {
+    config.accountValues = options.accountValues;
+  }
 
   if (!config.runtime.dryRun) {
     await validateDocumentFiles(config.documents);

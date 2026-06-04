@@ -205,6 +205,28 @@ describe("compileWorkflow", () => {
     expect(flow).toContain("guardOk");                              // step guard
   });
 
+  it("skips mutating (submit) steps under dry run and resolves per-account values", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+    // Save click is auto-marked mutating -> guarded by dryRun
+    expect(flow).toContain("this.options.config.runtime.dryRun");
+    expect(flow).toContain("dryRunSkipped = true");
+    expect(flow).toContain('{ status: "skipped", message: "Dry run');
+    // Per-account values consulted before the address profile
+    expect(flow).toContain("config.accountValues");
+    expect(flow).toContain("this.activeAccountId");
+  });
+
+  it("compiles after-action assertions so a failed submit is detected", () => {
+    // createTestWorkflow has an assertion afterAction act_4 (the Save click).
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+    expect(flow).toContain("Auto verification");
+    expect(flow).toContain("getByText(new RegExp(");
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

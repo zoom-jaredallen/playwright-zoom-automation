@@ -109,6 +109,7 @@ const actionSchema: z.ZodType = z.lazy(() => z
     dialogAction: z.enum(["accept", "dismiss"]).optional(),
     dialogPromptText: z.string().optional(),
     elementScreenshot: z.boolean().optional(),
+    skipInDryRun: z.boolean().optional(),
     ifCondition: predicateSchema.optional(),
     thenActions: z.array(actionSchema).optional(),
     elseActions: z.array(actionSchema).optional()

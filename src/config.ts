@@ -49,6 +49,12 @@ export interface AppConfig {
     accountDelayMs: number;
     concurrency: number;
   };
+  /**
+   * Per-account parameter values, keyed by sub-account id, then parameter name.
+   * Lets a single workflow push distinct data (e.g. a different user) to each
+   * account. Injected at job time; takes precedence over the address profile.
+   */
+  accountValues?: Record<string, Record<string, string>>;
 }
 
 /**

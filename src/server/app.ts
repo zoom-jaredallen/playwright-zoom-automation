@@ -416,6 +416,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         retryBaseDelayMs?: number;
         accountDelayMs?: number;
         concurrency?: number;
+        accountValues?: Record<string, Record<string, string>>;
       };
       const accountIds = body.accountIds ?? [];
       const sourceAccounts = body.accounts && body.accounts.length > 0 ? body.accounts : cachedAccounts;
@@ -457,6 +458,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         retryBaseDelayMs: body.retryBaseDelayMs ?? 5_000,
         accountDelayMs: body.accountDelayMs ?? 2_000,
         concurrency: Math.min(body.concurrency ?? 1, 10),
+        accountValues: body.accountValues,
         store: jobStore,
         registry: workflowRegistry
       });

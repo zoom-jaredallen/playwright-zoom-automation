@@ -68,6 +68,7 @@ function AppContent() {
   const [headless, setHeadless] = useState(false);
   const [concurrency, setConcurrency] = useState(1);
   const [retryAttempts, setRetryAttempts] = useState(2);
+  const [accountValues, setAccountValues] = useState<Record<string, Record<string, string>> | undefined>();
 
   // Job state
   const [job, setJob] = useState<JobView | undefined>();
@@ -218,7 +219,8 @@ function AppContent() {
         concurrency,
         retryAttempts,
         retryBaseDelayMs: 5000,
-        accountDelayMs: 0
+        accountDelayMs: 0,
+        accountValues
       });
       setJob(response.job);
       setWizardStep("run");
@@ -476,6 +478,7 @@ function AppContent() {
                 onConcurrencyChange={setConcurrency}
                 onRetryAttemptsChange={setRetryAttempts}
                 onImportWorkflow={() => setImportOpen(true)}
+                onAccountValuesChange={setAccountValues}
                 onBack={() => setWizardStep("accounts")}
                 onNext={handleStartRequest}
               />

@@ -137,6 +137,12 @@ export interface RecordedAction {
   dialogPromptText?: string;
   /** When true, a screenshot action is scoped to the matched element via locator.screenshot(). */
   elementScreenshot?: boolean;
+  /**
+   * Skip this step during a dry run (used for mutating/commit steps like Save so a
+   * dry run validates the flow without making changes). The compiler auto-marks
+   * submit-like clicks; this overrides that per step.
+   */
+  skipInDryRun?: boolean;
   // ─── Control flow (type === "if") ───────────────────────────────────────────
   /** Condition for an IF block. */
   ifCondition?: Predicate;

@@ -87,6 +87,8 @@ export class ${className} implements AutomationFlow {
   constructor(private readonly options: ${className}Options) {}
 
   async run(input: FlowInput): Promise<FlowResult> {
+    this.activeAccountId = input.account.id;
+    let dryRunSkipped = false;
     const context = await this.options.browser.newContext({
       storageState: this.options.masterStorageState
     });
@@ -116,7 +118,9 @@ ${assertionImports}
 ${actionCode}
 
       await context.tracing.stop();
-      return { status: "completed" };
+      return dryRunSkipped
+        ? { status: "skipped", message: "Dry run: mutating steps were not submitted" }
+        : { status: "completed" };
     } catch (error) {
       await page.screenshot({ path: \`\${artifactBase}-failure.png\`, fullPage: true }).catch(() => undefined);
       await context.tracing.stop({ path: \`\${artifactBase}-trace.zip\` }).catch(() => undefined);
@@ -126,8 +130,15 @@ ${actionCode}
     }
   }
 
+  private activeAccountId?: string;
+
   private resolve(paramName: string): string {
     const config = this.options.config;
+    // Per-account value (e.g. a distinct user per sub-account) takes precedence.
+    const perAccount = this.activeAccountId ? config.accountValues?.[this.activeAccountId]?.[paramName] : undefined;
+    if (perAccount !== undefined && perAccount !== "") {
+      return perAccount;
+    }
     const addressMap: Record<string, string | undefined> = {
       "address.line1": config.address.line1,
       "address.line2": config.address.line2,
@@ -310,7 +321,7 @@ ${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
       break;
 
     case "assert":
-      return wrapGeneratedAction(action, stepComment, generateAssertionActionCode(action, coreIndent, timeout), workflow);
+      return appendAfterAssertions(wrapGeneratedAction(action, stepComment, generateAssertionActionCode(action, coreIndent, timeout), workflow), action, workflow);
 
     case "screenshot": {
       const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
@@ -343,7 +354,60 @@ ${indent}}${elseBlock}`;
       break;
   }
 
-  return wrapGeneratedAction(action, stepComment, core, workflow);
+  return appendAfterAssertions(wrapGeneratedAction(action, stepComment, core, workflow), action, workflow);
+}
+
+/**
+ * Append any workflow.assertions[] whose afterAction matches this step, so a
+ * failed submit (e.g. a validation error on "add user") is detected instead of
+ * being reported as success.
+ */
+function appendAfterAssertions(code: string, action: RecordedAction, workflow: RecordedWorkflow): string {
+  const matching = workflow.assertions.filter((assertion) => assertion.afterAction === action.id);
+  if (matching.length === 0) return code;
+  const blocks = matching.map((assertion) => generateWorkflowAssertionCode(assertion)).join("\n");
+  return `${code}\n${blocks}`;
+}
+
+function generateWorkflowAssertionCode(assertion: RecordedWorkflow["assertions"][number]): string {
+  const indent = "      ";
+  const ci = "        ";
+  const expected = JSON.stringify(assertion.expected);
+  const t = assertion.timeout;
+  const onFailure = assertion.onFailure ?? "screenshot";
+
+  if (assertion.type === "responseOk") {
+    return `${indent}// (responseOk assertion is not enforced at replay time)`;
+  }
+
+  const body =
+    assertion.type === "urlContains"
+      ? `${ci}await page.waitForURL((url) => url.href.includes(${expected}), { timeout: ${t} });`
+      : assertion.type === "elementVisible"
+        ? `${ci}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${t} });`
+        : assertion.type === "fieldValue"
+          ? `${ci}await this.expectFieldValue(page, ${expected}, ${t});`
+          : `${ci}await page.getByText(new RegExp(${expected}, "i")).first().waitFor({ state: "visible", timeout: ${t} });`;
+
+  if (onFailure === "skip") {
+    return `${indent}// Auto verification (${assertion.type})
+${indent}try {
+${body}
+${indent}} catch (error) {
+${indent}  this.options.logger.warn("Verification skipped after failure", { error: error instanceof Error ? error.message : String(error) });
+${indent}}`;
+  }
+  if (onFailure === "screenshot") {
+    return `${indent}// Auto verification (${assertion.type})
+${indent}try {
+${body}
+${indent}} catch (error) {
+${indent}  await page.screenshot({ path: \`\${artifactBase}-verify-failure.png\`, fullPage: true }).catch(() => undefined);
+${indent}  throw error;
+${indent}}`;
+  }
+  return `${indent}// Auto verification (${assertion.type})
+${body}`;
 }
 
 /**
@@ -385,6 +449,20 @@ ${indent}  const guardOk = await this.evalPredicate(page, ${JSON.stringify(actio
     : "";
   const guardCondition = action.guard ? " && guardOk" : "";
 
+  // Dry-run safety: skip mutating/commit steps so a dry run validates without changing data.
+  const dryRunSkip = action.skipInDryRun ?? isMutatingForDryRun(action);
+  const executeCall = `await this.executeRecordedStep(page, artifactBase, ${description}, ${policy}, async () => {
+${core}
+${indent}    });`;
+  const body = dryRunSkip
+    ? `if (this.options.config.runtime.dryRun) {
+${indent}      dryRunSkipped = true;
+${indent}      this.options.logger.info("Dry run: skipping mutating step", { step: ${description} });
+${indent}    } else {
+${indent}      ${executeCall}
+${indent}    }`
+    : executeCall;
+
   return `${stepComment}
 ${indent}{
 ${indent}  const skip = await this.shouldSkipRecordedStep(page, ${condition}, ${selectors});
@@ -393,11 +471,16 @@ ${indent}    this.options.logger.info("Recorded workflow skip condition matched"
 ${indent}    return { status: "skipped", message: "Skip condition matched" };
 ${indent}  }${guardBlock}
 ${indent}  if (skip !== "step"${guardCondition}) {
-${indent}    await this.executeRecordedStep(page, artifactBase, ${description}, ${policy}, async () => {
-${core}
-${indent}    });
+${indent}    ${body}
 ${indent}  }
 ${indent}}`;
+}
+
+/** A click whose label looks like a commit/mutation (skipped during dry runs by default). */
+function isMutatingForDryRun(action: RecordedAction): boolean {
+  if (action.type !== "click" && action.type !== "upload") return false;
+  const name = action.selectors.role?.name ?? action.selectors.text ?? action.description ?? "";
+  return /\b(save|submit|create|confirm|apply|delete|remove|add user|invite|provision)\b/i.test(name);
 }
 
 function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number): string {

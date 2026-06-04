@@ -156,6 +156,7 @@ export async function createJob(input: {
   retryAttempts: number;
   retryBaseDelayMs: number;
   accountDelayMs: number;
+  accountValues?: Record<string, Record<string, string>>;
 }): Promise<{ job: JobView }> {
   return requestJson("/api/jobs", {
     method: "POST",

@@ -23,6 +23,8 @@ interface ConfigureStepProps {
   onImportWorkflow(): void;
   onBack(): void;
   onNext(): void;
+  /** Per-account values parsed from a CSV (keyed by account id → param → value). */
+  onAccountValuesChange?(values: Record<string, Record<string, string>> | undefined): void;
 }
 
 export function ConfigureStep({
@@ -30,10 +32,31 @@ export function ConfigureStep({
   dryRun, headless, concurrency, retryAttempts, accountCount,
   onToggleWorkflow, onReorderPipeline, onProfileChange,
   onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange,
-  onImportWorkflow, onBack, onNext
+  onImportWorkflow, onBack, onNext, onAccountValuesChange
 }: ConfigureStepProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [csvSummary, setCsvSummary] = useState<string | undefined>();
+  const [csvError, setCsvError] = useState<string | undefined>();
   const canProceed = pipelineOrder.length > 0 && selectedProfileId;
+
+  const handleCsv = async (file: File) => {
+    setCsvError(undefined);
+    try {
+      const { values, accounts, params } = parseAccountValuesCsv(await file.text());
+      onAccountValuesChange?.(values);
+      setCsvSummary(`${accounts} account(s) · ${params.join(", ")}`);
+    } catch (error) {
+      setCsvError(error instanceof Error ? error.message : String(error));
+      onAccountValuesChange?.(undefined);
+      setCsvSummary(undefined);
+    }
+  };
+
+  const clearCsv = () => {
+    onAccountValuesChange?.(undefined);
+    setCsvSummary(undefined);
+    setCsvError(undefined);
+  };
 
   const moveUp = (id: string) => {
     const idx = pipelineOrder.indexOf(id);
@@ -183,6 +206,17 @@ export function ConfigureStep({
               </label>
             </div>
           ) : null}
+
+          {/* Per-account values (optional) */}
+          <div className="field" style={{ marginTop: 12 }}>
+            <span>Per-account values (CSV)</span>
+            <small>First column = sub-account id; other columns = parameter names (e.g. <code>contact.email</code>). Overrides the profile per account.</small>
+            <input type="file" accept=".csv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleCsv(f); e.target.value = ""; }} />
+            {csvSummary ? (
+              <small className="csv-summary">Loaded: {csvSummary} <button className="tertiary-button" onClick={clearCsv}>Clear</button></small>
+            ) : null}
+            {csvError ? <small className="import-error">{csvError}</small> : null}
+          </div>
         </section>
       </div>
 
@@ -201,4 +235,57 @@ export function ConfigureStep({
       </div>
     </div>
   );
+}
+
+/**
+ * Parse a per-account values CSV. The first column is the sub-account id; each
+ * other column header is a parameter name. Returns a map keyed by account id.
+ */
+function parseAccountValuesCsv(text: string): {
+  values: Record<string, Record<string, string>>;
+  accounts: number;
+  params: string[];
+} {
+  const rows = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map(splitCsvLine);
+  if (rows.length < 2) throw new Error("CSV needs a header row and at least one account row");
+  const header = rows[0];
+  const params = header.slice(1).map((h) => h.trim()).filter(Boolean);
+  if (params.length === 0) throw new Error("CSV needs at least one parameter column after the account id");
+
+  const values: Record<string, Record<string, string>> = {};
+  for (const row of rows.slice(1)) {
+    const accountId = row[0]?.trim();
+    if (!accountId) continue;
+    const entry: Record<string, string> = {};
+    params.forEach((param, i) => {
+      const cell = row[i + 1];
+      if (cell !== undefined && cell !== "") entry[param] = cell;
+    });
+    values[accountId] = entry;
+  }
+  return { values, accounts: Object.keys(values).length, params };
+}
+
+/** Minimal CSV line splitter with double-quote support. */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') inQuotes = false;
+      else current += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      cells.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current);
+  return cells;
 }
