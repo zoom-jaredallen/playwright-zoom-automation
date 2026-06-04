@@ -4,6 +4,9 @@ import express from "express";
 import { createAutomationServer, resolveBuiltUiPath } from "./app.js";
 
 const port = Number.parseInt(process.env.UI_PORT ?? "4174", 10);
+// Default to loopback to avoid inadvertently exposing the automation API on the network.
+// Set SERVER_HOST=0.0.0.0 to listen on all interfaces (e.g. inside a container).
+const host = process.env.SERVER_HOST ?? "127.0.0.1";
 const app = createAutomationServer();
 
 if (process.env.UI_DEV !== "false") {
@@ -37,6 +40,6 @@ if (process.env.UI_DEV !== "false") {
   });
 }
 
-app.listen(port, () => {
-  console.log(`Zoom automation console listening on http://localhost:${port}`);
+app.listen(port, host, () => {
+  console.log(`Zoom automation console listening on http://${host}:${port}`);
 });

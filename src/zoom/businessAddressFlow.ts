@@ -6,6 +6,9 @@ import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { StorageState } from "./auth.js";
 import { impersonateSubAccount } from "./impersonation.js";
+import { dismissBlockingZoomPopups, isDismissibleZoomDialogText } from "./popups.js";
+
+export { dismissBlockingZoomPopups, isDismissibleZoomDialogText };
 
 export interface BusinessAddressFlowOptions {
   browser: Browser;
@@ -352,18 +355,28 @@ function significantAddressTokens(value: string): string[] {
     .filter((token) => token.length > 1 || /\d/.test(token));
 }
 
+const COUNTRY_CODE_MAP: Record<string, string> = {
+  au: "australia",
+  sg: "singapore",
+  us: "united states",
+  usa: "united states",
+  gb: "united kingdom",
+  uk: "united kingdom",
+  nz: "new zealand",
+  ca: "canada",
+  in: "india",
+  jp: "japan",
+  de: "germany",
+  fr: "france",
+  nl: "netherlands",
+  ie: "ireland",
+  br: "brazil",
+  mx: "mexico",
+};
+
 function normalizeCountry(country: string): string {
   const normalized = normalizeAddressText(country);
-  if (normalized === "au") {
-    return "australia";
-  }
-  if (normalized === "sg") {
-    return "singapore";
-  }
-  if (normalized === "us" || normalized === "usa") {
-    return "united states";
-  }
-  return normalized;
+  return COUNTRY_CODE_MAP[normalized] ?? normalized;
 }
 
 export function countryLabel(country: string): string {
@@ -386,10 +399,6 @@ export function optionNamePattern(optionName: string): RegExp {
     return /^Toll(?:\s|$)/i;
   }
   return new RegExp(`^${escaped}(?:\\s|$|-)`, "i");
-}
-
-export function isDismissibleZoomDialogText(text: string): boolean {
-  return /custom ai companion|what'?s new|new .*available|announcement|introducing/i.test(text);
 }
 
 function escapeRegExp(value: string): string {
@@ -438,8 +447,8 @@ function addressNearbyText(
     return pageText;
   }
 
-  const start = Math.max(0, anchorIndex - 400);
-  const end = Math.min(pageText.length, anchorIndex + 1_000);
+  const start = Math.max(0, anchorIndex - 1_000);
+  const end = Math.min(pageText.length, anchorIndex + 1_500);
   return pageText.slice(start, end);
 }
 
@@ -477,54 +486,6 @@ async function writeFailureDetails(page: Page, artifactPath: string, error: unkn
   await writeFile(artifactPath, `${JSON.stringify(details, null, 2)}\n`, "utf8");
 }
 
-export async function dismissBlockingZoomPopups(page: Page, logger?: Logger): Promise<void> {
-  await page.keyboard.press("Escape").catch(() => undefined);
-
-  const dialogs = page.getByRole("dialog");
-  const count = await dialogs.count().catch(() => 0);
-  for (let index = 0; index < count; index += 1) {
-    const dialog = dialogs.nth(index);
-    if (!(await dialog.isVisible({ timeout: 500 }).catch(() => false))) {
-      continue;
-    }
-
-    const ariaLabel = await dialog.getAttribute("aria-label").catch(() => "");
-    const text = await dialog.innerText({ timeout: 1_000 }).catch(() => "");
-    const dialogText = `${ariaLabel ?? ""}\n${text}`;
-    if (!isDismissibleZoomDialogText(dialogText)) {
-      continue;
-    }
-
-    const button = dialog
-      .getByRole("button", { name: /close|got it|ok|dismiss|not now|skip|maybe later|done|cancel/i })
-      .first();
-    if (await button.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      await button.click().catch(() => undefined);
-      logger?.info("Dismissed Zoom popup", { dialog: firstLine(dialogText) });
-      await page.waitForTimeout(500);
-      continue;
-    }
-
-    await dialog
-      .locator("button")
-      .last()
-      .click({ timeout: 1_000 })
-      .catch(() => undefined);
-    logger?.info("Dismissed Zoom popup with fallback button", { dialog: firstLine(dialogText) });
-  }
-
-  await page
-    .locator(".fe-popups-overlay")
-    .evaluateAll((overlays) => {
-      for (const overlay of overlays) {
-        const text = `${overlay.getAttribute("aria-label") ?? ""}\n${overlay.textContent ?? ""}`;
-        if (/custom ai companion|what'?s new|new .*available|announcement|introducing/i.test(text)) {
-          overlay.remove();
-        }
-      }
-    })
-    .catch(() => undefined);
-}
 
 async function expectAddressVisibleOnList(
   page: Page,
@@ -550,6 +511,3 @@ async function expectAddressVisibleOnList(
   throw new Error("Could not verify that the business address appears on the list page");
 }
 
-function firstLine(value: string): string {
-  return value.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-}

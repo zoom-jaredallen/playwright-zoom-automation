@@ -72,7 +72,7 @@ import type { AppConfig } from "../../../config.js";
 import type { Logger } from "../../../logger.js";
 import type { StorageState } from "../../../zoom/auth.js";
 import { impersonateSubAccount } from "../../../zoom/impersonation.js";
-import { dismissBlockingZoomPopups } from "../../../zoom/businessAddressFlow.js";
+import { dismissBlockingZoomPopups } from "../../../zoom/popups.js";
 
 export interface ${className}Options {
   browser: Browser;

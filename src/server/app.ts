@@ -1,6 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
 import { compileWorkflow } from "../compiler/compiler.js";
@@ -38,7 +39,10 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   let cachedAccounts: SubAccount[] = [];
 
   app.use(express.json({ limit: "1mb" }));
-  app.use("/prism", express.static("/Users/jaredallen/.codex/skills/prism-design/tokens"));
+  // PRISM_TOKENS_PATH must be set to serve design tokens. Intentionally a no-op when unset.
+  if (process.env.PRISM_TOKENS_PATH) {
+    app.use("/prism", express.static(process.env.PRISM_TOKENS_PATH));
+  }
   app.use("/artifacts", express.static(path.resolve("output")));
 
   app.get("/api/health", (_request, response) => {
@@ -52,11 +56,10 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   app.get("/api/workflows/recorded", (_request, response) => {
     const recordedDir = path.resolve("src/workflows/recorded");
     try {
-      const { readdirSync, readFileSync, statSync } = require("node:fs") as typeof import("node:fs");
-      const entries = readdirSync(recordedDir).filter((entry: string) => {
+      const entries = readdirSync(recordedDir).filter((entry) => {
         try { return statSync(path.join(recordedDir, entry)).isDirectory(); } catch { return false; }
       });
-      const workflows = entries.map((id: string) => {
+      const workflows = entries.map((id) => {
         try {
           const schema = JSON.parse(readFileSync(path.join(recordedDir, id, "schema.json"), "utf8"));
           return { id, name: schema.meta?.name ?? id, category: schema.meta?.category ?? "custom", actionCount: schema.actions?.length ?? 0 };
@@ -69,32 +72,37 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   });
 
   app.get("/api/workflows/recorded/:id", (request, response) => {
-    const schemaPath = path.resolve("src/workflows/recorded", request.params.id, "schema.json");
     try {
-      const { readFileSync } = require("node:fs") as typeof import("node:fs");
+      const schemaPath = resolveRecordedWorkflowPath(request.params.id, "schema.json");
       const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
       response.json({ workflow: schema });
-    } catch {
-      response.status(404).json({ error: "Recorded workflow not found" });
+    } catch (error) {
+      if (error instanceof PathTraversalError) {
+        response.status(400).json({ error: error.message });
+      } else {
+        response.status(404).json({ error: "Recorded workflow not found" });
+      }
     }
   });
 
   app.put("/api/workflows/recorded/:id", (request, response, next) => {
     try {
-      const { writeFileSync, mkdirSync } = require("node:fs") as typeof import("node:fs");
       const workflow = request.body?.workflow;
       if (!workflow) {
         response.status(400).json({ error: "workflow is required in request body" });
         return;
       }
-      const dir = path.resolve("src/workflows/recorded", request.params.id);
+      const dir = resolveRecordedWorkflowPath(request.params.id);
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "schema.json"), JSON.stringify(workflow, null, 2) + "\n", "utf8");
-      // Re-compile
       const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"));
       response.json({ ok: true, compiled: result.id });
     } catch (error) {
-      next(error);
+      if (error instanceof PathTraversalError) {
+        response.status(400).json({ error: (error as Error).message });
+      } else {
+        next(error);
+      }
     }
   });
 
@@ -319,7 +327,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         retryAttempts: body.retryAttempts ?? 2,
         retryBaseDelayMs: body.retryBaseDelayMs ?? 5_000,
         accountDelayMs: body.accountDelayMs ?? 2_000,
-        concurrency: body.concurrency ?? 1,
+        concurrency: Math.min(body.concurrency ?? 1, 10),
         store: jobStore,
         registry: workflowRegistry
       });
@@ -416,6 +424,10 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       response.status(400).json({ error: "name, url, and events are required" });
       return;
     }
+    if (!isAllowedWebhookUrl(body.url)) {
+      response.status(400).json({ error: "Webhook URL must use https: and resolve to a public host" });
+      return;
+    }
     const config = {
       id: `wh_${Date.now().toString(36)}`,
       name: body.name,
@@ -466,4 +478,57 @@ function csvEscape(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+class PathTraversalError extends Error {}
+
+const RECORDED_WORKFLOW_BASE = path.resolve("src/workflows/recorded");
+
+/**
+ * Resolve a path inside the recorded-workflow directory and throw if the
+ * result escapes that directory (path traversal guard).
+ */
+function resolveRecordedWorkflowPath(id: string, ...segments: string[]): string {
+  const resolved = path.resolve(RECORDED_WORKFLOW_BASE, id, ...segments);
+  if (!resolved.startsWith(RECORDED_WORKFLOW_BASE + path.sep) && resolved !== RECORDED_WORKFLOW_BASE) {
+    throw new PathTraversalError(`Invalid workflow id: "${id}"`);
+  }
+  return resolved;
+}
+
+// RFC-1918 and link-local prefixes that must not receive webhook deliveries.
+const PRIVATE_RANGES = [
+  /^127\./,
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^169\.254\./,
+  /^::1$/,
+  /^fc00:/i,
+  /^fe80:/i,
+];
+
+/**
+ * Return true only if the URL is a syntactically valid https URL pointing to a
+ * non-private host. Set ALLOW_PRIVATE_WEBHOOK_URLS=true to skip the host check
+ * (useful when the webhook target is an internal test server).
+ */
+function isAllowedWebhookUrl(urlString: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") {
+    return false;
+  }
+  if (process.env.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
+    return true;
+  }
+  const hostname = parsed.hostname;
+  if (hostname === "localhost") return false;
+  if (hostname.endsWith(".internal")) return false;
+  if (PRIVATE_RANGES.some((re) => re.test(hostname))) return false;
+  return true;
 }

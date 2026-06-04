@@ -1,10 +1,9 @@
 import type { AppConfig } from "../config.js";
 import { retry } from "../automation/retry.js";
 
-interface ZoomOAuthResponse {
-  access_token?: string;
-  token_type?: string;
-  expires_in?: number;
+interface ZoomOAuthTokenResult {
+  token: string;
+  expiresInMs: number;
 }
 
 export async function resolveZoomApiAccessToken(
@@ -19,13 +18,14 @@ export async function resolveZoomApiAccessToken(
     throw new Error("Zoom API credentials are not configured");
   }
 
-  return fetchServerToServerToken(config, fetchImpl);
+  const result = await fetchServerToServerToken(config, fetchImpl);
+  return result.token;
 }
 
 async function fetchServerToServerToken(
   config: AppConfig["zoom"],
   fetchImpl: typeof fetch
-): Promise<string> {
+): Promise<ZoomOAuthTokenResult> {
   const credentials = Buffer.from(
     `${config.serverToServer!.clientId}:${config.serverToServer!.clientSecret}`,
     "utf8"
@@ -45,13 +45,12 @@ async function fetchServerToServerToken(
       });
 
       if (!response.ok) {
-        const text = await response.text();
-        const error = new Error(`Zoom OAuth token request failed with status ${response.status}: ${text}`);
+        const error = new Error(`Zoom OAuth token request failed with status ${response.status}`);
         Object.assign(error, { retryable: response.status === 429 || response.status >= 500 });
         throw error;
       }
 
-      return (await response.json()) as ZoomOAuthResponse;
+      return (await response.json()) as { access_token?: string; expires_in?: number };
     },
     { attempts: 3, baseDelayMs: 1_000 }
   );
@@ -60,7 +59,11 @@ async function fetchServerToServerToken(
     throw new Error("Zoom OAuth token response did not include access_token");
   }
 
-  return body.access_token;
+  return {
+    token: body.access_token,
+    // Default to 55 minutes if expires_in is absent (Zoom typically returns 3600s)
+    expiresInMs: (body.expires_in ?? 3_300) * 1_000
+  };
 }
 
 /**
@@ -109,45 +112,9 @@ export class TokenManager {
       throw new Error("Zoom API credentials are not configured");
     }
 
-    const credentials = Buffer.from(
-      `${this.config.serverToServer.clientId}:${this.config.serverToServer.clientSecret}`,
-      "utf8"
-    ).toString("base64");
-    const tokenUrl = new URL(`${this.config.webBaseUrl.replace(/\/$/, "")}/oauth/token`);
-    tokenUrl.searchParams.set("grant_type", "account_credentials");
-    tokenUrl.searchParams.set("account_id", this.config.serverToServer.accountId);
-
-    const body = await retry(
-      async () => {
-        const response = await this.fetchImpl(tokenUrl.toString(), {
-          method: "POST",
-          headers: {
-            Authorization: `Basic ${credentials}`,
-            Accept: "application/json"
-          }
-        });
-
-        if (!response.ok) {
-          const text = await response.text();
-          const error = new Error(`Zoom OAuth token request failed with status ${response.status}: ${text}`);
-          Object.assign(error, { retryable: response.status === 429 || response.status >= 500 });
-          throw error;
-        }
-
-        return (await response.json()) as ZoomOAuthResponse;
-      },
-      { attempts: 3, baseDelayMs: 1_000 }
-    );
-
-    if (!body.access_token) {
-      throw new Error("Zoom OAuth token response did not include access_token");
-    }
-
-    this.token = body.access_token;
-    // Default to 55 minutes if expires_in is not provided (Zoom typically returns 3600s)
-    const expiresInMs = (body.expires_in ?? 3_300) * 1_000;
-    this.expiresAt = Date.now() + expiresInMs;
-
+    const result = await fetchServerToServerToken(this.config, this.fetchImpl);
+    this.token = result.token;
+    this.expiresAt = Date.now() + result.expiresInMs;
     return this.token;
   }
 }

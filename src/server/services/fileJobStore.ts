@@ -91,7 +91,20 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
     },
 
     listJobs(): AutomationJob[] {
-      return Array.from(cache.values())
+      // Merge the in-memory cache with any on-disk jobs that were evicted from it.
+      const all = new Map<string, AutomationJob>(cache);
+      try {
+        for (const file of readdirSync(directory)) {
+          if (!file.endsWith(".json") || file.endsWith(".tmp.json")) continue;
+          const id = file.slice(0, -5);
+          if (!all.has(id)) {
+            const job = loadJobFromDisk(directory, id);
+            if (job) all.set(id, job);
+          }
+        }
+      } catch { /* directory not yet created or not readable */ }
+
+      return Array.from(all.values())
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .map(cloneJob);
     },

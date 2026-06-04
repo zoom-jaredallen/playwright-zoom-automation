@@ -149,7 +149,14 @@ async function waitForAuthenticatedSession(page: Page, baseUrl: string, timeoutM
     await page.waitForTimeout(500);
   }
 
+  // Deadline exceeded — attempt one recovery navigation and verify it succeeded.
   await page.goto(`${baseUrl}/profile`, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+  if (!isAuthenticatedUrl(page.url(), baseUrl)) {
+    await writeLoginDebugArtifacts(page, "auth-deadline-exceeded").catch(() => undefined);
+    throw new Error(
+      `Zoom login did not reach an authenticated page within ${timeoutMs}ms. Current URL: ${page.url()}`
+    );
+  }
 }
 
 async function writeLoginDebugArtifacts(page: Page, reason: string): Promise<void> {

@@ -33,5 +33,6 @@ export async function retry<T>(
     }
   }
 
+  // Reached only when options.attempts <= 0; the loop body never runs.
   throw lastError instanceof Error ? lastError : new Error("Retry operation failed");
 }
