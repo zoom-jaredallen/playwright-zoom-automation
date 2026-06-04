@@ -11,6 +11,14 @@ This repo is a TypeScript + Playwright Zoom automation app with a standalone Rea
 - Cookie-backed web impersonation for each sub account.
 - A fresh Playwright browser context per account.
 
+Current surfaces include:
+
+- CLI batch automation for configured Zoom Phone business-address flows.
+- Web UI for account query, account selection, workflow selection, run monitoring, job history, and recorded-workflow import/editing.
+- Chrome recorder extension for capturing Zoom UI workflows, testing selectors, adding manual steps, running browser preflight tests, and exporting/syncing workflow JSON.
+- Recorded-workflow compiler with selector healing, per-step retry/timeout policy, conditional guards, and generated quality reports.
+- Artifact browser links in the web run monitor for traces, screenshots, failure details, and logs.
+
 ## Start Here
 
 Read:
@@ -36,6 +44,16 @@ For UI-only edits, also inspect the app at:
 UI_PORT=4174 npm run dev
 ```
 
+For Chrome extension edits:
+
+```bash
+cd extension
+npx tsc --noEmit
+npm run build
+```
+
+Known verification caveat: untracked generated workflows under `src/workflows/recorded/` can make root `npm run typecheck` fail. Do not delete or commit those generated workflows unless the user explicitly asks.
+
 ## Do Not Do These
 
 - Do not expose `.env` values.
@@ -43,11 +61,15 @@ UI_PORT=4174 npm run dev
 - Do not run live Zoom automation unless the user explicitly asks.
 - Do not copy from `reference/` blindly. It is historical context only.
 - Do not change the cookie-backed impersonation model unless the user asks for a new authentication strategy.
+- Do not commit generated workflows from `src/workflows/recorded/` unless the user explicitly wants them included.
 
 ## Implementation Notes
 
 - Add new automations as `AutomationFlow` implementations.
 - Register UI workflows in `src/server/services/workflowRegistry.ts`.
 - Instantiate runnable workflows in `src/server/services/jobRunner.ts`.
+- Use `src/server/services/artifacts.ts` for run artifact indexing instead of inventing ad hoc artifact links.
+- Keep recorded-workflow schema changes mirrored between `extension/shared/types.ts`, `src/compiler/types.ts`, and UI editor types in `src/ui/api.ts`.
+- Preserve selector-healing and step-policy behavior when modifying `src/compiler/compiler.ts`.
 - Keep country-specific address and document requirements in `addresses.yaml` when possible.
 - Keep UI changes consistent with the existing PRISM-inspired standalone app styling.

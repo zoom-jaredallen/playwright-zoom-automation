@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "Zoom CX Business Address Australia",
+    "description": "Recorded workflow: 1 navigation(s), 0 field fill(s), 0 click(s).",
+    "recordedAt": "2026-06-03T07:43:00.240Z",
+    "recordedOnUrl": "https://zoom.us/cpw/page/phoneNumbers#/business-address?pageSize=15&pageNumber=1",
+    "durationMs": 9464,
+    "category": "custom"
+  },
+  "parameters": [],
+  "actions": [
+    {
+      "id": "act_mpxrec2i_8ul0c2",
+      "timestamp": 1780472570778,
+      "pageUrl": "https://zoom.us/cpw/page/phoneNumbers#/business-address?pageSize=15&pageNumber=1",
+      "pageTitle": "Business Address & Documents - Zoom",
+      "type": "navigate",
+      "url": "https://zoom.us/cpw/page/phoneNumbers#/business-address?pageSize=15&pageNumber=1",
+      "selectors": {},
+      "description": "Navigate to Business Address & Documents - Zoom"
+    }
+  ],
+  "assertions": [
+    {
+      "afterAction": "act_mpxrec2i_8ul0c2",
+      "type": "urlContains",
+      "expected": "#/business-address?pageSize=15&pageNumber=1",
+      "timeout": 15000,
+      "onFailure": "fail"
+    }
+  ],
+  "config": {
+    "startUrl": "/cpw/page/phoneNumbers#/business-address?pageSize=15&pageNumber=1",
+    "requiresImpersonation": true,
+    "defaultTimeout": 10000,
+    "retryableErrors": [
+      "timeout",
+      "temporarily unavailable",
+      "net::",
+      "target closed"
+    ]
+  }
+}

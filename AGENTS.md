@@ -14,6 +14,8 @@ The app currently supports:
 
 - Adding configured Zoom Phone business addresses.
 - Checking whether a configured business address exists and reporting its current status.
+- Recording/importing custom Zoom UI workflows through the Chrome extension and compiling them into workflow plugins.
+- Viewing per-account run artifacts from the web UI, including Playwright traces, screenshots, failure details, and step logs.
 
 ## Important Safety Rules
 
@@ -24,6 +26,7 @@ The app currently supports:
 - Treat Zoom UI selectors as unstable. Use role, label, and visible-text locators where possible, and verify with a headed run when changing flows.
 - Sub-account impersonation is cookie-backed. Keep the current pattern: log in once as the master admin, capture storage state, create a fresh browser context per sub account, impersonate inside that context, then close it.
 - Preserve failure artifacts: screenshots, JSON failure details, and Playwright traces under `output/artifacts/`.
+- Do not commit generated or experimental workflows under `src/workflows/recorded/` unless the user explicitly wants that workflow included.
 
 ## Common Commands
 
@@ -61,8 +64,11 @@ UI_DEV=false UI_PORT=4174 npm run serve:ui
 - `src/server/`: Express API and UI server.
 - `src/server/services/workflowRegistry.ts`: Workflow definitions shown in the UI.
 - `src/server/services/jobRunner.ts`: Bridges UI jobs to automation flows.
+- `src/server/services/artifacts.ts`: Indexes trace, screenshot, failure-detail, and log artifacts for the UI.
 - `src/ui/`: React UI.
 - `src/ui/components/`: UI panels and controls.
+- `src/compiler/`: Recorded-workflow schema compiler, selector healing, and generated-flow helpers.
+- `extension/`: Chrome workflow recorder with side panel, selector testing, preflight testing, and JSON export/sync.
 - `src/automation/`: Shared runner, retry, progress, and flow types.
 - `src/zoom/api.ts`: Zoom API client for sub-account retrieval.
 - `src/zoom/auth.ts`: Zoom native login and master storage-state capture.
@@ -87,7 +93,11 @@ export interface AutomationFlow {
 
 The `AutomationRunner` handles batching, retry, account delays, and progress updates. Keep Zoom-specific page logic inside `src/zoom/*` flows.
 
-For UI-triggered jobs, add the workflow to `workflowRegistry.ts` and instantiate it in `jobRunner.ts`. The current UI supports one workflow per run so account-level output stays unambiguous.
+For UI-triggered jobs, add the workflow to `workflowRegistry.ts` and instantiate it in `jobRunner.ts`. Recorded workflows can also be imported through `/api/workflows/import`, compiled into `src/workflows/recorded/`, and then registered intentionally.
+
+The recorded-workflow schema supports per-step timeout, retry count, retry delay, continue-on-failure, screenshot-on-failure, and simple condition guards such as skip-if-text-exists, click-if-element-visible, fill-if-empty, and skip-account-if-address-exists. Keep generated code aligned with `src/compiler/types.ts` and `extension/shared/types.ts`.
+
+Compiled recorded workflows should use selector healing helpers from `src/compiler/selectorHealing.ts`. Prefer stable role/label/test-id selectors, and treat CSS-only selectors as warnings that need review.
 
 ## Business Address Profiles
 
@@ -113,6 +123,16 @@ Use the existing PRISM-inspired UI patterns:
 
 After meaningful UI changes, verify in the browser at `http://localhost:4174/` when the dev server is running.
 
+For Chrome extension changes, run:
+
+```bash
+cd extension
+npx tsc --noEmit
+npm run build
+```
+
+The extension side panel currently includes recording pause/resume, manual step insertion, selector test/repair, browser preflight testing, per-step policy controls, conditional steps, detected parameters, and generated workflow quality reports.
+
 ## Testing Expectations
 
 Use tests for behavior changes. Prefer focused tests first, then run broader checks.
@@ -128,9 +148,11 @@ npm run build:ui
 
 For narrow UI helper changes, at minimum run the relevant test file, `npm run typecheck`, and `npm run build:ui`.
 
+Current caveat: if untracked generated workflows exist under `src/workflows/recorded/`, root `npm run typecheck` may fail on those generated files. Do not delete, rewrite, or commit them unless the user asks. Mention the caveat in the final response and run focused checks that avoid those files where possible.
+
 ## Workflow Output
 
-The web UI stores job results in memory for this first release. Per-account workflow output appears in the Run monitor account rows.
+The web UI uses a file-backed job store under `output/jobs/`. Per-account workflow output appears in the Run monitor account rows.
 
 For `Check business address status`, completed rows show messages such as:
 
@@ -140,7 +162,13 @@ For `Check business address status`, completed rows show messages such as:
 - `Address status: Unknown`
 - `Address not found`
 
-If the UI server restarts, in-memory job results disappear.
+Expand an account row in the Run monitor to access artifacts:
+
+- `Open trace`: opens trace zips through Playwright Trace Viewer.
+- `Download trace`: downloads the trace zip.
+- `View screenshots`: opens saved screenshots.
+- `View failure details`: opens JSON page/error details.
+- `View step logs`: opens JSONL logs where available.
 
 ## Known Constraints
 
@@ -148,4 +176,4 @@ If the UI server restarts, in-memory job results disappear.
 - The status parser reads visible page text and matches the configured address plus number type. Be careful not to confuse `Toll` with `Toll-free`.
 - Document upload requirements vary by country and number type.
 - The CLI currently wires the add-address flow directly. UI workflows are selected through the server workflow registry.
-- This workspace may not be a Git repository. Do not rely on `git diff` being available.
+- `src/workflows/recorded/` may contain untracked generated workflows from local recorder experiments. Treat them as user artifacts until instructed otherwise.

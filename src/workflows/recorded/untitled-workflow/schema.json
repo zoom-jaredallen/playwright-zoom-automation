@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "Untitled Workflow",
+    "description": "Recorded workflow: 1 navigation(s), 1 field fill(s), 6 click(s), 0 assertion(s), 0 screenshot(s).",
+    "recordedAt": "2026-06-03T08:48:40.874Z",
+    "recordedOnUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+    "durationMs": 58318,
+    "category": "phone"
+  },
+  "parameters": [],
+  "actions": [
+    {
+      "id": "act_mpxtpqzj_6zn00p",
+      "timestamp": 1780476462559,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "navigate",
+      "url": "https://zoom.us/cci/index/admin#/admin-agents",
+      "selectors": {},
+      "description": "Navigate to Contact Center - Zoom"
+    },
+    {
+      "id": "act_mpxtpuw2_g88i54",
+      "timestamp": 1780476467618,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Add user"
+        },
+        "label": "Add user",
+        "text": "+ Add user",
+        "css": "div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md > span.zcc-compat-zoom-button__label"
+      },
+      "description": "Click \"+ Add user\""
+    },
+    {
+      "id": "act_mpxtq0r0_5qqakg",
+      "timestamp": 1780476475212,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "fill",
+      "selectors": {
+        "role": {
+          "role": "textbox"
+        },
+        "label": "Search by name or email address",
+        "css": "div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner"
+      },
+      "value": "chen",
+      "description": "Fill \"Search by name or email address\" with \"chen\""
+    },
+    {
+      "id": "act_mpxtq3hy_f0ekow",
+      "timestamp": 1780476478774,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "css": "span.zcc-compat-zoom-checkbox > span.zcc-compat-zoom-checkbox__wrap > span.zcc-compat-zoom-checkbox__inner > i.zcc-compat-zoom-checkbox__knob"
+      },
+      "description": "Click \"\""
+    },
+    {
+      "id": "act_mpxtq4md_nnxk6c",
+      "timestamp": 1780476480229,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Add"
+        },
+        "text": "Add",
+        "css": "div.zcc-compat-zoom-overlay-dialog > div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__footer:nth-child(3) > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(2)"
+      },
+      "description": "Click \"Add\""
+    },
+    {
+      "id": "act_mpxtqm6n_oqa7t9",
+      "timestamp": 1780476502991,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "text": "Select user package",
+        "css": "div.zcc-compat-zoom-scrollbar > div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper"
+      },
+      "description": "Click \"Select user package\""
+    },
+    {
+      "id": "act_mpxtqnjo_y3bfkk",
+      "timestamp": 1780476504756,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "option",
+          "name": "Zoom Contact Center Elite (10 available)"
+        },
+        "label": "Zoom Contact Center Elite (10 available)",
+        "text": "Zoom Contact Center Elite (10 available)",
+        "css": "li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3) > div.zcc-compat-zoom-select-option__content > span > span"
+      },
+      "description": "Click \"Zoom Contact Center Elite (10 available)\""
+    },
+    {
+      "id": "act_mpxtqpbk_uwzgl7",
+      "timestamp": 1780476507056,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents/edit?isAdd=true",
+      "pageTitle": "Contact Center - Zoom",
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Save"
+        },
+        "text": "Save",
+        "testId": "edit-agent-save-btn",
+        "css": "div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1) > span.zcc-compat-zoom-button__label"
+      },
+      "description": "Click \"Save\""
+    }
+  ],
+  "assertions": [
+    {
+      "afterAction": "act_mpxtpqzj_6zn00p",
+      "type": "urlContains",
+      "expected": "#/admin-agents",
+      "timeout": 15000,
+      "onFailure": "fail"
+    },
+    {
+      "afterAction": "act_mpxtpuw2_g88i54",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "act_mpxtq4md_nnxk6c",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "act_mpxtqpbk_uwzgl7",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    }
+  ],
+  "config": {
+    "startUrl": "/cci/index/admin#/admin-agents",
+    "requiresImpersonation": true,
+    "defaultTimeout": 10000,
+    "retryableErrors": [
+      "timeout",
+      "temporarily unavailable",
+      "net::",
+      "target closed"
+    ]
+  }
+}
