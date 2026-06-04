@@ -1,4 +1,5 @@
 import type { AutomationFlow } from "../automation/types.js";
+import type { WorkflowCategory } from "@zoom-automation/workflow-core";
 import type { WorkflowContext, WorkflowPlugin } from "./types.js";
 
 // Static imports of all workflow plugins.
@@ -20,7 +21,7 @@ export interface WorkflowDefinition {
   name: string;
   description: string;
   enabled: boolean;
-  category: "phone" | "settings" | "compliance";
+  category: WorkflowCategory;
 }
 
 export interface WorkflowRegistry {

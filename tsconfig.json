@@ -13,5 +13,6 @@
     "rootDir": ".",
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vitest.config.ts", "vite.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vitest.config.ts", "vite.config.ts"],
+  "exclude": ["src/workflows/recorded/**"]
 }

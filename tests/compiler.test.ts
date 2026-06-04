@@ -163,6 +163,21 @@ describe("compileWorkflow", () => {
     expect(result.testResults.selectorCheck).toBe("failed");
   });
 
+  it("honors an explicit id override (used by duplicate)", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir, "add-au-toll-address-2");
+    expect(result.id).toBe("add-au-toll-address-2");
+    expect(result.outputDir).toBe(path.join(testOutputDir, "add-au-toll-address-2"));
+    expect(existsSync(path.join(result.outputDir, "schema.json"))).toBe(true);
+  });
+
+  it("emits a default export on the flow class so it can be dynamically imported", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flowContent = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+    expect(flowContent).toContain("export default AddAuTollAddressFlow;");
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

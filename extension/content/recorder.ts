@@ -3,7 +3,7 @@
  * Runs on all zoom.us pages. Only actively records when told to by the
  * background service worker.
  */
-import { extractSelectors, getFieldContext } from "../shared/selectors.js";
+import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth } from "../shared/selectors.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, SelectorTestResult } from "../shared/types.js";
 
@@ -22,6 +22,17 @@ const CLICK_DEDUP_THRESHOLD_MS = 500;
 
 // Combobox interaction tracking
 let activeCombobox: { element: Element; label: string | undefined; openedAt: number } | null = null;
+
+// Hover deduplication state (feature 4)
+let lastHoverTarget: Element | null = null;
+
+// Frame selector for this recorder context — undefined in the top frame (feature 1)
+const frameSelector = getFrameSelector();
+
+// Network capture for submit-triggered XHR/fetch waits (feature 2)
+const SUBMIT_LABEL_PATTERN = /save|submit|add|continue|next|confirm|apply|create|update/i;
+const recentNetworkEntries: Array<{ url: string; startTime: number }> = [];
+startNetworkObserver();
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -103,6 +114,7 @@ function attachListeners(): void {
   document.addEventListener("input", handleInput, true);
   document.addEventListener("change", handleChange, true);
   document.addEventListener("keydown", handleKeydown, true);
+  document.addEventListener("mouseover", handleMouseOver, true);
   window.addEventListener("hashchange", handleNavigation);
   window.addEventListener("popstate", handleNavigation);
 }
@@ -112,6 +124,7 @@ function detachListeners(): void {
   document.removeEventListener("input", handleInput, true);
   document.removeEventListener("change", handleChange, true);
   document.removeEventListener("keydown", handleKeydown, true);
+  document.removeEventListener("mouseover", handleMouseOver, true);
   window.removeEventListener("hashchange", handleNavigation);
   window.removeEventListener("popstate", handleNavigation);
 }
@@ -149,7 +162,20 @@ function handleClick(event: MouseEvent): void {
       type: "upload",
       selectors,
       description: `Upload file via "${text ?? "file input"}"`
-    });
+    }, target);
+    return;
+  }
+
+  // ─── Download Detection (feature 7) ──────────────────────────────────
+  // Links with a download attribute, hrefs to file types, or export-style
+  // buttons trigger a browser download that the compiler captures via
+  // page.waitForEvent("download").
+  if (isDownloadTrigger(target, text)) {
+    recordAction({
+      type: "download",
+      selectors,
+      description: `Download via "${text ?? "download"}"`
+    }, target);
     return;
   }
 
@@ -189,7 +215,7 @@ function handleClick(event: MouseEvent): void {
         value: optionText,
         parameterHints: params.length > 0 ? params : undefined,
         description: `Select "${optionText}" in ${activeCombobox.label ?? "dropdown"}`
-      });
+      }, target);
       activeCombobox = null;
       return;
     }
@@ -198,15 +224,39 @@ function handleClick(event: MouseEvent): void {
   // ─── Checkbox Detection ──────────────────────────────────────────────
   const checkbox = target.closest('[class*="cpzui-checkbox"], [role="checkbox"], input[type="checkbox"]');
   if (checkbox) {
+    // Feature 5: capture the desired end-state (the state AFTER this toggle) so
+    // the compiled flow only clicks when the checkbox isn't already there.
+    const currentState = getAriaState(checkbox);
+    const desiredChecked = currentState?.checked === undefined ? undefined : !currentState.checked;
     recordAction({
       type: "click",
       selectors: {
-        role: { role: "checkbox", name: selectors.role?.name },
-        ...selectors
+        ...selectors,
+        // Force the checkbox role last so it isn't overwritten by a wrapper role
+        // that extractSelectors may have resolved.
+        role: { role: "checkbox", name: selectors.role?.name }
       },
-      description: `Toggle checkbox "${selectors.role?.name ?? selectors.label ?? ""}"`
-    });
+      ariaState: desiredChecked === undefined ? undefined : { checked: desiredChecked },
+      description: `Toggle checkbox "${selectors.role?.name ?? selectors.label ?? ""}"${desiredChecked === undefined ? "" : ` ${desiredChecked ? "on" : "off"}`}`
+    }, target);
     return;
+  }
+
+  // ─── Expandable Toggle (feature 5) ───────────────────────────────────
+  // aria-expanded triggers (accordions, menus) — record desired expanded state.
+  const expandable = target.closest('[aria-expanded]');
+  if (expandable) {
+    const currentState = getAriaState(expandable);
+    const desiredExpanded = currentState?.expanded === undefined ? undefined : !currentState.expanded;
+    if (desiredExpanded !== undefined) {
+      recordAction({
+        type: "click",
+        selectors,
+        ariaState: { expanded: desiredExpanded },
+        description: `${desiredExpanded ? "Expand" : "Collapse"} "${text ?? "section"}"`
+      }, target);
+      return;
+    }
   }
 
   // ─── Regular Click ───────────────────────────────────────────────────
@@ -219,7 +269,7 @@ function handleClick(event: MouseEvent): void {
     type: "click",
     selectors,
     description: `Click "${text ?? "element"}"`
-  });
+  }, target);
 }
 
 function handleInput(event: Event): void {
@@ -263,21 +313,70 @@ function handleChange(event: Event): void {
   });
 }
 
+// Keys captured as explicit "press" actions (feature 4). Enter on a button is
+// still recorded as a click below for fidelity with user intent.
+const PRESS_KEYS = new Set(["Tab", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp"]);
+
 function handleKeydown(event: KeyboardEvent): void {
   if (!recording || paused) return;
-  // Capture Enter key on buttons/links as explicit clicks
+  const target = event.target as Element;
+
+  // Capture Enter key. On a button/link it's an explicit click; elsewhere (e.g.
+  // submitting a search field) record it as a press so the action isn't lost.
   if (event.key === "Enter") {
-    const target = event.target as Element;
-    if (target && (target.tagName === "BUTTON" || target.getAttribute("role") === "button")) {
-      flushPendingFill();
-      const selectors = extractSelectors(target);
+    if (!target || isRecorderUI(target)) return;
+    flushPendingFill();
+    const selectors = extractSelectors(target);
+    if (target.tagName === "BUTTON" || target.getAttribute("role") === "button") {
       recordAction({
         type: "click",
         selectors,
         description: `Press Enter on "${selectors.role?.name ?? target.textContent?.trim()}"`
-      });
+      }, target);
+    } else {
+      recordAction({
+        type: "press",
+        selectors: isInputElement(target) ? selectors : {},
+        key: "Enter",
+        description: `Press Enter${selectors.label || selectors.role?.name ? ` in "${selectors.label ?? selectors.role?.name}"` : ""}`
+      }, target);
     }
+    return;
   }
+
+  // Capture keyboard navigation keys as "press" actions (feature 4).
+  if (PRESS_KEYS.has(event.key) && target && !isRecorderUI(target)) {
+    flushPendingFill();
+    const selectors = isInputElement(target) ? extractSelectors(target) : {};
+    recordAction({
+      type: "press",
+      selectors,
+      key: event.key,
+      description: `Press ${event.key}${selectors.label || selectors.role?.name ? ` in "${selectors.label ?? selectors.role?.name}"` : ""}`
+    }, target);
+  }
+}
+
+/**
+ * Record hover only on elements that reveal content on hover (menus, popovers,
+ * tooltips). Auto-recording every mouseover would be far too noisy (feature 4).
+ */
+function handleMouseOver(event: MouseEvent): void {
+  if (!recording || paused) return;
+  const target = event.target as Element;
+  if (!target || isRecorderUI(target)) return;
+
+  const hoverTrigger = target.closest('[aria-haspopup], [role="menuitem"], [class*="dropdown"], [class*="tooltip"], [class*="menu-trigger"], [data-hover]');
+  if (!hoverTrigger || hoverTrigger === lastHoverTarget) return;
+  lastHoverTarget = hoverTrigger;
+
+  const selectors = extractSelectors(hoverTrigger);
+  const text = selectors.role?.name ?? selectors.text ?? hoverTrigger.textContent?.trim().slice(0, 40);
+  recordAction({
+    type: "hover",
+    selectors,
+    description: `Hover "${text ?? "element"}"`
+  }, hoverTrigger);
 }
 
 function handleNavigation(): void {
@@ -297,11 +396,15 @@ function handleNavigation(): void {
   }
 
   flushPendingFill();
+  lastHoverTarget = null;
+  // Feature 10: record the destination so the compiler can assert arrival via waitForURL.
+  const destination = window.location.hash || window.location.pathname;
   recordAction({
     type: "navigate",
     url: window.location.href,
+    waitForUrl: destination,
     selectors: {},
-    description: `Navigate to ${window.location.hash || window.location.pathname}`
+    description: `Navigate to ${destination}`
   });
 }
 
@@ -333,7 +436,23 @@ function flushPendingFill(): void {
 
 // ─── Action Recording ────────────────────────────────────────────────────────
 
-function recordAction(partial: Partial<RecordedAction> & { type: ActionType; selectors: RecordedAction["selectors"] }): void {
+function recordAction(
+  partial: Partial<RecordedAction> & { type: ActionType; selectors: RecordedAction["selectors"] },
+  targetElement?: Element
+): void {
+  // Feature 1: record the iframe context so the compiler can scope to a frameLocator.
+  if (frameSelector && !partial.frameSelector) {
+    partial.frameSelector = frameSelector;
+  }
+
+  // Feature 3: disambiguate with nth when the primary selector matches several elements.
+  if (targetElement && partial.selectors && partial.selectors.nth === undefined) {
+    const nth = computeNth(targetElement, partial.selectors);
+    if (nth !== undefined) {
+      partial.selectors = { ...partial.selectors, nth };
+    }
+  }
+
   const action: RecordedAction = {
     id: generateId(),
     timestamp: Date.now(),
@@ -349,6 +468,69 @@ function recordAction(partial: Partial<RecordedAction> & { type: ActionType; sel
     type: "ACTION_RECORDED",
     action
   } satisfies ExtensionMessage);
+
+  // Feature 2: for submit-like clicks, watch for the XHR/fetch they trigger and
+  // patch the action with a network wait so the compiled flow uses waitForResponse
+  // instead of a fixed timeout.
+  if (action.type === "click" && SUBMIT_LABEL_PATTERN.test(actionLabel(action))) {
+    captureNetworkWaitFor(action);
+  }
+}
+
+function actionLabel(action: RecordedAction): string {
+  return action.selectors.role?.name ?? action.selectors.text ?? action.selectors.label ?? action.description ?? "";
+}
+
+// ─── Feature 2: Network-aware waits ────────────────────────────────────────────
+
+/**
+ * Observe the page's resource timeline for XHR/fetch calls. The recorder shares
+ * the page's performance timeline, so this captures the API requests Zoom makes.
+ */
+function startNetworkObserver(): void {
+  if (typeof PerformanceObserver === "undefined") return;
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const resource = entry as PerformanceResourceTiming;
+        if (resource.initiatorType === "xmlhttprequest" || resource.initiatorType === "fetch") {
+          recentNetworkEntries.push({ url: resource.name, startTime: resource.startTime });
+          if (recentNetworkEntries.length > 50) recentNetworkEntries.shift();
+        }
+      }
+    });
+    observer.observe({ type: "resource", buffered: false });
+  } catch {
+    // resource timing unavailable — feature degrades gracefully
+  }
+}
+
+/**
+ * After a submit-like click, wait briefly for the first XHR/fetch it triggers and
+ * patch the recorded action with a stable path so the compiler emits waitForResponse.
+ */
+function captureNetworkWaitFor(action: RecordedAction): void {
+  const since = performance.now();
+  setTimeout(() => {
+    const triggered = recentNetworkEntries.find((entry) => entry.startTime >= since - 50);
+    if (!triggered) return;
+    const path = stableNetworkPath(triggered.url);
+    if (!path) return;
+    chrome.runtime.sendMessage({
+      type: "UPDATE_ACTION",
+      actionId: action.id,
+      networkWaitUrl: path
+    } satisfies ExtensionMessage);
+  }, 1_200);
+}
+
+/** Reduce a full URL to a stable path fragment (no origin, no query string). */
+function stableNetworkPath(url: string): string | undefined {
+  try {
+    const parsed = new URL(url, window.location.href);
+    if (parsed.pathname && parsed.pathname !== "/") return parsed.pathname;
+  } catch { /* not a parseable URL */ }
+  return undefined;
 }
 
 // ─── Browser Test Replay ─────────────────────────────────────────────────────
@@ -372,16 +554,40 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
         return { ok: true };
       }
       case "select": {
+        const wanted = (action.value ?? "").trim();
+        if (!wanted) {
+          return { ok: false, error: "Select step has no value to choose." };
+        }
         const element = await findReplayElement(action);
         if (element instanceof HTMLSelectElement) {
-          const option = Array.from(element.options).find((candidate) => candidate.text.includes(action.value ?? "") || candidate.value === action.value);
-          if (option) element.value = option.value;
+          // Prefer an exact match (by visible text or value) before falling back to substring.
+          const options = Array.from(element.options);
+          const option =
+            options.find((c) => c.text.trim() === wanted || c.value === wanted) ??
+            options.find((c) => c.text.includes(wanted));
+          if (!option) {
+            return { ok: false, error: `No option matching "${wanted}"` };
+          }
+          element.value = option.value;
           element.dispatchEvent(new Event("change", { bubbles: true }));
           return { ok: true };
         }
         (element as HTMLElement).click();
-        const option = await findByText(action.value ?? "", 5_000);
+        const option = await findByText(wanted, 5_000);
         (option as HTMLElement).click();
+        return { ok: true };
+      }
+      case "hover": {
+        const element = await findReplayElement(action);
+        element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        element.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+        return { ok: true };
+      }
+      case "press": {
+        const targetEl = (findReplayElementSync(action) ?? document.activeElement ?? document.body) as Element;
+        (targetEl as HTMLElement).focus?.();
+        targetEl.dispatchEvent(new KeyboardEvent("keydown", { key: action.key ?? "Enter", bubbles: true }));
+        targetEl.dispatchEvent(new KeyboardEvent("keyup", { key: action.key ?? "Enter", bubbles: true }));
         return { ok: true };
       }
       case "wait":
@@ -395,6 +601,10 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
         return { ok: true };
       case "upload":
         return { ok: false, error: "Upload steps cannot be replayed inside the extension preflight runner." };
+      case "download":
+        return { ok: true, skipped: true, message: "Download steps are verified by the backend Playwright runner, not the preflight." };
+      case "dialog":
+        return { ok: true, skipped: true, message: "Native dialog handling is verified by the backend Playwright runner." };
       case "navigate":
       case "screenshot":
         return { ok: true };
@@ -496,6 +706,7 @@ async function executeAssertion(action: RecordedAction): Promise<void> {
       }, timeout, `Expected selector to be visible: ${expected}`);
       return;
     case "fieldValue":
+    case "hasValue":
       await waitFor(() => {
         const fields = Array.from(document.querySelectorAll("input, textarea")) as Array<HTMLInputElement | HTMLTextAreaElement>;
         return fields.some((field) => field.value.includes(expected));
@@ -505,6 +716,7 @@ async function executeAssertion(action: RecordedAction): Promise<void> {
       await waitFor(() => Array.from(document.querySelectorAll("tr")).some((row) => visibleText(row).includes(expected)), timeout, `Expected table row containing "${expected}"`);
       return;
     case "textVisible":
+    case "hasText":
     default:
       await findByText(expected, timeout);
       return;
@@ -768,6 +980,19 @@ function getOptionText(element: Element): string | undefined {
 
 function isRecorderUI(el: Element): boolean {
   return Boolean(el.closest("#__zoom_recorder_indicator"));
+}
+
+/**
+ * Heuristic: does clicking this element trigger a browser download? (feature 7)
+ */
+function isDownloadTrigger(target: Element, text: string | undefined): boolean {
+  const anchor = target.closest("a");
+  if (anchor) {
+    if (anchor.hasAttribute("download")) return true;
+    const href = anchor.getAttribute("href") ?? "";
+    if (/\.(csv|pdf|xlsx?|zip|json|txt|docx?)(\?|$)/i.test(href)) return true;
+  }
+  return /\b(download|export)\b/i.test(text ?? "");
 }
 
 function generateId(): string {

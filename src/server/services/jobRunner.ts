@@ -145,7 +145,8 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
       totalFailed += summary.failed;
     }
 
-    const finalStatus = totalFailed > 0 ? "failed" : "completed";
+    // Respect a cancellation requested mid-run: don't overwrite "cancelled" with completed/failed.
+    const finalStatus = options.cancellation?.cancelled ? "cancelled" : totalFailed > 0 ? "failed" : "completed";
     options.store.markJob(
       options.jobId,
       finalStatus,

@@ -3,6 +3,7 @@ import type { Logger } from "../logger.js";
 import type { AppConfig } from "../config.js";
 import type { Browser } from "playwright";
 import type { StorageState } from "../zoom/auth.js";
+import type { WorkflowCategory } from "@zoom-automation/workflow-core";
 
 /**
  * A workflow plugin definition. Each workflow module exports this shape.
@@ -17,7 +18,7 @@ export interface WorkflowPlugin {
   /** Whether this workflow is ready for use. */
   enabled: boolean;
   /** Category for UI grouping. */
-  category: "phone" | "settings" | "compliance";
+  category: WorkflowCategory;
   /** Factory function that creates the AutomationFlow instance. */
   createFlow(context: WorkflowContext): AutomationFlow;
 }

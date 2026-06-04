@@ -25,7 +25,7 @@ export interface WorkflowView {
   name: string;
   description: string;
   enabled: boolean;
-  category: "phone" | "settings" | "compliance";
+  category: WorkflowCategory;
 }
 
 export interface JobView {
@@ -74,93 +74,20 @@ export interface ArtifactView {
 }
 
 // ─── Recorded Workflow Types (for Editor) ────────────────────────────────────
+// These come from the shared `@zoom-automation/workflow-core` package so the Web
+// UI, server, compiler, and Chrome extension all share one schema. The `*View`
+// aliases preserve the existing import names used across the UI components.
 
-export interface RecordedActionView {
-  id: string;
-  timestamp: number;
-  type: "click" | "fill" | "select" | "navigate" | "upload" | "wait" | "assert" | "screenshot" | "dismiss";
-  selectors: {
-    role?: { role: string; name?: string };
-    label?: string;
-    text?: string;
-    testId?: string;
-    css?: string;
-  };
-  value?: string;
-  url?: string;
-  assertionType?: "textVisible" | "elementVisible" | "urlContains" | "fieldValue" | "tableRowContains";
-  expected?: string;
-  timeout?: number;
-  onFailure?: "fail" | "retry" | "skip" | "screenshot";
-  retryCount?: number;
-  retryDelayMs?: number;
-  continueOnFailure?: boolean;
-  screenshotOnFailure?: boolean;
-  condition?: {
-    type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount";
-    text?: string;
-    selector?: RecordedActionView["selectors"];
-  };
-  screenshotLabel?: string;
-  waitMs?: number;
-  selectorNote?: string;
-  pageUrl: string;
-  pageTitle: string;
-  description?: string;
-  optional?: boolean;
-  skipIfExists?: boolean;
-  parameterHints?: Array<{
-    originalValue: string;
-    suggestedName: string;
-    reason: string;
-    confirmed?: boolean;
-  }>;
-}
+import type {
+  RecordedAction,
+  RecordedWorkflow,
+  WorkflowCategory,
+  WorkflowQualityReport
+} from "@zoom-automation/workflow-core";
 
-export interface RecordedWorkflowView {
-  version: number;
-  meta: {
-    name: string;
-    description: string;
-    recordedAt: string;
-    recordedOnUrl: string;
-    durationMs: number;
-    category: "phone" | "settings" | "compliance" | "custom";
-  };
-  parameters: Array<{
-    name: string;
-    type: string;
-    required: boolean;
-    description: string;
-    source: string;
-  }>;
-  actions: RecordedActionView[];
-  assertions: Array<{
-    afterAction: string;
-    type: string;
-    expected: string;
-    timeout: number;
-    onFailure: string;
-  }>;
-  config: {
-    startUrl: string;
-    requiresImpersonation: boolean;
-    defaultTimeout: number;
-    retryableErrors: string[];
-  };
-  quality?: WorkflowQualityReportView;
-}
-
-export interface WorkflowQualityReportView {
-  score: number;
-  selectorStability: number;
-  assertionCoverage: number;
-  evidenceCoverage: number;
-  riskySteps: number;
-  hardcodedValues: number;
-  unsupportedBrowserPreflightSteps: number;
-  warnings: string[];
-}
+export type RecordedActionView = RecordedAction;
+export type RecordedWorkflowView = RecordedWorkflow;
+export type WorkflowQualityReportView = WorkflowQualityReport;
 
 export async function fetchRecordedWorkflows(): Promise<{ workflows: Array<{ id: string; name: string; category: string; actionCount: number }> }> {
   return requestJson("/api/workflows/recorded");
@@ -174,6 +101,13 @@ export async function saveRecordedWorkflow(id: string, workflow: RecordedWorkflo
   return requestJson(`/api/workflows/recorded/${id}`, {
     method: "PUT",
     body: JSON.stringify({ workflow })
+  });
+}
+
+export async function duplicateRecordedWorkflow(id: string, name: string): Promise<{ id: string; name: string }> {
+  return requestJson(`/api/workflows/recorded/${id}/duplicate`, {
+    method: "POST",
+    body: JSON.stringify({ name })
   });
 }
 

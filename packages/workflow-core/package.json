@@ -1,0 +1,26 @@
+{
+  "name": "@zoom-automation/workflow-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared workflow schema, validation, mutation model, and analysis used by the Web UI, server, compiler, and Chrome extension.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

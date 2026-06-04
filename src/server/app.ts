@@ -4,15 +4,16 @@ import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
-import { compileWorkflow } from "../compiler/compiler.js";
+import { compileWorkflow, slugify } from "../compiler/compiler.js";
 import type { RecordedWorkflow } from "../compiler/types.js";
+import { safeParseWorkflow } from "@zoom-automation/workflow-core";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
 import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { computeDashboardMetrics } from "./services/analytics.js";
 import { listJobArtifacts } from "./services/artifacts.js";
-import { createSchedulerStore, type ScheduleDefinition } from "./services/scheduler.js";
+import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./services/scheduler.js";
 import { WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { loadConfig } from "../config.js";
@@ -36,6 +37,9 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const workflowRegistry = createWorkflowRegistry();
   const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
   const webhookService = new WebhookService();
+  // Single-user tool: the most recent account-query result is cached process-wide so
+  // POST /api/jobs can resolve account IDs without re-querying. Not safe for concurrent
+  // multi-user use; jobs created via the scheduler resolve their own accounts independently.
   let cachedAccounts: SubAccount[] = [];
 
   app.use(express.json({ limit: "1mb" }));
@@ -92,6 +96,11 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         response.status(400).json({ error: "workflow is required in request body" });
         return;
       }
+      const validation = safeParseWorkflow(workflow);
+      if (!validation.success) {
+        response.status(400).json({ error: validation.error });
+        return;
+      }
       const dir = resolveRecordedWorkflowPath(request.params.id);
       mkdirSync(dir, { recursive: true });
       writeFileSync(path.join(dir, "schema.json"), JSON.stringify(workflow, null, 2) + "\n", "utf8");
@@ -106,15 +115,54 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     }
   });
 
-  app.post("/api/workflows/import", (request, response, next) => {
+  app.post("/api/workflows/recorded/:id/duplicate", (request, response, next) => {
     try {
-      const body = request.body as { workflow?: RecordedWorkflow; options?: { compile?: boolean; enableImmediately?: boolean } };
-      if (!body.workflow || !body.workflow.version || !body.workflow.actions) {
-        response.status(400).json({ error: "Invalid workflow JSON — missing version or actions" });
+      const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+      if (!name) {
+        response.status(400).json({ error: "name is required" });
         return;
       }
 
-      const workflow = body.workflow;
+      let source: unknown;
+      try {
+        source = JSON.parse(readFileSync(resolveRecordedWorkflowPath(request.params.id, "schema.json"), "utf8"));
+      } catch (error) {
+        if (error instanceof PathTraversalError) {
+          response.status(400).json({ error: error.message });
+        } else {
+          response.status(404).json({ error: "Recorded workflow not found" });
+        }
+        return;
+      }
+
+      const candidate = {
+        ...(source as Record<string, unknown>),
+        meta: { ...((source as { meta?: Record<string, unknown> }).meta ?? {}), name, recordedAt: new Date().toISOString() }
+      };
+      const validation = safeParseWorkflow(candidate);
+      if (!validation.success) {
+        response.status(400).json({ error: validation.error });
+        return;
+      }
+
+      const uniqueId = uniqueRecordedId(name);
+      const result = compileWorkflow(validation.workflow, path.resolve("src/workflows/recorded"), uniqueId);
+      response.status(201).json({ id: result.id, name });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/workflows/import", (request, response, next) => {
+    try {
+      const body = request.body as { workflow?: RecordedWorkflow; options?: { compile?: boolean; enableImmediately?: boolean } };
+      const validation = safeParseWorkflow(body.workflow);
+      if (!validation.success) {
+        response.status(400).json({ error: validation.error });
+        return;
+      }
+
+      const workflow = validation.workflow;
       if (!workflow.meta.name) {
         response.status(400).json({ error: "Workflow must have a name" });
         return;
@@ -154,6 +202,62 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   });
 
   const serverTokenManager = new TokenManager(loadConfig(process.env).zoom);
+
+  /** Query Zoom for sub accounts and apply selection filters. */
+  async function resolveAccounts(filters: AccountSelectionFilters): Promise<SubAccount[]> {
+    const config = loadConfig(process.env);
+    const client = new ZoomApiClient({ accessToken: serverTokenManager, baseUrl: config.zoom.apiBaseUrl });
+    const all = await client.listSubAccounts();
+    return filterSelectableAccounts(all, filters);
+  }
+
+  /** Dispatch webhooks once a job reaches a terminal state. */
+  function watchJobForWebhooks(jobId: string): void {
+    const unsubscribe = jobEvents.subscribe(jobId, (job) => {
+      if (["completed", "failed", "cancelled"].includes(job.status)) {
+        unsubscribe();
+        void webhookService.notifyJobComplete(job).catch(() => undefined);
+      }
+    });
+  }
+
+  /** Resolve accounts for a schedule, create + start a job, and record the run. */
+  async function triggerScheduledRun(schedule: ScheduleDefinition): Promise<string | undefined> {
+    const accounts = await resolveAccounts(schedule.jobConfig.accountFilters ?? {});
+    if (accounts.length === 0) {
+      schedulerStore.markRun(schedule.id, "failed");
+      return undefined;
+    }
+    const job = jobStore.createJob({
+      accountIds: accounts.map((account) => account.id),
+      workflowIds: schedule.jobConfig.workflowIds,
+      dryRun: schedule.jobConfig.dryRun,
+      addressProfile: schedule.jobConfig.addressProfile
+    });
+    watchJobForWebhooks(job.id);
+    // Record the schedule's final run status when the job finishes.
+    const unsubscribe = jobEvents.subscribe(job.id, (updated) => {
+      if (["completed", "failed", "cancelled"].includes(updated.status)) {
+        unsubscribe();
+        schedulerStore.markRun(schedule.id, updated.status as ScheduleDefinition["lastRunStatus"]);
+      }
+    });
+    startAutomationJob({
+      jobId: job.id,
+      accounts,
+      workflowIds: schedule.jobConfig.workflowIds,
+      addressProfile: schedule.jobConfig.addressProfile,
+      dryRun: schedule.jobConfig.dryRun,
+      headless: schedule.jobConfig.headless,
+      retryAttempts: schedule.jobConfig.retryAttempts,
+      retryBaseDelayMs: schedule.jobConfig.retryBaseDelayMs,
+      accountDelayMs: schedule.jobConfig.accountDelayMs,
+      concurrency: Math.min(schedule.jobConfig.concurrency ?? 1, 10),
+      store: jobStore,
+      registry: workflowRegistry
+    });
+    return job.id;
+  }
 
   app.post("/api/accounts/query", async (request, response, next) => {
     try {
@@ -248,18 +352,38 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       "X-Accel-Buffering": "no"
     });
 
+    const isTerminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
+
+    // Heartbeat comment frame keeps idle proxies from dropping the connection.
+    const heartbeat = setInterval(() => response.write(": keep-alive\n\n"), 25_000);
+
+    let unsubscribe = () => undefined as void;
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+
     // Send current state immediately
     response.write(`data: ${JSON.stringify({ job })}\n\n`);
 
-    // Subscribe to future updates
-    const unsubscribe = jobEvents.subscribe(request.params.jobId, (updatedJob) => {
+    // If the job is already finished, send it and close instead of holding the socket open.
+    if (isTerminal(job.status)) {
+      cleanup();
+      response.end();
+      return;
+    }
+
+    // Subscribe to future updates; close the stream once the job finishes.
+    unsubscribe = jobEvents.subscribe(request.params.jobId, (updatedJob) => {
       response.write(`data: ${JSON.stringify({ job: updatedJob })}\n\n`);
+      if (isTerminal(updatedJob.status)) {
+        cleanup();
+        response.end();
+      }
     });
 
     // Clean up on client disconnect
-    request.on("close", () => {
-      unsubscribe();
-    });
+    request.on("close", cleanup);
   });
 
   app.post("/api/jobs/:jobId/cancel", (request, response) => {
@@ -307,7 +431,12 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         return;
       }
       for (const workflowId of workflowIds) {
-        workflowRegistry.getEnabled(workflowId);
+        try {
+          workflowRegistry.getEnabled(workflowId);
+        } catch {
+          response.status(400).json({ error: `Unknown or disabled workflow: ${workflowId}` });
+          return;
+        }
       }
 
       const job = jobStore.createJob({
@@ -331,6 +460,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         store: jobStore,
         registry: workflowRegistry
       });
+      watchJobForWebhooks(job.id);
 
       response.status(201).json({ job });
     } catch (error) {
@@ -391,13 +521,22 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.json({ ok: true });
   });
 
-  app.post("/api/schedules/:id/run", (request, response) => {
+  app.post("/api/schedules/:id/run", async (request, response, next) => {
     const schedule = schedulerStore.get(request.params.id);
     if (!schedule) {
       response.status(404).json({ error: "Schedule not found" });
       return;
     }
-    response.json({ message: "Manual trigger queued", scheduleId: schedule.id });
+    try {
+      const jobId = await triggerScheduledRun(schedule);
+      if (!jobId) {
+        response.status(409).json({ error: "No accounts matched the schedule's filters", scheduleId: schedule.id });
+        return;
+      }
+      response.json({ message: "Schedule run started", scheduleId: schedule.id, jobId });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // ─── Dashboard & Analytics ─────────────────────────────────────────────────
@@ -466,6 +605,31 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.status(500).json({ error: normalizedError.message });
   });
 
+  // ─── Scheduler tick loop ───────────────────────────────────────────────────
+  // Every minute, run any enabled schedule whose cron matches now. The
+  // per-minute guard prevents a schedule from firing twice within one minute.
+  // Disabled by default in tests via DISABLE_SCHEDULER to avoid background work.
+  if (process.env.DISABLE_SCHEDULER !== "true") {
+    const firedThisMinute = new Set<string>();
+    const tick = () => {
+      const now = new Date();
+      const minuteKey = Math.floor(now.getTime() / 60_000);
+      for (const schedule of schedulerStore.list()) {
+        if (!schedule.enabled) continue;
+        if (!shouldRunNow(schedule.cron, now)) continue;
+        const guardKey = `${schedule.id}:${minuteKey}`;
+        if (firedThisMinute.has(guardKey)) continue;
+        firedThisMinute.add(guardKey);
+        void triggerScheduledRun(schedule).catch(() => undefined);
+      }
+      // Keep the guard set from growing unbounded.
+      if (firedThisMinute.size > 500) firedThisMinute.clear();
+    };
+    const timer = setInterval(tick, 60_000);
+    // Don't keep the process (or tests) alive solely for the scheduler.
+    timer.unref?.();
+  }
+
   return app;
 }
 
@@ -483,6 +647,26 @@ function csvEscape(value: string): string {
 class PathTraversalError extends Error {}
 
 const RECORDED_WORKFLOW_BASE = path.resolve("src/workflows/recorded");
+
+/** Derive a recorded-workflow id from a name, bumping a numeric suffix to avoid collisions. */
+function uniqueRecordedId(name: string): string {
+  const base = slugify(name) || `recorded-${Date.now()}`;
+  let candidate = base;
+  let counter = 2;
+  while (statSyncExists(path.join(RECORDED_WORKFLOW_BASE, candidate))) {
+    candidate = `${base}-${counter}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+function statSyncExists(targetPath: string): boolean {
+  try {
+    return statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Resolve a path inside the recorded-workflow directory and throw if the

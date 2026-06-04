@@ -25,7 +25,8 @@
     {
       "matches": ["https://*.zoom.us/*"],
       "js": ["content/recorder.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "icons": {

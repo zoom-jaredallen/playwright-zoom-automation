@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "prebuild": "tsc -b ../packages/workflow-core",
     "watch": "node build.mjs --watch",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@zoom-automation/workflow-core": "*"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

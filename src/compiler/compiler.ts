@@ -7,8 +7,8 @@ import path from "node:path";
 import type { CompileResult, RecordedAction, RecordedWorkflow, SelectorStrategy } from "./types.js";
 import { generateHealingCode } from "./selectorHealing.js";
 
-export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string): CompileResult {
-  const id = slugify(workflow.meta.name || `recorded-${Date.now()}`);
+export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, idOverride?: string): CompileResult {
+  const id = idOverride ?? slugify(workflow.meta.name || `recorded-${Date.now()}`);
   const outputDir = path.join(outputBase, id);
   mkdirSync(outputDir, { recursive: true });
 
@@ -222,6 +222,9 @@ ${generateHealingCode()}
     return tokens.length > 0 && tokens.every((token) => pageText.toLowerCase().includes(token!.toLowerCase()));
   }
 }
+
+// Default export lets the server load and instantiate this flow via dynamic import.
+export default ${className};
 `;
 }
 
@@ -230,24 +233,37 @@ function generateActionCode(action: RecordedAction, index: number, workflow: Rec
   const stepComment = `${indent}// Step ${index + 1}: ${action.description ?? action.type}`;
   const timeout = action.timeout ?? workflow.config.defaultTimeout;
   const coreIndent = "        ";
+  // Feature 1: scope element resolution to an iframe when one was recorded.
+  const frame = JSON.stringify(action.frameSelector);
+  const selectors = JSON.stringify(action.selectors);
   let core: string;
 
   switch (action.type) {
-    case "navigate":
-      core = `${coreIndent}await page.goto(\`\${this.options.config.zoom.webBaseUrl.replace(/\\/$/, "")}${action.url ? new URL(action.url).pathname + new URL(action.url).hash : "/"}\`, { waitUntil: "domcontentloaded", timeout: ${timeout} });
-${coreIndent}await page.waitForLoadState("networkidle", { timeout: ${timeout} }).catch(() => undefined);
+    case "navigate": {
+      const path = action.url ? new URL(action.url).pathname + new URL(action.url).hash : "/";
+      const waitForUrl = action.waitForUrl
+        // Feature 10: assert the navigation actually landed where expected.
+        ? `\n${coreIndent}await page.waitForURL((url) => url.href.includes(${JSON.stringify(action.waitForUrl)}), { timeout: ${timeout} }).catch(() => undefined);`
+        : "";
+      core = `${coreIndent}await page.goto(\`\${this.options.config.zoom.webBaseUrl.replace(/\\/$/, "")}${path}\`, { waitUntil: "domcontentloaded", timeout: ${timeout} });
+${coreIndent}await page.waitForLoadState("networkidle", { timeout: ${timeout} }).catch(() => undefined);${waitForUrl}
 ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       break;
+    }
 
-    case "click":
-      core = `${coreIndent}await this.clickElement(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+    case "click": {
+      const ariaState = action.ariaState ? `, ${JSON.stringify(action.ariaState)}` : "";
+      const clickCall = `${coreIndent}await this.clickElement(page, ${selectors}, ${timeout}, ${frame}${ariaState});`;
+      // Feature 2: wait for the XHR/fetch the click triggers instead of a fixed sleep.
+      core = wrapNetworkWait(action, clickCall, coreIndent, timeout);
       break;
+    }
 
     case "fill": {
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)})`
         : JSON.stringify(action.value ?? "");
-      core = `${coreIndent}await this.fillField(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      core = `${coreIndent}await this.fillField(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
       break;
     }
 
@@ -255,14 +271,39 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)})`
         : JSON.stringify(action.value ?? "");
-      core = `${coreIndent}await this.selectOption(page, ${JSON.stringify(action.selectors)}, ${value}, ${timeout});`;
+      core = `${coreIndent}await this.selectOption(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
       break;
     }
 
     case "upload":
       core = `${coreIndent}// File upload — path resolved from config.documents
-${coreIndent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${timeout});`;
+${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
       break;
+
+    case "hover":
+      // Feature 4: hover to reveal menus/tooltips.
+      core = `${coreIndent}await this.hoverElement(page, ${selectors}, ${timeout}, ${frame});`;
+      break;
+
+    case "press":
+      // Feature 4: keyboard navigation.
+      core = `${coreIndent}await this.pressKey(page, ${selectors}, ${JSON.stringify(action.key ?? "Enter")}, ${timeout}, ${frame});`;
+      break;
+
+    case "download": {
+      // Feature 7: capture the file via Playwright's download event.
+      const label = slugify(action.description ?? `download-${index + 1}`);
+      core = `${coreIndent}await this.downloadFile(page, ${selectors}, ${timeout}, ${frame}, \`\${artifactBase}-${label}\`);`;
+      break;
+    }
+
+    case "dialog": {
+      // Feature 8: register a one-shot native dialog handler before the next step triggers it.
+      const accept = action.dialogAction !== "dismiss";
+      const promptText = action.dialogPromptText ? JSON.stringify(action.dialogPromptText) : "undefined";
+      core = `${coreIndent}page.once("dialog", (dialog) => { void dialog.${accept ? `accept(${promptText})` : "dismiss()"}.catch(() => undefined); });`;
+      break;
+    }
 
     case "wait":
       core = `${coreIndent}await page.waitForTimeout(${Math.min(Math.max(action.waitMs ?? timeout, 250), 60_000)});`;
@@ -273,7 +314,10 @@ ${coreIndent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${
 
     case "screenshot": {
       const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
-      core = `${coreIndent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
+      // Feature 9: scope the screenshot to the matched element when requested.
+      core = action.elementScreenshot
+        ? `${coreIndent}await this.elementScreenshot(page, ${selectors}, \`\${artifactBase}-${label}.png\`, ${timeout}, ${frame});`
+        : `${coreIndent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
       break;
     }
 
@@ -287,6 +331,17 @@ ${coreIndent}await this.uploadFile(page, ${JSON.stringify(action.selectors)}, ${
   }
 
   return wrapGeneratedAction(action, stepComment, core, workflow);
+}
+
+/**
+ * Feature 2: wrap an action that triggers a known XHR/fetch so the flow waits for
+ * that response (with the action) rather than guessing with a fixed timeout.
+ */
+function wrapNetworkWait(action: RecordedAction, call: string, indent: string, timeout: number): string {
+  if (!action.networkWaitUrl) return call;
+  return `${indent}const __networkWait = page.waitForResponse((response) => response.url().includes(${JSON.stringify(action.networkWaitUrl)}), { timeout: ${timeout} }).catch(() => undefined);
+${call}
+${indent}await __networkWait;`;
 }
 
 function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: string, workflow: RecordedWorkflow): string {
@@ -320,27 +375,20 @@ function generateAssertionActionCode(action: RecordedAction, indent: string, tim
   const expected = JSON.stringify(action.expected ?? action.value ?? "");
   const actionTimeout = action.timeout ?? timeout;
   const onFailure = action.onFailure ?? "screenshot";
+  // Feature 6: assertions use Playwright's auto-waiting locators (waitFor / polling)
+  // so they retry until the timeout instead of checking once.
   const assertionBody = (() => {
     switch (action.assertionType) {
       case "urlContains":
-        return `${indent}if (!page.url().includes(${expected})) throw new Error("Expected URL to contain " + ${expected});`;
+        return `${indent}await page.waitForURL((url) => url.href.includes(${expected}), { timeout: ${actionTimeout} });`;
       case "elementVisible":
         return `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+      case "hasValue":
       case "fieldValue":
-        return `${indent}const expectedValue = ${expected};
-${indent}const fields = page.locator("input, textarea");
-${indent}const fieldCount = await fields.count();
-${indent}let fieldMatched = false;
-${indent}for (let fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++) {
-${indent}  const fieldValue = await fields.nth(fieldIndex).inputValue({ timeout: 1_000 }).catch(() => "");
-${indent}  if (fieldValue.includes(expectedValue)) {
-${indent}    fieldMatched = true;
-${indent}    break;
-${indent}  }
-${indent}}
-${indent}if (!fieldMatched) throw new Error("Expected a field value to contain " + expectedValue);`;
+        return `${indent}await this.expectFieldValue(page, ${expected}, ${actionTimeout});`;
       case "tableRowContains":
         return `${indent}await page.locator("tr", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+      case "hasText":
       case "textVisible":
       default:
         return `${indent}await page.getByText(${expected}, { exact: false }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
@@ -415,7 +463,7 @@ function validateParameters(workflow: RecordedWorkflow): boolean {
 function validateSelectors(workflow: RecordedWorkflow, warnings: string[]): boolean {
   let allValid = true;
   for (const action of workflow.actions) {
-    if (["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type)) continue;
+    if (["navigate", "wait", "assert", "screenshot", "dismiss", "dialog"].includes(action.type)) continue;
     const s = action.selectors;
     const hasStable = Boolean(s.role || s.label || s.text || s.testId);
     if (!hasStable && s.css) {
@@ -441,7 +489,7 @@ function calculateAssertionCoverage(workflow: RecordedWorkflow): number {
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
-function slugify(text: string): string {
+export function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
 }
 

@@ -42,11 +42,19 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
   };
 
   const getMutableJob = (id: string): AutomationJob => {
-    const job = cache.get(id);
-    if (!job) {
+    const cached = cache.get(id);
+    if (cached) {
+      return cached;
+    }
+    // Fall back to disk: a long-running job may have been evicted from the cache
+    // (capped at maxCacheSize) while it is still being mutated.
+    const loaded = loadJobFromDisk(directory, id);
+    if (!loaded) {
       throw new Error(`Job not found: ${id}`);
     }
-    return job;
+    cache.set(id, loaded);
+    evictOldest(cache, maxCacheSize);
+    return loaded;
   };
 
   return {

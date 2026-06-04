@@ -199,35 +199,44 @@ export function generateHealingCode(): string {
   return `
   private healingReport: Array<{ actionDescription: string; originalStrategy: string; healedStrategy: string; confidence: number }> = [];
 
-  private async findElement(page: Page, selectors: Record<string, any>, timeout: number): Promise<import("playwright").Locator> {
+  /** Feature 1: resolve element queries against an iframe when a frame selector was recorded. */
+  private scope(page: Page, frameSelector?: string): import("playwright").Page | import("playwright").FrameLocator {
+    return frameSelector ? page.frameLocator(frameSelector) : page;
+  }
+
+  private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, timeout: number): Promise<import("playwright").Locator> {
+    // Feature 3: when an ordinal was recorded, target that match; otherwise the first.
+    const pick = (base: import("playwright").Locator): import("playwright").Locator =>
+      typeof selectors.nth === "number" ? base.nth(selectors.nth) : base.first();
+
     const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
 
     if (selectors.role) {
       const { role, name } = selectors.role;
       strategies.push({
         name: \`role:\${role}[\${name ?? ""}]\`,
-        locator: () => name
-          ? page.getByRole(role, { name: new RegExp(name.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first()
-          : page.getByRole(role).first()
+        locator: () => pick(name
+          ? root.getByRole(role, { name: new RegExp(name.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") })
+          : root.getByRole(role))
       });
     }
     if (selectors.label) {
       strategies.push({
         name: \`label:\${selectors.label}\`,
-        locator: () => page.getByLabel(new RegExp(selectors.label.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")).first()
+        locator: () => pick(root.getByLabel(new RegExp(selectors.label.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")))
       });
     }
     if (selectors.text) {
       strategies.push({
         name: \`text:\${selectors.text}\`,
-        locator: () => page.getByText(new RegExp(selectors.text.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")).first()
+        locator: () => pick(root.getByText(new RegExp(selectors.text.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")))
       });
     }
     if (selectors.testId) {
-      strategies.push({ name: \`testId:\${selectors.testId}\`, locator: () => page.getByTestId(selectors.testId).first() });
+      strategies.push({ name: \`testId:\${selectors.testId}\`, locator: () => pick(root.getByTestId(selectors.testId)) });
     }
     if (selectors.css) {
-      strategies.push({ name: \`css:\${selectors.css}\`, locator: () => page.locator(selectors.css).first() });
+      strategies.push({ name: \`css:\${selectors.css}\`, locator: () => pick(root.locator(selectors.css)) });
     }
 
     for (const strategy of strategies) {
@@ -245,30 +254,96 @@ export function generateHealingCode(): string {
     throw new Error(\`Element not found with any selector strategy: \${JSON.stringify(selectors)}\`);
   }
 
-  private async clickElement(page: Page, selectors: Record<string, any>, timeout: number): Promise<void> {
+  /** Feature 5: read an element's current ARIA toggle state. */
+  private async isAriaStateSatisfied(el: import("playwright").Locator, ariaState: Record<string, any>): Promise<boolean> {
+    const matches = async (attr: string, want: boolean | undefined): Promise<boolean> => {
+      if (want === undefined) return true;
+      const value = await el.getAttribute(attr).catch(() => null);
+      return value === String(want);
+    };
+    return (await matches("aria-checked", ariaState.checked))
+      && (await matches("aria-expanded", ariaState.expanded))
+      && (await matches("aria-selected", ariaState.selected));
+  }
+
+  private async clickElement(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string, ariaState?: Record<string, any>): Promise<void> {
     await dismissBlockingZoomPopups(page, this.options.logger);
-    const el = await this.findElement(page, selectors, timeout);
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    // Feature 5: skip the click if the element is already in the desired ARIA state (idempotent re-runs).
+    if (ariaState && await this.isAriaStateSatisfied(el, ariaState)) {
+      this.options.logger.info("Skipping click; element already in desired state", { ariaState });
+      return;
+    }
     await el.click();
   }
 
-  private async fillField(page: Page, selectors: Record<string, any>, value: string, timeout: number): Promise<void> {
-    const el = await this.findElement(page, selectors, timeout);
+  private async fillField(page: Page, selectors: Record<string, any>, value: string, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
     await el.fill(value, { timeout });
   }
 
-  private async selectOption(page: Page, selectors: Record<string, any>, value: string, timeout: number): Promise<void> {
-    const el = await this.findElement(page, selectors, timeout);
+  private async selectOption(page: Page, selectors: Record<string, any>, value: string, timeout: number, frameSelector?: string): Promise<void> {
+    const root = this.scope(page, frameSelector);
+    const el = await this.findElement(root, selectors, timeout);
     await el.click({ timeout });
-    const option = page.getByRole("option", { name: new RegExp(value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first();
+    const option = root.getByRole("option", { name: new RegExp(value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first();
     await option.waitFor({ state: "visible", timeout: 5000 });
     await option.click();
   }
 
-  private async uploadFile(page: Page, selectors: Record<string, any>, timeout: number): Promise<void> {
+  private async uploadFile(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string): Promise<void> {
     const docPath = this.options.config.documents.businessVerificationPath ?? this.options.config.documents.idPath;
     if (!docPath) return;
-    const el = await this.findElement(page, selectors, timeout);
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
     await el.setInputFiles(docPath);
+  }
+
+  /** Feature 4: hover to reveal menus/tooltips. */
+  private async hoverElement(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    await el.hover({ timeout });
+  }
+
+  /** Feature 4: press a key, scoped to an element when one was recorded. */
+  private async pressKey(page: Page, selectors: Record<string, any>, key: string, timeout: number, frameSelector?: string): Promise<void> {
+    if (!selectors || Object.keys(selectors).length === 0) {
+      await page.keyboard.press(key);
+      return;
+    }
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    await el.press(key, { timeout });
+  }
+
+  /** Feature 7: click a control and capture the resulting browser download as an artifact. */
+  private async downloadFile(page: Page, selectors: Record<string, any>, timeout: number, frameSelector: string | undefined, artifactBase: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    const downloadPromise = page.waitForEvent("download", { timeout });
+    await el.click();
+    const download = await downloadPromise;
+    const suggested = download.suggestedFilename();
+    await download.saveAs(\`\${artifactBase}-\${suggested}\`);
+    this.options.logger.info("Captured download", { file: suggested });
+  }
+
+  /** Feature 9: capture a screenshot scoped to the matched element. */
+  private async elementScreenshot(page: Page, selectors: Record<string, any>, path: string, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    await el.screenshot({ path });
+  }
+
+  /** Feature 6: auto-retrying field-value assertion (polls until the timeout). */
+  private async expectFieldValue(page: Page, expected: string, timeout: number): Promise<void> {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const fields = page.locator("input, textarea");
+      const count = await fields.count();
+      for (let index = 0; index < count; index++) {
+        const value = await fields.nth(index).inputValue({ timeout: 1_000 }).catch(() => "");
+        if (value.includes(expected)) return;
+      }
+      await page.waitForTimeout(250);
+    }
+    throw new Error("Expected a field value to contain " + expected);
   }
 `;
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cancelJob,
   createJob,
+  duplicateRecordedWorkflow,
   fetchAddressProfiles,
   fetchJobs,
   fetchRecordedWorkflow,
@@ -23,6 +24,7 @@ import { ConfigureStep } from "./components/ConfigureStep.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { ImportWorkflow } from "./components/ImportWorkflow.js";
 import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
+import { NameDialog } from "./components/NameDialog.js";
 import { RunStep } from "./components/RunStep.js";
 import { ToastProvider, useToast } from "./components/Toast.js";
 import { WizardNav } from "./components/WizardNav.js";
@@ -81,6 +83,7 @@ function AppContent() {
   const [selectedRecordedWorkflowId, setSelectedRecordedWorkflowId] = useState<string | undefined>();
   const [selectedRecordedWorkflow, setSelectedRecordedWorkflow] = useState<RecordedWorkflowView | undefined>();
   const [recordedLoading, setRecordedLoading] = useState(false);
+  const [duplicateSource, setDuplicateSource] = useState<{ id: string; name: string } | undefined>();
 
   // Derived
   const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
@@ -273,6 +276,22 @@ function AppContent() {
     }
   };
 
+  const handleConfirmDuplicate = async (name: string) => {
+    if (!duplicateSource) return;
+    const sourceId = duplicateSource.id;
+    setDuplicateSource(undefined);
+    try {
+      const result = await duplicateRecordedWorkflow(sourceId, name);
+      addToast("success", `Created "${result.name}"`);
+      refreshRecordedWorkflows();
+      // Refresh the runnable workflow list so the copy appears in Configure.
+      void fetchWorkflows().then((r) => setWorkflows(r.workflows)).catch(() => undefined);
+      await handleOpenRecordedWorkflow(result.id);
+    } catch (error) {
+      addToast("error", `Duplicate failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   // Wizard step definitions
   const wizardSteps = [
     {
@@ -311,6 +330,16 @@ function AppContent() {
         onCancel={() => setConfirmOpen(false)}
       />
 
+      <NameDialog
+        open={Boolean(duplicateSource)}
+        title="Duplicate workflow"
+        label="New workflow name"
+        initialValue={duplicateSource ? `${duplicateSource.name} (copy)` : ""}
+        confirmLabel="Duplicate"
+        onConfirm={(name) => void handleConfirmDuplicate(name)}
+        onCancel={() => setDuplicateSource(undefined)}
+      />
+
       {importOpen ? (
         <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -337,6 +366,10 @@ function AppContent() {
           <WorkflowEditor
             workflow={selectedRecordedWorkflow}
             onSave={handleSaveRecordedWorkflow}
+            onDuplicate={() =>
+              selectedRecordedWorkflowId &&
+              setDuplicateSource({ id: selectedRecordedWorkflowId, name: selectedRecordedWorkflow.meta.name })
+            }
             onClose={() => {
               setSelectedRecordedWorkflow(undefined);
               setSelectedRecordedWorkflowId(undefined);
@@ -363,19 +396,27 @@ function AppContent() {
             ) : (
               <div className="history-list">
                 {recordedWorkflows.map((workflow) => (
-                  <button
-                    key={workflow.id}
-                    className="history-item"
-                    onClick={() => void handleOpenRecordedWorkflow(workflow.id)}
-                  >
-                    <div className="history-row">
-                      <div className="history-row-main">
-                        <strong>{workflow.name}</strong>
-                        <span className="history-row-info">{workflow.category} · {workflow.actionCount} steps</span>
+                  <div key={workflow.id} className="history-item history-item-row">
+                    <button
+                      className="history-item-open"
+                      onClick={() => void handleOpenRecordedWorkflow(workflow.id)}
+                    >
+                      <div className="history-row">
+                        <div className="history-row-main">
+                          <strong>{workflow.name}</strong>
+                          <span className="history-row-info">{workflow.category} · {workflow.actionCount} steps</span>
+                        </div>
+                        <span className="status-badge neutral">Recorded</span>
                       </div>
-                      <span className="status-badge neutral">Recorded</span>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      className="tertiary-button"
+                      onClick={() => setDuplicateSource({ id: workflow.id, name: workflow.name })}
+                      title="Duplicate this workflow"
+                    >
+                      Duplicate
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

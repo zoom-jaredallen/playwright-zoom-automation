@@ -8,7 +8,10 @@ describe("workflowRegistry", () => {
   it("exposes executable business-address workflows and future disabled workflows", () => {
     const registry = createWorkflowRegistry();
 
-    expect(registry.list()).toEqual([
+    // The registry exposes built-in workflows; it may also include recorded
+    // workflows discovered on disk, so assert the built-ins are present rather
+    // than an exact list.
+    expect(registry.list()).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "add-business-address",
         name: "Add business address",
@@ -29,7 +32,7 @@ describe("workflowRegistry", () => {
         name: "Add 10DLC campaign and brand",
         enabled: false
       })
-    ]);
+    ]));
     expect(registry.getEnabled("add-business-address").id).toBe("add-business-address");
     expect(registry.getEnabled("check-business-address-status").id).toBe("check-business-address-status");
     expect(() => registry.getEnabled("10dlc-brand-campaign")).toThrow(/not enabled/);

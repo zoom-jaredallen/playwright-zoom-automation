@@ -145,6 +145,12 @@ function calculateNextRun(cron: string): string {
   const minute = parts[0] === "*" ? 0 : parseInt(parts[0], 10);
   const hour = parts[1] === "*" ? new Date().getHours() : parseInt(parts[1], 10);
 
+  // Guard against malformed fields (parseInt -> NaN would make an Invalid Date,
+  // and .toISOString() on it throws).
+  if (Number.isNaN(minute) || Number.isNaN(hour)) {
+    return new Date(Date.now() + 3600_000).toISOString();
+  }
+
   const next = new Date();
   next.setHours(hour, minute, 0, 0);
   if (next.getTime() <= Date.now()) {

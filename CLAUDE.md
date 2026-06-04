@@ -69,7 +69,8 @@ Known verification caveat: untracked generated workflows under `src/workflows/re
 - Register UI workflows in `src/server/services/workflowRegistry.ts`.
 - Instantiate runnable workflows in `src/server/services/jobRunner.ts`.
 - Use `src/server/services/artifacts.ts` for run artifact indexing instead of inventing ad hoc artifact links.
-- Keep recorded-workflow schema changes mirrored between `extension/shared/types.ts`, `src/compiler/types.ts`, and UI editor types in `src/ui/api.ts`.
+- The recorded-workflow schema, Zod validator, mutation model, and analysis/quality logic live in the shared `packages/workflow-core` package (`@zoom-automation/workflow-core`). Edit them there; `extension/shared/types.ts`, `src/compiler/types.ts`, and `src/ui/api.ts` re-export from it. The extension and Web UI drive the same `model`/`analysis` functions, gated by `WorkflowEditorCapabilities` (record/preflight are extension-only).
+- This is an npm-workspace monorepo (`packages/*`, `extension`). Run `npm install` once at the root; `workflow-core` is built automatically before typecheck/test/build via `pre*` scripts.
 - Preserve selector-healing and step-policy behavior when modifying `src/compiler/compiler.ts`.
 - Keep country-specific address and document requirements in `addresses.yaml` when possible.
 - Keep UI changes consistent with the existing PRISM-inspired standalone app styling.

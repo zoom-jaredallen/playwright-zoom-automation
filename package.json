@@ -4,20 +4,33 @@
   "private": true,
   "type": "module",
   "description": "Playwright automation for adding Zoom sub-account business addresses and documents.",
+  "workspaces": [
+    "packages/*",
+    "extension"
+  ],
   "scripts": {
+    "build:core": "npm run build -w @zoom-automation/workflow-core",
     "build": "tsc -p tsconfig.build.json",
+    "prebuild": "npm run build:core",
     "build:ui": "vite build",
+    "prebuild:ui": "npm run build:core",
     "dev": "tsx src/server/index.ts",
+    "predev": "npm run build:core",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretypecheck": "npm run build:core",
     "test": "vitest run",
+    "pretest": "npm run build:core",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:watch": "vitest",
     "serve:ui": "UI_DEV=false tsx src/server/index.ts",
+    "preserve:ui": "npm run build:core",
     "start": "tsx src/main.ts",
+    "prestart": "npm run build:core",
     "workflow:compile": "tsx src/compiler/cli.ts",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {
+    "@zoom-automation/workflow-core": "*",
     "@vitejs/plugin-react": "^6.0.2",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",

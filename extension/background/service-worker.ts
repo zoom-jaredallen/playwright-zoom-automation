@@ -2,7 +2,22 @@
  * Background service worker that aggregates recorded actions from the content
  * script, manages recording state, and generates the final workflow JSON.
  */
-import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowAssertion, WorkflowParameter, WorkflowTestEvent } from "../shared/types.js";
+import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowTestEvent } from "../shared/types.js";
+import {
+  applyStepUpdate,
+  buildWorkflow as buildWorkflowCore,
+  deleteStep,
+  insertStep,
+  makeAssertionAction,
+  makeDialogAction,
+  makeNavigationAction,
+  makeScreenshotAction,
+  makeWaitAction,
+  moveStep,
+  normalizeNavigationUrl,
+  setParameterConfirmed,
+  type StepUpdate
+} from "@zoom-automation/workflow-core";
 
 const DRAFT_STORAGE_KEY = "recorderDraftState";
 
@@ -89,7 +104,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { workflow: buildWorkflow() };
 
     case "DELETE_ACTION":
-      actions = actions.filter((a) => a.id !== message.actionId);
+      actions = deleteStep(actions, message.actionId);
       updateBadge();
       await persistAndBroadcast();
       return { ok: true };
@@ -110,10 +125,22 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         screenshotOnFailure: message.screenshotOnFailure,
         condition: message.condition,
         screenshotLabel: message.screenshotLabel,
-        waitMs: message.waitMs
+        waitMs: message.waitMs,
+        networkWaitUrl: message.networkWaitUrl,
+        waitForUrl: message.waitForUrl,
+        key: message.key,
+        dialogAction: message.dialogAction,
+        dialogPromptText: message.dialogPromptText,
+        elementScreenshot: message.elementScreenshot
       });
       await persistAndBroadcast();
       return { ok: true };
+
+    case "ADD_DIALOG_ACTION":
+      addDialogAction(message.dialogAction, message.promptText, message.insertAfterActionId);
+      updateBadge();
+      await persistAndBroadcast();
+      return { ok: true, actionId: lastInsertedActionId(message.insertAfterActionId) };
 
     case "MOVE_ACTION":
       moveAction(message.actionId, message.direction);
@@ -163,10 +190,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { ok: true };
 
     case "UPDATE_PARAMETER":
-      const action = actions.find((a) => a.id === message.actionId);
-      if (action?.parameterHints?.[message.paramIndex]) {
-        action.parameterHints[message.paramIndex].confirmed = message.confirmed;
-      }
+      actions = setParameterConfirmed(actions, message.actionId, message.paramIndex, message.confirmed);
       await persistAndBroadcast();
       return { ok: true };
 
@@ -257,113 +281,39 @@ async function setPaused(nextPaused: boolean): Promise<{ ok: boolean; error?: st
   return { ok: true };
 }
 
-function updateAction(
-  actionId: string,
-  update: {
-    description?: string;
-    cssSelector?: string;
-    selectorNote?: string;
-    url?: string;
-    assertionType?: RecordedAction["assertionType"];
-    expected?: string;
-    timeout?: number;
-    onFailure?: RecordedAction["onFailure"];
-    retryCount?: number;
-    retryDelayMs?: number;
-    continueOnFailure?: boolean;
-    screenshotOnFailure?: boolean;
-    condition?: RecordedAction["condition"];
-    screenshotLabel?: string;
-    waitMs?: number;
-  }
-): void {
-  const action = actions.find((candidate) => candidate.id === actionId);
-  if (!action) return;
+function updateAction(actionId: string, update: StepUpdate): void {
+  const existing = actions.find((candidate) => candidate.id === actionId);
+  if (!existing) return;
+  const previousPageUrl = existing.pageUrl;
 
-  if (update.description !== undefined) {
-    action.description = update.description;
-  }
-  if (update.cssSelector !== undefined) {
-    const cssSelector = update.cssSelector.trim();
-    if (cssSelector) {
-      action.selectors.css = cssSelector;
-    } else {
-      delete action.selectors.css;
+  actions = actions.map((action) => (action.id === actionId ? applyStepUpdate(action, update) : action));
+
+  // Preserve the recording start URL when the first navigation's URL is edited.
+  if (update.url !== undefined && existing.type === "navigate") {
+    const updated = actions.find((candidate) => candidate.id === actionId);
+    if (updated?.url && (!recordingStartUrl || recordingStartUrl === previousPageUrl)) {
+      recordingStartUrl = updated.url;
     }
   }
-  if (update.selectorNote !== undefined) {
-    action.selectorNote = update.selectorNote.trim() || undefined;
-  }
-  if (update.url !== undefined && action.type === "navigate") {
-    const url = normalizeNavigationUrl(update.url);
-    action.url = url;
-    action.pageUrl = url;
-    if (!recordingStartUrl || recordingStartUrl === action.pageUrl) {
-      recordingStartUrl = url;
-    }
-  }
-  if (update.assertionType !== undefined && action.type === "assert") {
-    action.assertionType = update.assertionType;
-  }
-  if (update.expected !== undefined && action.type === "assert") {
-    action.expected = update.expected.trim();
-  }
-  if (update.timeout !== undefined && action.type === "assert") {
-    action.timeout = Math.min(Math.max(Math.round(update.timeout), 500), 60_000);
-  }
-  if (update.onFailure !== undefined && action.type === "assert") {
-    action.onFailure = update.onFailure;
-  }
-  if (update.retryCount !== undefined) {
-    action.retryCount = Math.min(Math.max(Math.round(update.retryCount), 0), 10);
-  }
-  if (update.retryDelayMs !== undefined) {
-    action.retryDelayMs = Math.min(Math.max(Math.round(update.retryDelayMs), 0), 60_000);
-  }
-  if (update.continueOnFailure !== undefined) {
-    action.continueOnFailure = update.continueOnFailure;
-  }
-  if (update.screenshotOnFailure !== undefined) {
-    action.screenshotOnFailure = update.screenshotOnFailure;
-  }
-  if (update.condition !== undefined) {
-    action.condition = update.condition.type === "none" ? undefined : update.condition;
-  }
-  if (update.screenshotLabel !== undefined && action.type === "screenshot") {
-    action.screenshotLabel = update.screenshotLabel.trim() || "evidence";
-  }
-  if (update.waitMs !== undefined && action.type === "wait") {
-    action.waitMs = Math.min(Math.max(Math.round(update.waitMs), 250), 60_000);
-  }
+}
+
+function addDialogAction(
+  dialogAction: NonNullable<RecordedAction["dialogAction"]>,
+  promptText?: string,
+  insertAfterActionId?: string | null
+): void {
+  actions = insertStep(actions, makeDialogAction(dialogAction, promptText, recordingStartUrl), insertAfterActionId);
 }
 
 function moveAction(actionId: string, direction: "up" | "down"): void {
-  const currentIndex = actions.findIndex((action) => action.id === actionId);
-  if (currentIndex === -1) return;
-
-  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-  if (nextIndex < 0 || nextIndex >= actions.length) return;
-
-  const [action] = actions.splice(currentIndex, 1);
-  actions.splice(nextIndex, 0, action);
+  actions = moveStep(actions, actionId, direction);
 }
 
 function addNavigationAction(rawUrl: string, insertAfterActionId?: string | null): void {
-  const url = normalizeNavigationUrl(rawUrl);
-  const action: RecordedAction = {
-    id: `manual_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    timestamp: Date.now(),
-    type: "navigate",
-    selectors: {},
-    url,
-    pageUrl: url,
-    pageTitle: "Manual navigation",
-    description: `Navigate to ${url}`
-  };
-
-  insertAction(action, insertAfterActionId);
-  if (!recordingStartUrl) {
-    recordingStartUrl = url;
+  const action = makeNavigationAction(rawUrl);
+  actions = insertStep(actions, action, insertAfterActionId);
+  if (!recordingStartUrl && action.url) {
+    recordingStartUrl = action.url;
   }
 }
 
@@ -374,71 +324,19 @@ function addAssertionAction(
   onFailure: RecordedAction["onFailure"] = "screenshot",
   insertAfterActionId?: string | null
 ): void {
-  const normalizedType = assertionType ?? "textVisible";
-  const action: RecordedAction = {
-    id: createManualActionId("assert"),
-    timestamp: Date.now(),
-    type: "assert",
-    selectors: {},
-    assertionType: normalizedType,
-    expected: expected.trim(),
-    timeout,
-    onFailure,
-    pageUrl: recordingStartUrl,
-    pageTitle: "Manual assertion",
-    description: `Assert ${formatAssertionType(normalizedType)}: ${expected.trim()}`
-  };
-
-  insertAction(action, insertAfterActionId);
+  actions = insertStep(
+    actions,
+    makeAssertionAction(assertionType, expected, recordingStartUrl, timeout, onFailure),
+    insertAfterActionId
+  );
 }
 
 function addScreenshotAction(label?: string, insertAfterActionId?: string | null): void {
-  const normalizedLabel = label?.trim() || "evidence";
-  const action: RecordedAction = {
-    id: createManualActionId("screenshot"),
-    timestamp: Date.now(),
-    type: "screenshot",
-    selectors: {},
-    screenshotLabel: normalizedLabel,
-    pageUrl: recordingStartUrl,
-    pageTitle: "Manual screenshot",
-    description: `Take screenshot: ${normalizedLabel}`
-  };
-
-  insertAction(action, insertAfterActionId);
+  actions = insertStep(actions, makeScreenshotAction(label, recordingStartUrl), insertAfterActionId);
 }
 
 function addWaitAction(waitMs: number, insertAfterActionId?: string | null): void {
-  const normalizedWaitMs = Math.min(Math.max(Math.round(waitMs), 250), 60_000);
-  const action: RecordedAction = {
-    id: createManualActionId("wait"),
-    timestamp: Date.now(),
-    type: "wait",
-    selectors: {},
-    waitMs: normalizedWaitMs,
-    pageUrl: recordingStartUrl,
-    pageTitle: "Manual wait",
-    description: `Wait ${normalizedWaitMs}ms`
-  };
-
-  insertAction(action, insertAfterActionId);
-}
-
-function insertAction(action: RecordedAction, insertAfterActionId?: string | null): void {
-  if (insertAfterActionId === null) {
-    actions.unshift(action);
-    return;
-  }
-
-  if (insertAfterActionId) {
-    const index = actions.findIndex((candidate) => candidate.id === insertAfterActionId);
-    if (index >= 0) {
-      actions.splice(index + 1, 0, action);
-      return;
-    }
-  }
-
-  actions.push(action);
+  actions = insertStep(actions, makeWaitAction(waitMs, recordingStartUrl), insertAfterActionId);
 }
 
 function lastInsertedActionId(insertAfterActionId?: string | null): string | undefined {
@@ -448,28 +346,6 @@ function lastInsertedActionId(insertAfterActionId?: string | null): string | und
     return index >= 0 ? actions[index + 1]?.id : actions.at(-1)?.id;
   }
   return actions.at(-1)?.id;
-}
-
-function createManualActionId(prefix: string): string {
-  return `manual_${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function formatAssertionType(type: NonNullable<RecordedAction["assertionType"]>): string {
-  return type.replace(/([A-Z])/g, " $1").toLowerCase();
-}
-
-function normalizeNavigationUrl(rawUrl: string): string {
-  const value = rawUrl.trim();
-  if (/^https?:\/\//i.test(value)) {
-    return value;
-  }
-  if (value.startsWith("/")) {
-    return `https://zoom.us${value}`;
-  }
-  if (value.startsWith("#")) {
-    return `https://zoom.us/cpw/page/phoneNumbers${value}`;
-  }
-  return `https://zoom.us/${value.replace(/^\/+/, "")}`;
 }
 
 async function runTestWorkflow(): Promise<void> {
@@ -533,7 +409,9 @@ async function runTestWorkflow(): Promise<void> {
 }
 
 async function executeTestActionWithPolicy(tab: chrome.tabs.Tab, action: RecordedAction): Promise<{ skipped?: boolean; message?: string }> {
-  const attempts = Math.max(1, (action.retryCount ?? (action.onFailure === "retry" ? 1 : 0)) + 1);
+  // Honor both an explicit retryCount and onFailure:"retry" (whichever asks for more).
+  const retryBudget = Math.max(action.retryCount ?? 0, action.onFailure === "retry" ? 1 : 0);
+  const attempts = retryBudget + 1;
   const retryDelayMs = action.retryDelayMs ?? 1_000;
   let lastError: string | undefined;
 
@@ -677,179 +555,12 @@ function getDraftStorage(): chrome.storage.StorageArea {
 // ─── Workflow Builder ────────────────────────────────────────────────────────
 
 function buildWorkflow(): RecordedWorkflow {
-  const parameters = extractParameters(actions);
-  const assertions = generateAssertions(actions);
-  const startUrl = extractRelativeStartUrl(recordingStartUrl);
-
-  const workflowActions = actions.map((action) => ({
-    ...action,
-    // Replace confirmed parameter values with template placeholders
-    value: replaceWithPlaceholders(action)
-  }));
-
-  return {
-    version: 1,
-    meta: {
-      name: "",
-      description: generateDescription(actions),
-      recordedAt: new Date().toISOString(),
-      recordedOnUrl: recordingStartUrl,
-      durationMs: Date.now() - recordingStartTime,
-      category: inferCategory(actions)
-    },
-    parameters,
-    actions: workflowActions,
-    assertions,
-    config: {
-      startUrl,
-      requiresImpersonation: impersonationDetected || true, // Default true for sub-account workflows
-      defaultTimeout: 10_000,
-      retryableErrors: [
-        "timeout",
-        "temporarily unavailable",
-        "net::",
-        "target closed"
-      ]
-    },
-    quality: calculateQualityReport(workflowActions, assertions)
-  };
-}
-
-function extractParameters(actions: RecordedAction[]): WorkflowParameter[] {
-  const paramMap = new Map<string, WorkflowParameter>();
-
-  for (const action of actions) {
-    if (!action.parameterHints) continue;
-    for (const hint of action.parameterHints) {
-      if (hint.confirmed === false) continue; // User explicitly dismissed
-      if (paramMap.has(hint.suggestedName)) continue;
-
-      paramMap.set(hint.suggestedName, {
-        name: hint.suggestedName,
-        type: hint.reason === "looks_like_phone_number" ? "string" : "string",
-        required: true,
-        description: `Auto-detected: ${hint.reason.replace(/_/g, " ")}`,
-        defaultValue: undefined,
-        source: inferParameterSource(hint.suggestedName)
-      });
-    }
-  }
-
-  return Array.from(paramMap.values());
-}
-
-function inferParameterSource(paramName: string): WorkflowParameter["source"] {
-  if (paramName.startsWith("address.")) return "addressProfile";
-  if (paramName === "customerName") return "addressProfile";
-  if (paramName.startsWith("contact.")) return "addressProfile";
-  if (paramName === "contactEmail") return "addressProfile";
-  if (paramName === "phoneNumber") return "config";
-  return "prompt";
-}
-
-function generateAssertions(actions: RecordedAction[]): WorkflowAssertion[] {
-  const assertions: WorkflowAssertion[] = [];
-
-  for (const action of actions) {
-    if (action.type === "assert" && action.expected && action.assertionType) {
-      assertions.push({
-        afterAction: action.id,
-        type: action.assertionType === "tableRowContains" ? "textVisible" : action.assertionType,
-        expected: action.expected,
-        timeout: action.timeout ?? 10_000,
-        onFailure: action.onFailure ?? "screenshot"
-      });
-    }
-
-    // After click on Save/Submit buttons, add success assertion
-    if (action.type === "click") {
-      const name = action.selectors.role?.name ?? action.selectors.text ?? "";
-      if (/save|submit|add|continue|confirm/i.test(name)) {
-        assertions.push({
-          afterAction: action.id,
-          type: "textVisible",
-          expected: "success|saved|added|submitted",
-          timeout: 10_000,
-          onFailure: "screenshot"
-        });
-      }
-    }
-
-    // After navigation, assert URL
-    if (action.type === "navigate" && action.url) {
-      const path = new URL(action.url).hash || new URL(action.url).pathname;
-      assertions.push({
-        afterAction: action.id,
-        type: "urlContains",
-        expected: path,
-        timeout: 15_000,
-        onFailure: "fail"
-      });
-    }
-  }
-
-  return assertions;
-}
-
-function replaceWithPlaceholders(action: RecordedAction): string | undefined {
-  if (!action.value || !action.parameterHints) return action.value;
-
-  let value = action.value;
-  for (const hint of action.parameterHints) {
-    if (hint.confirmed === false) continue;
-    value = value.replace(hint.originalValue, `{{${hint.suggestedName}}}`);
-  }
-  return value;
-}
-
-function generateDescription(actions: RecordedAction[]): string {
-  const fills = actions.filter((a) => a.type === "fill").length;
-  const clicks = actions.filter((a) => a.type === "click").length;
-  const navigations = actions.filter((a) => a.type === "navigate").length;
-  const assertions = actions.filter((a) => a.type === "assert").length;
-  const screenshots = actions.filter((a) => a.type === "screenshot").length;
-  return `Recorded workflow: ${navigations} navigation(s), ${fills} field fill(s), ${clicks} click(s), ${assertions} assertion(s), ${screenshots} screenshot(s).`;
-}
-
-function inferCategory(actions: RecordedAction[]): RecordedWorkflow["meta"]["category"] {
-  const urls = actions.map((a) => a.pageUrl).join(" ");
-  if (/phoneNumbers|business-address|phone/i.test(urls)) return "phone";
-  if (/settings|policy|policies/i.test(urls)) return "settings";
-  if (/compliance|10dlc|brand/i.test(urls)) return "compliance";
-  return "custom";
-}
-
-function extractRelativeStartUrl(fullUrl: string): string {
-  try {
-    const url = new URL(fullUrl);
-    return url.pathname + url.hash;
-  } catch {
-    return "/";
-  }
-}
-
-function calculateQualityReport(workflowActions: RecordedAction[], assertions: WorkflowAssertion[]): RecordedWorkflow["quality"] {
-  const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss"].includes(action.type));
-  const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
-  const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
-  const submitActions = workflowActions.filter((action) => action.type === "click" && /save|submit|add|continue|confirm/i.test(action.selectors.role?.name ?? action.selectors.text ?? ""));
-  const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertions.length, submitActions.length) / submitActions.length) * 100);
-  const evidenceCount = workflowActions.filter((action) => action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
-  const evidenceCoverage = workflowActions.length === 0 ? 100 : Math.round((evidenceCount / workflowActions.length) * 100);
-  const riskySteps = workflowActions.filter((action) => action.type === "click" && !action.selectors.role?.name && !action.selectors.testId).length;
-  const hardcodedValues = workflowActions.filter((action) => (action.value || action.expected || "").length > 0 && !(action.value || action.expected || "").includes("{{")).length;
-  const unsupportedBrowserPreflightSteps = workflowActions.filter((action) => action.type === "upload").length;
-  const penalties = riskySteps * 7 + hardcodedValues * 3 + unsupportedBrowserPreflightSteps * 8;
-  const score = Math.max(0, Math.min(100, Math.round((selectorStability * 0.35) + (assertionCoverage * 0.3) + (evidenceCoverage * 0.2) + 15 - penalties)));
-  const warnings = [
-    selectorStability < 70 ? "Several steps rely on weak selectors." : undefined,
-    assertionCoverage < 80 ? "Add validations after important submit/save actions." : undefined,
-    evidenceCoverage < 25 ? "Add screenshots for evidence and failure diagnosis." : undefined,
-    unsupportedBrowserPreflightSteps > 0 ? "Upload steps cannot be tested by the extension preflight runner." : undefined,
-    hardcodedValues > 0 ? "Review hardcoded values and parameterize tenant-specific inputs." : undefined
-  ].filter(Boolean) as string[];
-
-  return { score, selectorStability, assertionCoverage, evidenceCoverage, riskySteps, hardcodedValues, unsupportedBrowserPreflightSteps, warnings };
+  return buildWorkflowCore({
+    actions,
+    recordingStartUrl,
+    recordingStartTime,
+    impersonationDetected
+  });
 }
 
 function sleep(ms: number): Promise<void> {
