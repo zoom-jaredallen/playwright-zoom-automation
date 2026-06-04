@@ -13,6 +13,7 @@ export { dismissBlockingZoomPopups, isDismissibleZoomDialogText };
 export interface BusinessAddressFlowOptions {
   browser: Browser;
   masterStorageState: StorageState;
+  getMasterStorageState?: () => StorageState;
   config: AppConfig;
   logger: Logger;
 }
@@ -24,7 +25,7 @@ export class BusinessAddressFlow implements AutomationFlow {
 
   async run(input: FlowInput): Promise<FlowResult> {
     const context = await this.options.browser.newContext({
-      storageState: this.options.masterStorageState,
+      storageState: this.options.getMasterStorageState?.() ?? this.options.masterStorageState,
       acceptDownloads: true
     });
     const page = await context.newPage();

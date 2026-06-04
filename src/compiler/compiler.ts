@@ -77,6 +77,7 @@ import { dismissBlockingZoomPopups } from "../../../zoom/popups.js";
 export interface ${className}Options {
   browser: Browser;
   masterStorageState: StorageState;
+  getMasterStorageState?: () => StorageState;
   config: AppConfig;
   logger: Logger;
 }
@@ -90,7 +91,7 @@ export class ${className} implements AutomationFlow {
     this.activeAccountId = input.account.id;
     let dryRunSkipped = false;
     const context = await this.options.browser.newContext({
-      storageState: this.options.masterStorageState
+      storageState: this.options.getMasterStorageState?.() ?? this.options.masterStorageState
     });
     const page = await context.newPage();
     const artifactBase = path.join(

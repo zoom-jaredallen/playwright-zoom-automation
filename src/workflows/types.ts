@@ -29,6 +29,11 @@ export interface WorkflowPlugin {
 export interface WorkflowContext {
   browser: Browser;
   masterStorageState: StorageState;
+  /**
+   * Returns the latest master storage state. Use this (over the static
+   * `masterStorageState`) so long runs pick up a refreshed session.
+   */
+  getMasterStorageState?: () => StorageState;
   config: AppConfig;
   logger: Logger;
 }

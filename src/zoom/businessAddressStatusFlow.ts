@@ -14,6 +14,7 @@ import { impersonateSubAccount } from "./impersonation.js";
 export interface BusinessAddressStatusFlowOptions {
   browser: Browser;
   masterStorageState: StorageState;
+  getMasterStorageState?: () => StorageState;
   config: AppConfig;
   logger: Logger;
 }
@@ -25,7 +26,7 @@ export class BusinessAddressStatusFlow implements AutomationFlow {
 
   async run(input: FlowInput): Promise<FlowResult> {
     const context = await this.options.browser.newContext({
-      storageState: this.options.masterStorageState
+      storageState: this.options.getMasterStorageState?.() ?? this.options.masterStorageState
     });
     const page = await context.newPage();
     const artifactBase = path.join(

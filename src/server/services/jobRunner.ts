@@ -5,6 +5,7 @@ import { loadConfig } from "../../config.js";
 import { createLogger, parseLogLevel } from "../../logger.js";
 import { validateDocumentFiles } from "../../preflight.js";
 import { loginAsMasterAdmin } from "../../zoom/auth.js";
+import { SessionHealthMonitor } from "../../zoom/sessionHealth.js";
 import type { JobStore } from "./inMemoryJobStore.js";
 import type { WorkflowRegistry } from "./workflowRegistry.js";
 
@@ -93,6 +94,19 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
       logger
     });
 
+    // Keep the master session alive across long, many-account runs. The monitor
+    // re-logs in when the session approaches its max age; flows read the latest
+    // state via getMasterStorageState().
+    const sessionMonitor = new SessionHealthMonitor(masterStorageState, { browser, config: config.zoom, logger });
+    const refreshAtMs = 40 * 60 * 1_000;
+    let refreshInFlight: Promise<unknown> | undefined;
+    const refreshSessionIfStale = async (): Promise<void> => {
+      if (sessionMonitor.getHealthState().sessionAgeMs < refreshAtMs) return;
+      // Deduplicate concurrent refreshes (parallel workers share one session).
+      refreshInFlight ??= sessionMonitor.refresh().finally(() => { refreshInFlight = undefined; });
+      await refreshInFlight;
+    };
+
     let totalCompleted = 0;
     let totalSkipped = 0;
     let totalFailed = 0;
@@ -106,6 +120,7 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
       const flow = options.registry.createFlow(workflow.id, {
         browser,
         masterStorageState,
+        getMasterStorageState: () => sessionMonitor.getStorageState(),
         config,
         logger
       });
@@ -142,7 +157,8 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
         },
         accountDelayMs: options.accountDelayMs,
         concurrency: options.concurrency ?? 1,
-        cancellation: options.cancellation
+        cancellation: options.cancellation,
+        beforeEachAccount: refreshSessionIfStale
       });
 
       const summary = await runner.run(options.accounts);

@@ -11,6 +11,11 @@ export interface AutomationRunnerOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Cancellation token — set `cancelled` to true to stop processing new accounts. */
   cancellation?: { cancelled: boolean };
+  /**
+   * Hook invoked before each account is processed (used to refresh the master
+   * session on long runs). Failures are swallowed so they don't abort the run.
+   */
+  beforeEachAccount?: (account: SubAccount) => Promise<void>;
 }
 
 export class AutomationRunner {
@@ -38,6 +43,8 @@ export class AutomationRunner {
         summary.skipped += 1;
         continue;
       }
+
+      await this.beforeAccount(account);
 
       try {
         await this.options.progress.markRunning(account);
@@ -83,6 +90,8 @@ export class AutomationRunner {
           continue;
         }
 
+        await this.beforeAccount(account);
+
         try {
           await this.options.progress.markRunning(account);
           const result = await this.runFlowWithRetry(account);
@@ -122,6 +131,16 @@ export class AutomationRunner {
       }),
       this.options.retry
     );
+  }
+
+  private async beforeAccount(account: SubAccount): Promise<void> {
+    if (!this.options.beforeEachAccount) return;
+    try {
+      await this.options.beforeEachAccount(account);
+    } catch {
+      // A refresh failure shouldn't abort the run; the flow's own retry/impersonation
+      // handling will surface a genuine session problem.
+    }
   }
 
   private async delayBetweenAccounts(): Promise<void> {
