@@ -178,6 +178,33 @@ describe("compileWorkflow", () => {
     expect(flowContent).toContain("export default AddAuTollAddressFlow;");
   });
 
+  it("generates anchor scoping, ARIA-state options, guards, and IF/ELSE blocks", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "if1", timestamp: 1, type: "if", selectors: {}, pageUrl: "u", pageTitle: "t",
+          ifCondition: { kind: "or", operands: [{ kind: "textVisible", text: "Pending" }, { kind: "urlContains", text: "#/x" }] },
+          thenActions: [
+            {
+              id: "c1", timestamp: 2, type: "click", pageUrl: "u", pageTitle: "t",
+              selectors: { role: { role: "checkbox", name: "Enable", checked: false }, anchor: { text: "michael.chen", scopeRole: "row" } }
+            }
+          ],
+          elseActions: [
+            { id: "c2", timestamp: 3, type: "click", pageUrl: "u", pageTitle: "t", selectors: { role: { role: "button", name: "Cancel" } }, guard: { kind: "urlContains", text: "#/y" }, guardElse: "skip" }
+          ]
+        }
+      ]
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+    expect(flow).toContain("if (await this.evalPredicate(page,");   // IF block
+    expect(flow).toContain("} else {");                             // ELSE branch
+    expect(flow).toContain('.filter({ hasText');                    // anchor scoping
+    expect(flow).toContain("opts.checked");                         // ARIA-state option wiring
+    expect(flow).toContain("guardOk");                              // step guard
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

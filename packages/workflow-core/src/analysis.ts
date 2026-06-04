@@ -14,9 +14,26 @@ import type {
   WorkflowQualityReport
 } from "./types.js";
 
+/**
+ * Depth-first flatten of an action tree (descends into IF then/else branches).
+ * Local copy to avoid a circular import with model.ts (which imports this module).
+ */
+function flatten(actions: RecordedAction[]): RecordedAction[] {
+  const out: RecordedAction[] = [];
+  for (const action of actions) {
+    out.push(action);
+    if (action.type === "if") {
+      if (action.thenActions) out.push(...flatten(action.thenActions));
+      if (action.elseActions) out.push(...flatten(action.elseActions));
+    }
+  }
+  return out;
+}
+
 // ─── Parameter extraction ─────────────────────────────────────────────────────
 
-export function extractParameters(actions: RecordedAction[]): WorkflowParameter[] {
+export function extractParameters(actionTree: RecordedAction[]): WorkflowParameter[] {
+  const actions = flatten(actionTree);
   const paramMap = new Map<string, WorkflowParameter>();
 
   for (const action of actions) {
@@ -61,7 +78,8 @@ export function replaceWithPlaceholders(action: RecordedAction): string | undefi
 
 // ─── Assertion generation ───────────────────────────────────────────────────────
 
-export function generateAssertions(actions: RecordedAction[]): WorkflowAssertion[] {
+export function generateAssertions(actionTree: RecordedAction[]): WorkflowAssertion[] {
+  const actions = flatten(actionTree);
   const assertions: WorkflowAssertion[] = [];
 
   for (const action of actions) {
@@ -120,7 +138,8 @@ export function mapAssertionType(type: AssertionType): WorkflowAssertion["type"]
 
 // ─── Description & category ─────────────────────────────────────────────────────
 
-export function generateDescription(actions: RecordedAction[]): string {
+export function generateDescription(actionTree: RecordedAction[]): string {
+  const actions = flatten(actionTree);
   const fills = actions.filter((a) => a.type === "fill").length;
   const clicks = actions.filter((a) => a.type === "click").length;
   const navigations = actions.filter((a) => a.type === "navigate").length;
@@ -140,10 +159,11 @@ export function inferCategory(actions: RecordedAction[]): WorkflowCategory {
 // ─── Quality report ─────────────────────────────────────────────────────────────
 
 export function calculateQualityReport(
-  workflowActions: RecordedAction[],
+  workflowActionTree: RecordedAction[],
   assertions: WorkflowAssertion[]
 ): WorkflowQualityReport {
-  const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss", "dialog"].includes(action.type));
+  const workflowActions = flatten(workflowActionTree);
+  const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type));
   const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
   const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
   const submitActions = workflowActions.filter((action) => action.type === "click" && /save|submit|add|continue|confirm/i.test(action.selectors.role?.name ?? action.selectors.text ?? ""));

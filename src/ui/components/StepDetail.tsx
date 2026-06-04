@@ -1,6 +1,7 @@
-import type { WorkflowEditorCapabilities } from "@zoom-automation/workflow-core";
-import { EXTENSION_CAPABILITIES, sanitizeAction } from "@zoom-automation/workflow-core";
+import type { Predicate, WorkflowEditorCapabilities } from "@zoom-automation/workflow-core";
+import { EXTENSION_CAPABILITIES, sanitizeAction, scoreSelector } from "@zoom-automation/workflow-core";
 import type { RecordedActionView } from "../api.js";
+import { PredicateEditor } from "./PredicateEditor.js";
 
 interface StepDetailProps {
   step: RecordedActionView;
@@ -56,7 +57,24 @@ export function StepDetail({
     onUpdate({ ...step, parameterHints });
   };
 
-  const hasSelectors = !["navigate", "wait", "dialog"].includes(step.type);
+  // Update an ARIA-state option / exact flag on the role selector (tri-state via "", "true", "false").
+  const updateRoleFlag = (key: "checked" | "expanded" | "selected" | "exact", raw: string) => {
+    const role = { ...(step.selectors.role ?? { role: "button" }) };
+    if (raw === "") delete (role as Record<string, unknown>)[key];
+    else (role as Record<string, unknown>)[key] = raw === "true";
+    onUpdate({ ...step, selectors: { ...step.selectors, role } });
+  };
+
+  const updateAnchor = (patch: Partial<NonNullable<RecordedActionView["selectors"]["anchor"]>>) => {
+    const anchor = { ...(step.selectors.anchor ?? {}), ...patch };
+    const cleaned = anchor.text || anchor.scopeRole ? anchor : undefined;
+    onUpdate({ ...step, selectors: { ...step.selectors, anchor: cleaned } });
+  };
+
+  const isIf = step.type === "if";
+  const hasSelectors = !["navigate", "wait", "dialog", "if"].includes(step.type);
+  const confidence = hasSelectors ? scoreSelector(step.selectors) : undefined;
+  const triState = (value: boolean | undefined) => (value === undefined ? "" : String(value));
 
   return (
     <div className="step-detail">
@@ -72,6 +90,15 @@ export function StepDetail({
         </div>
       </div>
 
+      {/* Selector confidence (static heuristic) */}
+      {confidence ? (
+        <div className={`selector-confidence confidence-${confidence.level}`} title={confidence.reasons.join("\n")}>
+          <span className="confidence-dot" />
+          <strong>Selector confidence: {confidence.score}</strong>
+          <span className="confidence-level">{confidence.level}</span>
+        </div>
+      ) : null}
+
       {/* Description */}
       <div className="detail-section">
         <label className="detail-label">Description</label>
@@ -83,17 +110,31 @@ export function StepDetail({
         />
       </div>
 
+      {/* IF block condition */}
+      {isIf ? (
+        <div className="detail-section">
+          <label className="detail-label">IF condition</label>
+          <small className="detail-hint">Steps in the THEN branch run when this is true; ELSE runs otherwise.</small>
+          <PredicateEditor
+            value={step.ifCondition ?? { kind: "always" }}
+            onChange={(ifCondition) => onUpdate({ ...step, ifCondition })}
+          />
+        </div>
+      ) : null}
+
       {/* Action Type */}
-      <div className="detail-section">
-        <label className="detail-label">Action Type</label>
-        <select
-          className="detail-select"
-          value={step.type}
-          onChange={(e) => onUpdate(sanitizeAction({ ...step, type: e.target.value as RecordedActionView["type"] }))}
-        >
-          {ACTION_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-        </select>
-      </div>
+      {!isIf ? (
+        <div className="detail-section">
+          <label className="detail-label">Action Type</label>
+          <select
+            className="detail-select"
+            value={step.type}
+            onChange={(e) => onUpdate(sanitizeAction({ ...step, type: e.target.value as RecordedActionView["type"] }))}
+          >
+            {ACTION_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </div>
+      ) : null}
 
       {/* Value (for fill/select) */}
       {(step.type === "fill" || step.type === "select") ? (
@@ -277,6 +318,44 @@ export function StepDetail({
               <input className="detail-input mono" value={step.selectors.css ?? ""} onChange={(e) => updateSelector("css", e.target.value)} placeholder=".class > element (fallback)" />
             </div>
           </div>
+
+          {/* ARIA-state options — disambiguate e.g. the *checked* checkbox */}
+          <label className="detail-sublabel">Match by ARIA state</label>
+          <div className="detail-grid two">
+            <label className="aria-state-field">
+              Checked
+              <select className="detail-select" value={triState(step.selectors.role?.checked)} onChange={(e) => updateRoleFlag("checked", e.target.value)}>
+                <option value="">—</option><option value="true">true</option><option value="false">false</option>
+              </select>
+            </label>
+            <label className="aria-state-field">
+              Expanded
+              <select className="detail-select" value={triState(step.selectors.role?.expanded)} onChange={(e) => updateRoleFlag("expanded", e.target.value)}>
+                <option value="">—</option><option value="true">true</option><option value="false">false</option>
+              </select>
+            </label>
+            <label className="aria-state-field">
+              Selected
+              <select className="detail-select" value={triState(step.selectors.role?.selected)} onChange={(e) => updateRoleFlag("selected", e.target.value)}>
+                <option value="">—</option><option value="true">true</option><option value="false">false</option>
+              </select>
+            </label>
+            <label className="aria-state-field">
+              Exact name
+              <select className="detail-select" value={triState(step.selectors.role?.exact)} onChange={(e) => updateRoleFlag("exact", e.target.value)}>
+                <option value="">—</option><option value="true">true</option><option value="false">false</option>
+              </select>
+            </label>
+          </div>
+
+          {/* Anchor — "the row where Name contains …" */}
+          <label className="detail-sublabel">Anchor (relative match)</label>
+          <div className="selector-row">
+            <input className="detail-input-sm" value={step.selectors.anchor?.scopeRole ?? ""} onChange={(e) => updateAnchor({ scopeRole: e.target.value || undefined })} placeholder="row" />
+            <input className="detail-input" value={step.selectors.anchor?.text ?? ""} onChange={(e) => updateAnchor({ text: e.target.value || undefined })} placeholder="Anchor text (e.g. michael.chen@…)" />
+          </div>
+          <small className="detail-hint">Scopes the match to the container (e.g. table row) whose text contains the anchor — robust for tables/lists.</small>
+
           {(step.selectors.nth !== undefined || step.frameSelector) ? (
             <small className="detail-hint">
               {step.selectors.nth !== undefined ? <>Match index: <code>nth({step.selectors.nth})</code> </> : null}
@@ -286,8 +365,36 @@ export function StepDetail({
         </div>
       ) : null}
 
+      {/* Compound guard — run this step only if the predicate holds */}
+      {!isIf && capabilities.canEditConditions ? (
+        <div className="detail-section">
+          <label className="detail-label">Condition (guard)</label>
+          {step.guard ? (
+            <>
+              <PredicateEditor value={step.guard} onChange={(guard: Predicate) => onUpdate({ ...step, guard })} />
+              <label className="detail-sublabel">When false</label>
+              <select
+                className="detail-select"
+                value={step.guardElse ?? "skip"}
+                onChange={(e) => updateField("guardElse", e.target.value as RecordedActionView["guardElse"])}
+              >
+                <option value="skip">Skip this step</option>
+                <option value="skipAccount">Skip the whole account</option>
+              </select>
+              <button className="tertiary-button" onClick={() => onUpdate({ ...step, guard: undefined, guardElse: undefined })}>
+                Remove guard
+              </button>
+            </>
+          ) : (
+            <button className="step-add-btn" onClick={() => onUpdate({ ...step, guard: { kind: "textVisible", text: "" } })}>
+              + Add condition
+            </button>
+          )}
+        </div>
+      ) : null}
+
       {/* Behavior / policy */}
-      {capabilities.canEditPolicies ? (
+      {!isIf && capabilities.canEditPolicies ? (
         <div className="detail-section">
           <label className="detail-label">Behavior</label>
           <div className="detail-grid two">

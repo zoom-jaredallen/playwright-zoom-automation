@@ -205,38 +205,61 @@ export function generateHealingCode(): string {
   }
 
   private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, timeout: number): Promise<import("playwright").Locator> {
-    // Feature 3: when an ordinal was recorded, target that match; otherwise the first.
+    const esc = (value: string) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
+
+    // Anchors: scope to a container (e.g. the row whose Name contains "michael.chen")
+    // before resolving the normal strategies. "within" is the primary path; other
+    // relationships approximate by scoping to the same container.
+    let scope: any = root;
+    if (selectors.anchor && (selectors.anchor.text || selectors.anchor.scopeRole)) {
+      const anchor = selectors.anchor;
+      let container: any = root.getByRole(anchor.scopeRole || "row");
+      if (anchor.text) {
+        container = container.filter({ hasText: new RegExp(esc(anchor.text), "i") });
+      }
+      scope = container.first();
+    }
+
+    // When an ordinal was recorded, target that match; otherwise the first.
     const pick = (base: import("playwright").Locator): import("playwright").Locator =>
       typeof selectors.nth === "number" ? base.nth(selectors.nth) : base.first();
 
     const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
 
     if (selectors.role) {
-      const { role, name } = selectors.role;
+      const { role, name, exact, checked, expanded, selected, pressed } = selectors.role;
+      const opts: any = {};
+      if (name) {
+        opts.name = exact ? name : new RegExp(esc(name), "i");
+        if (exact) opts.exact = true;
+      }
+      // ARIA-state constraints disambiguate e.g. the *checked* checkbox.
+      if (typeof checked === "boolean") opts.checked = checked;
+      if (typeof expanded === "boolean") opts.expanded = expanded;
+      if (typeof selected === "boolean") opts.selected = selected;
+      if (typeof pressed === "boolean") opts.pressed = pressed;
       strategies.push({
         name: \`role:\${role}[\${name ?? ""}]\`,
-        locator: () => pick(name
-          ? root.getByRole(role, { name: new RegExp(name.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") })
-          : root.getByRole(role))
+        locator: () => pick(scope.getByRole(role, opts))
       });
     }
     if (selectors.label) {
       strategies.push({
         name: \`label:\${selectors.label}\`,
-        locator: () => pick(root.getByLabel(new RegExp(selectors.label.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")))
+        locator: () => pick(scope.getByLabel(new RegExp(esc(selectors.label), "i")))
       });
     }
     if (selectors.text) {
       strategies.push({
         name: \`text:\${selectors.text}\`,
-        locator: () => pick(root.getByText(new RegExp(selectors.text.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i")))
+        locator: () => pick(scope.getByText(new RegExp(esc(selectors.text), "i")))
       });
     }
     if (selectors.testId) {
-      strategies.push({ name: \`testId:\${selectors.testId}\`, locator: () => pick(root.getByTestId(selectors.testId)) });
+      strategies.push({ name: \`testId:\${selectors.testId}\`, locator: () => pick(scope.getByTestId(selectors.testId)) });
     }
     if (selectors.css) {
-      strategies.push({ name: \`css:\${selectors.css}\`, locator: () => pick(root.locator(selectors.css)) });
+      strategies.push({ name: \`css:\${selectors.css}\`, locator: () => pick(scope.locator(selectors.css)) });
     }
 
     for (const strategy of strategies) {
@@ -344,6 +367,48 @@ export function generateHealingCode(): string {
       await page.waitForTimeout(250);
     }
     throw new Error("Expected a field value to contain " + expected);
+  }
+
+  /** Compound condition evaluation (IF/AND/OR/NOT) used by step guards and IF blocks. */
+  private async evalPredicate(page: Page, predicate: any): Promise<boolean> {
+    if (!predicate || predicate.kind === "always") return true;
+    const esc = (value: string) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
+    switch (predicate.kind) {
+      case "and": {
+        const results = await Promise.all((predicate.operands ?? []).map((p: any) => this.evalPredicate(page, p)));
+        return results.every(Boolean);
+      }
+      case "or": {
+        const results = await Promise.all((predicate.operands ?? []).map((p: any) => this.evalPredicate(page, p)));
+        return results.some(Boolean);
+      }
+      case "not":
+        return !(await this.evalPredicate(page, predicate.operand));
+      case "urlContains":
+        return page.url().includes(predicate.text ?? "");
+      case "textVisible":
+        return page.getByText(new RegExp(esc(predicate.text ?? ""), "i")).first().isVisible().catch(() => false);
+      case "elementVisible":
+        try {
+          const el = await this.findElement(page, predicate.selector, 3000);
+          return await el.isVisible();
+        } catch { return false; }
+      case "fieldEmpty":
+        try {
+          const el = await this.findElement(page, predicate.selector, 3000);
+          return (await el.inputValue().catch(() => "")).trim() === "";
+        } catch { return false; }
+      case "fieldValue":
+        try {
+          const el = await this.findElement(page, predicate.selector, 3000);
+          const value = await el.inputValue().catch(() => "");
+          if (predicate.equals !== undefined) return value === predicate.equals;
+          if (predicate.contains !== undefined) return value.includes(predicate.contains);
+          return value.trim() !== "";
+        } catch { return false; }
+      default:
+        return true;
+    }
   }
 `;
 }

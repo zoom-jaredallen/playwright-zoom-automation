@@ -1577,6 +1577,42 @@ td code {
 }
 .step-add-btn:hover { background: var(--fill-fill-subtler-neutral); }
 
+/* Selector confidence badge */
+.selector-confidence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-border-subtle-neutral);
+}
+.selector-confidence .confidence-dot { width: 10px; height: 10px; border-radius: 50%; }
+.selector-confidence .confidence-level { margin-left: auto; text-transform: uppercase; font-size: 10px; opacity: 0.7; }
+.confidence-high .confidence-dot { background: var(--text-text-success, #43a047); }
+.confidence-medium .confidence-dot { background: #f0a020; }
+.confidence-low .confidence-dot { background: var(--text-text-error, #e53935); }
+
+/* ARIA-state + anchor fields */
+.aria-state-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+
+/* Predicate editor */
+.predicate-node { border-left: 2px solid var(--border-border-subtle-neutral); padding-left: 8px; margin: 6px 0; }
+.predicate-row { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+.predicate-operands { display: flex; flex-direction: column; gap: 4px; }
+.predicate-operand { display: flex; gap: 6px; align-items: flex-start; }
+
+/* IF branches in the step list */
+.if-branches { border-left: 2px dashed var(--border-border-subtle-neutral); }
+.branch-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-text-subtle-neutral);
+  padding: 4px 0 2px 6px;
+}
+
 .detail-context {
   padding-top: 12px;
   border-top: 1px solid var(--border-border-subtle-neutral);

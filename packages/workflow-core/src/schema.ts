@@ -8,12 +8,31 @@ import type { RecordedWorkflow } from "./types.js";
 
 const selectorSchema = z
   .object({
-    role: z.object({ role: z.string(), name: z.string().optional() }).optional(),
+    role: z
+      .object({
+        role: z.string(),
+        name: z.string().optional(),
+        exact: z.boolean().optional(),
+        checked: z.boolean().optional(),
+        expanded: z.boolean().optional(),
+        selected: z.boolean().optional(),
+        pressed: z.boolean().optional()
+      })
+      .loose()
+      .optional(),
     label: z.string().optional(),
     text: z.string().optional(),
     testId: z.string().optional(),
     css: z.string().optional(),
-    nth: z.number().optional()
+    nth: z.number().optional(),
+    anchor: z
+      .object({
+        text: z.string().optional(),
+        scopeRole: z.string().optional(),
+        relationship: z.enum(["within", "near", "rightOf", "leftOf", "above", "below"]).optional()
+      })
+      .loose()
+      .optional()
   })
   .loose();
 
@@ -25,6 +44,20 @@ const conditionSchema = z
   })
   .loose();
 
+// Recursive predicate tree (shared by step guards and IF blocks).
+const predicateSchema: z.ZodType = z.lazy(() =>
+  z.union([
+    z.object({ kind: z.literal("always") }).loose(),
+    z.object({ kind: z.enum(["and", "or"]), operands: z.array(predicateSchema) }).loose(),
+    z.object({ kind: z.literal("not"), operand: predicateSchema }).loose(),
+    z.object({ kind: z.literal("textVisible"), text: z.string() }).loose(),
+    z.object({ kind: z.literal("elementVisible"), selector: selectorSchema }).loose(),
+    z.object({ kind: z.literal("fieldEmpty"), selector: selectorSchema }).loose(),
+    z.object({ kind: z.literal("fieldValue"), selector: selectorSchema, equals: z.string().optional(), contains: z.string().optional() }).loose(),
+    z.object({ kind: z.literal("urlContains"), text: z.string() }).loose()
+  ])
+);
+
 const parameterHintSchema = z
   .object({
     originalValue: z.string(),
@@ -34,13 +67,13 @@ const parameterHintSchema = z
   })
   .loose();
 
-const actionSchema = z
+const actionSchema: z.ZodType = z.lazy(() => z
   .object({
     id: z.string(),
     timestamp: z.number(),
     type: z.enum([
       "click", "fill", "select", "navigate", "upload", "wait",
-      "assert", "screenshot", "dismiss", "hover", "press", "download", "dialog"
+      "assert", "screenshot", "dismiss", "hover", "press", "download", "dialog", "if"
     ]),
     selectors: selectorSchema,
     value: z.string().optional(),
@@ -57,6 +90,8 @@ const actionSchema = z
     continueOnFailure: z.boolean().optional(),
     screenshotOnFailure: z.boolean().optional(),
     condition: conditionSchema.optional(),
+    guard: predicateSchema.optional(),
+    guardElse: z.enum(["skip", "skipAccount"]).optional(),
     screenshotLabel: z.string().optional(),
     waitMs: z.number().optional(),
     selectorNote: z.string().optional(),
@@ -73,9 +108,12 @@ const actionSchema = z
     waitForUrl: z.string().optional(),
     dialogAction: z.enum(["accept", "dismiss"]).optional(),
     dialogPromptText: z.string().optional(),
-    elementScreenshot: z.boolean().optional()
+    elementScreenshot: z.boolean().optional(),
+    ifCondition: predicateSchema.optional(),
+    thenActions: z.array(actionSchema).optional(),
+    elseActions: z.array(actionSchema).optional()
   })
-  .loose();
+  .loose());
 
 const parameterSchema = z
   .object({

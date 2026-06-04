@@ -1,16 +1,20 @@
-import { useRef, useState } from "react";
+import { Fragment, useState } from "react";
 import {
   calculateQualityReport,
   generateAssertions,
+  flattenActions,
   moveStep,
   deleteStep,
   insertStep,
+  insertIntoBranch,
   makeNavigationAction,
   makeAssertionAction,
   makeScreenshotAction,
   makeWaitAction,
   makeDialogAction,
+  makeIfBlock,
   sanitizeAction,
+  scoreSelector,
   WEB_UI_CAPABILITIES,
   type WorkflowEditorCapabilities
 } from "@zoom-automation/workflow-core";
@@ -21,80 +25,77 @@ interface WorkflowEditorProps {
   workflow: RecordedWorkflowView;
   onSave(workflow: RecordedWorkflowView): void;
   onClose(): void;
-  /** Open the duplicate dialog for this workflow. */
   onDuplicate?(): void;
-  /** Defaults to the Web UI capability set (no record / browser preflight). */
   capabilities?: WorkflowEditorCapabilities;
 }
 
-type AddableType = "navigate" | "assert" | "screenshot" | "wait" | "dialog";
+type AddableType = "navigate" | "assert" | "screenshot" | "wait" | "dialog" | "if";
+
+/** Recursively replace an action by id with a fully-updated object. */
+function replaceById(actions: RecordedActionView[], updated: RecordedActionView): RecordedActionView[] {
+  return actions.map((action) => {
+    if (action.id === updated.id) return updated;
+    if (action.type === "if") {
+      return {
+        ...action,
+        thenActions: action.thenActions ? replaceById(action.thenActions, updated) : action.thenActions,
+        elseActions: action.elseActions ? replaceById(action.elseActions, updated) : action.elseActions
+      };
+    }
+    return action;
+  });
+}
 
 export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabilities = WEB_UI_CAPABILITIES }: WorkflowEditorProps) {
   const [steps, setSteps] = useState<RecordedActionView[]>(workflow.actions);
+  const startUrl = workflow.meta.recordedOnUrl ?? "";
+  const flat = flattenActions(steps);
   const [selectedStepId, setSelectedStepId] = useState<string | undefined>(steps[0]?.id);
   const [name, setName] = useState(workflow.meta.name);
   const [dirty, setDirty] = useState(false);
-  const [dragIndex, setDragIndex] = useState<number | undefined>();
-  const [dragOverIndex, setDragOverIndex] = useState<number | undefined>();
-  const listRef = useRef<HTMLDivElement>(null);
 
-  const selectedStep = steps.find((s) => s.id === selectedStepId);
-  // Recompute quality live from the shared analysis so it matches the extension exactly.
+  const selectedStep = flat.find((s) => s.id === selectedStepId);
   const quality = computeQuality(steps);
+  const avgConfidence = averageConfidence(flat);
 
   const commit = (next: RecordedActionView[]) => {
     setSteps(next);
     setDirty(true);
   };
 
-  const handleDragStart = (index: number) => {
-    if (!capabilities.canReorder) return;
-    setDragIndex(index);
-  };
-
-  const handleDragOver = (event: React.DragEvent, index: number) => {
-    event.preventDefault();
-    setDragOverIndex(index);
-  };
-
-  const handleDrop = (index: number) => {
-    if (!capabilities.canReorder || dragIndex === undefined || dragIndex === index) {
-      setDragIndex(undefined);
-      setDragOverIndex(undefined);
-      return;
+  const makeStep = (type: AddableType): RecordedActionView => {
+    switch (type) {
+      case "navigate": return makeNavigationAction("");
+      case "assert": return makeAssertionAction("textVisible", "", startUrl);
+      case "screenshot": return makeScreenshotAction("evidence", startUrl);
+      case "dialog": return makeDialogAction("accept", undefined, startUrl);
+      case "if": return makeIfBlock();
+      default: return makeWaitAction(1_000, startUrl);
     }
-    const next = [...steps];
-    const [moved] = next.splice(dragIndex, 1);
-    next.splice(index, 0, moved);
-    commit(next);
-    setDragIndex(undefined);
-    setDragOverIndex(undefined);
+  };
+
+  const handleAddStep = (type: AddableType, afterId?: string) => {
+    const action = makeStep(type);
+    commit(insertStep(steps, action, afterId ?? null));
+    setSelectedStepId(action.id);
+  };
+
+  const handleAddToBranch = (ifId: string, branch: "then" | "else") => {
+    const action = makeWaitAction(1_000, startUrl);
+    commit(insertIntoBranch(steps, ifId, branch, action));
+    setSelectedStepId(action.id);
   };
 
   const handleDeleteStep = (stepId: string) => {
     const next = deleteStep(steps, stepId);
     if (selectedStepId === stepId) {
-      const removedIndex = steps.findIndex((s) => s.id === stepId);
-      setSelectedStepId(next[removedIndex]?.id ?? next[removedIndex - 1]?.id ?? next[0]?.id);
+      setSelectedStepId(flattenActions(next)[0]?.id);
     }
     commit(next);
   };
 
   const handleUpdateStep = (updated: RecordedActionView) => {
-    commit(steps.map((s) => (s.id === updated.id ? updated : s)));
-  };
-
-  const handleAddStep = (type: AddableType, afterId?: string) => {
-    const startUrl = workflow.meta.recordedOnUrl ?? "";
-    const action =
-      type === "navigate" ? makeNavigationAction("")
-      : type === "assert" ? makeAssertionAction("textVisible", "", startUrl)
-      : type === "screenshot" ? makeScreenshotAction("evidence", startUrl)
-      : type === "dialog" ? makeDialogAction("accept", undefined, startUrl)
-      : makeWaitAction(1_000, startUrl);
-    const next = insertStep(steps, action, afterId ?? null);
-    setSelectedStepId(action.id);
-    commit(next);
+    commit(replaceById(steps, updated));
   };
 
   const handleMove = (stepId: string, direction: "up" | "down") => {
@@ -102,18 +103,51 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
   };
 
   const handleSave = () => {
-    // Normalize URLs and drop type-stale fields so the saved workflow recompiles cleanly.
     const sanitized = steps.map(sanitizeAction);
     onSave({
       ...workflow,
       meta: { ...workflow.meta, name },
       actions: sanitized,
-      // Keep assertions + quality internally consistent with the edited steps.
       assertions: generateAssertions(sanitized),
       quality: computeQuality(sanitized)
     });
     setDirty(false);
   };
+
+  const renderRow = (step: RecordedActionView, depth: number) => (
+    <Fragment key={step.id}>
+      <div
+        className={`editor-step-item ${selectedStepId === step.id ? "active" : ""}`}
+        style={{ paddingLeft: 8 + depth * 18 }}
+        onClick={() => setSelectedStepId(step.id)}
+      >
+        <span className={`step-type-badge step-type-${step.type}`}>{step.type}</span>
+        <span className="step-description">{step.description ?? step.value ?? step.url ?? "—"}</span>
+        {capabilities.canEditSteps ? (
+          <div className="step-item-actions">
+            <button className="step-action-btn" title="Move up" onClick={(e) => { e.stopPropagation(); handleMove(step.id, "up"); }}>↑</button>
+            <button className="step-action-btn" title="Move down" onClick={(e) => { e.stopPropagation(); handleMove(step.id, "down"); }}>↓</button>
+            <button className="step-action-btn" title="Insert step after" onClick={(e) => { e.stopPropagation(); handleAddStep("wait", step.id); }}>+</button>
+            <button className="step-action-btn danger" title="Delete step" onClick={(e) => { e.stopPropagation(); handleDeleteStep(step.id); }}>×</button>
+          </div>
+        ) : null}
+      </div>
+      {step.type === "if" ? (
+        <div className="if-branches" style={{ marginLeft: 8 + depth * 18 }}>
+          <div className="branch-label">THEN</div>
+          {(step.thenActions ?? []).map((child) => renderRow(child, depth + 1))}
+          {capabilities.canEditSteps ? (
+            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "then")}>+ step in THEN</button>
+          ) : null}
+          <div className="branch-label">ELSE</div>
+          {(step.elseActions ?? []).map((child) => renderRow(child, depth + 1))}
+          {capabilities.canEditSteps ? (
+            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "else")}>+ step in ELSE</button>
+          ) : null}
+        </div>
+      ) : null}
+    </Fragment>
+  );
 
   return (
     <div className="workflow-editor">
@@ -128,27 +162,21 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
           />
         </div>
         <div className="editor-header-right">
-          <span className="editor-step-count">{steps.length} steps</span>
+          <span className="editor-step-count">{flat.length} steps</span>
           {dirty ? <span className="editor-dirty-badge">Unsaved</span> : null}
-          {onDuplicate ? (
-            <button className="tertiary-button" onClick={onDuplicate}>
-              Duplicate
-            </button>
-          ) : null}
-          <button className="primary-button" onClick={handleSave} disabled={!dirty}>
-            Save
-          </button>
+          {onDuplicate ? <button className="tertiary-button" onClick={onDuplicate}>Duplicate</button> : null}
+          <button className="primary-button" onClick={handleSave} disabled={!dirty}>Save</button>
         </div>
       </div>
 
       <div className="editor-body">
-        <div className="editor-step-list" ref={listRef}>
+        <div className="editor-step-list">
           <div className="workflow-quality-card">
             <div>
               <span className={`workflow-quality-score ${quality.score >= 80 ? "good" : quality.score >= 60 ? "warn" : "bad"}`}>{quality.score}</span>
               <strong>Workflow quality</strong>
             </div>
-            <small>{quality.selectorStability}% selectors · {quality.assertionCoverage}% assertions · {quality.evidenceCoverage}% evidence</small>
+            <small>{quality.selectorStability}% selectors · {quality.assertionCoverage}% assertions · {quality.evidenceCoverage}% evidence{avgConfidence !== undefined ? ` · ${avgConfidence} avg confidence` : ""}</small>
             {quality.warnings.length > 0 ? (
               <ul>
                 {quality.warnings.slice(0, 3).map((warning) => <li key={warning}>{warning}</li>)}
@@ -158,37 +186,8 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
           <div className="step-list-header">
             <span>Steps</span>
           </div>
-          {steps.map((step, index) => (
-            <div
-              key={step.id}
-              className={`editor-step-item ${selectedStepId === step.id ? "active" : ""} ${dragOverIndex === index ? "drag-over" : ""}`}
-              onClick={() => setSelectedStepId(step.id)}
-              draggable={capabilities.canReorder}
-              onDragStart={() => handleDragStart(index)}
-              onDragOver={(e) => handleDragOver(e, index)}
-              onDrop={() => handleDrop(index)}
-              onDragEnd={() => { setDragIndex(undefined); setDragOverIndex(undefined); }}
-            >
-              {capabilities.canReorder ? <span className="step-drag-handle" aria-label="Drag to reorder">⋮⋮</span> : null}
-              <span className="step-index">{index + 1}</span>
-              <span className={`step-type-badge step-type-${step.type}`}>{step.type}</span>
-              <span className="step-description">{step.description ?? step.value ?? step.url ?? "—"}</span>
-              {capabilities.canEditSteps ? (
-                <div className="step-item-actions">
-                  <button
-                    className="step-action-btn"
-                    onClick={(e) => { e.stopPropagation(); handleAddStep("wait", step.id); }}
-                    title="Insert step after"
-                  >+</button>
-                  <button
-                    className="step-action-btn danger"
-                    onClick={(e) => { e.stopPropagation(); handleDeleteStep(step.id); }}
-                    title="Delete step"
-                  >×</button>
-                </div>
-              ) : null}
-            </div>
-          ))}
+
+          {steps.map((step) => renderRow(step, 0))}
           {steps.length === 0 ? (
             <div className="editor-empty">No steps. Record a workflow in the Chrome extension to get started.</div>
           ) : null}
@@ -196,9 +195,9 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
           {capabilities.canEditSteps ? (
             <div className="step-add-toolbar" role="group" aria-label="Add a manual step">
               <span className="step-add-label">Add step:</span>
-              {(["navigate", "assert", "screenshot", "wait", "dialog"] as AddableType[]).map((type) => (
+              {(["navigate", "assert", "screenshot", "wait", "dialog", "if"] as AddableType[]).map((type) => (
                 <button key={type} className="step-add-btn" onClick={() => handleAddStep(type, selectedStepId)}>
-                  {type}
+                  {type === "if" ? "IF block" : type}
                 </button>
               ))}
             </div>
@@ -209,8 +208,8 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
           {selectedStep ? (
             <StepDetail
               step={selectedStep}
-              stepIndex={steps.indexOf(selectedStep)}
-              totalSteps={steps.length}
+              stepIndex={flat.indexOf(selectedStep)}
+              totalSteps={flat.length}
               capabilities={capabilities}
               onUpdate={handleUpdateStep}
               onDelete={() => handleDeleteStep(selectedStep.id)}
@@ -228,4 +227,13 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
 
 function computeQuality(steps: RecordedActionView[]) {
   return calculateQualityReport(steps, generateAssertions(steps));
+}
+
+/** Average static selector confidence across steps that have selectors. */
+function averageConfidence(flat: RecordedActionView[]): number | undefined {
+  const scored = flat
+    .filter((s) => !["navigate", "wait", "dialog", "if", "screenshot", "dismiss"].includes(s.type))
+    .map((s) => scoreSelector(s.selectors).score);
+  if (scored.length === 0) return undefined;
+  return Math.round(scored.reduce((a, b) => a + b, 0) / scored.length);
 }

@@ -17,17 +17,57 @@ export type ActionType =
   | "hover"
   | "press"
   | "download"
-  | "dialog";
+  | "dialog"
+  | "if";
+
+/** How an anchor relates the scope to the target element. "within" is the common case. */
+export type AnchorRelationship = "within" | "near" | "rightOf" | "leftOf" | "above" | "below";
 
 export interface SelectorStrategy {
-  role?: { role: string; name?: string };
+  role?: {
+    role: string;
+    name?: string;
+    /** Require an exact accessible-name match instead of substring. */
+    exact?: boolean;
+    /** ARIA-state constraints, compiled to getByRole(role, { checked, ... }). */
+    checked?: boolean;
+    expanded?: boolean;
+    selected?: boolean;
+    pressed?: boolean;
+  };
   label?: string;
   text?: string;
   testId?: string;
   css?: string;
   /** 0-based index disambiguating which match to use when several match. */
   nth?: number;
+  /**
+   * Anchor / relative match: scope the target to a container identified by anchor
+   * text (e.g. the table row whose Name contains "michael.chen"), then resolve the
+   * normal strategies within/near that scope.
+   */
+  anchor?: {
+    text?: string;
+    /** Container role to scope to. Defaults to "row". */
+    scopeRole?: string;
+    relationship?: AnchorRelationship;
+  };
 }
+
+/**
+ * A boolean condition tree, shared by per-step guards and IF/ELSE blocks. Leaf
+ * predicates are evaluated against the live page (Playwright) or DOM (preflight).
+ */
+export type Predicate =
+  | { kind: "always" }
+  | { kind: "and"; operands: Predicate[] }
+  | { kind: "or"; operands: Predicate[] }
+  | { kind: "not"; operand: Predicate }
+  | { kind: "textVisible"; text: string }
+  | { kind: "elementVisible"; selector: SelectorStrategy }
+  | { kind: "fieldEmpty"; selector: SelectorStrategy }
+  | { kind: "fieldValue"; selector: SelectorStrategy; equals?: string; contains?: string }
+  | { kind: "urlContains"; text: string };
 
 export type AssertionType =
   | "textVisible"
@@ -70,6 +110,10 @@ export interface RecordedAction {
   continueOnFailure?: boolean;
   screenshotOnFailure?: boolean;
   condition?: StepCondition;
+  /** Compound predicate guard. When set, the step runs only if it evaluates true. */
+  guard?: Predicate;
+  /** What to do when `guard` is false: skip just this step (default) or the whole account. */
+  guardElse?: "skip" | "skipAccount";
   screenshotLabel?: string;
   waitMs?: number;
   selectorNote?: string;
@@ -93,6 +137,13 @@ export interface RecordedAction {
   dialogPromptText?: string;
   /** When true, a screenshot action is scoped to the matched element via locator.screenshot(). */
   elementScreenshot?: boolean;
+  // ─── Control flow (type === "if") ───────────────────────────────────────────
+  /** Condition for an IF block. */
+  ifCondition?: Predicate;
+  /** Steps run when ifCondition is true. */
+  thenActions?: RecordedAction[];
+  /** Steps run when ifCondition is false. */
+  elseActions?: RecordedAction[];
 }
 
 export interface WorkflowParameter {

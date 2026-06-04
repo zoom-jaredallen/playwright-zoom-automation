@@ -3,7 +3,7 @@
  * Runs on all zoom.us pages. Only actively records when told to by the
  * background service worker.
  */
-import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth } from "../shared/selectors.js";
+import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth, computeAnchor } from "../shared/selectors.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, SelectorTestResult } from "../shared/types.js";
 
@@ -453,6 +453,15 @@ function recordAction(
     }
   }
 
+  // Anchors: when the target is inside one of several rows, capture a row anchor
+  // (e.g. "the row containing michael.chen@…") — a robust alternative to nth.
+  if (targetElement && partial.selectors && !partial.selectors.anchor) {
+    const anchor = computeAnchor(targetElement);
+    if (anchor) {
+      partial.selectors = { ...partial.selectors, anchor };
+    }
+  }
+
   const action: RecordedAction = {
     id: generateId(),
     timestamp: Date.now(),
@@ -605,6 +614,8 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
         return { ok: true, skipped: true, message: "Download steps are verified by the backend Playwright runner, not the preflight." };
       case "dialog":
         return { ok: true, skipped: true, message: "Native dialog handling is verified by the backend Playwright runner." };
+      case "if":
+        return { ok: true, skipped: true, message: "IF blocks are evaluated by the backend Playwright runner, not the preflight." };
       case "navigate":
       case "screenshot":
         return { ok: true };
@@ -617,6 +628,14 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
 }
 
 async function evaluatePreflightCondition(action: RecordedAction): Promise<{ skip: boolean; message?: string }> {
+  // Compound predicate guard (mirrors the backend evalPredicate against the DOM).
+  if (action.guard && !(await evalPredicateDom(action.guard))) {
+    return {
+      skip: true,
+      message: action.guardElse === "skipAccount" ? "Guard not satisfied; skip account" : "Guard not satisfied"
+    };
+  }
+
   const condition = action.condition;
   if (!condition || condition.type === "none") {
     return { skip: false };
@@ -651,6 +670,41 @@ async function evaluatePreflightCondition(action: RecordedAction): Promise<{ ski
   }
 
   return { skip: false };
+}
+
+/** DOM mirror of the backend evalPredicate, for preflight guard evaluation. */
+async function evalPredicateDom(predicate: any): Promise<boolean> {
+  if (!predicate || predicate.kind === "always") return true;
+  const sel = (selectors: SelectorStrategy) => findReplayElementSync({ selectors } as RecordedAction);
+  switch (predicate.kind) {
+    case "and":
+      return (await Promise.all((predicate.operands ?? []).map(evalPredicateDom))).every(Boolean);
+    case "or":
+      return (await Promise.all((predicate.operands ?? []).map(evalPredicateDom))).some(Boolean);
+    case "not":
+      return !(await evalPredicateDom(predicate.operand));
+    case "urlContains":
+      return window.location.href.includes(predicate.text ?? "");
+    case "textVisible":
+      return visibleText(document.body).toLowerCase().includes(String(predicate.text ?? "").toLowerCase());
+    case "elementVisible": {
+      const el = sel(predicate.selector);
+      return Boolean(el && isElementVisible(el));
+    }
+    case "fieldEmpty": {
+      const el = sel(predicate.selector);
+      return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value.trim() === "" : false;
+    }
+    case "fieldValue": {
+      const el = sel(predicate.selector);
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+      if (predicate.equals !== undefined) return el.value === predicate.equals;
+      if (predicate.contains !== undefined) return el.value.includes(predicate.contains);
+      return el.value.trim() !== "";
+    }
+    default:
+      return true;
+  }
 }
 
 async function testSelector(action: RecordedAction): Promise<SelectorTestResult> {
@@ -732,8 +786,41 @@ async function findReplayElement(action: RecordedAction): Promise<Element> {
   throw new Error(`Could not find element for ${action.description ?? action.type}`);
 }
 
+function resolveAnchorRoot(selectors: SelectorStrategy): Element | undefined {
+  const anchor = selectors.anchor;
+  if (!anchor?.text) return undefined;
+  const rowSelector = anchor.scopeRole === "listitem" ? "li, [role='listitem']" : "tr, [role='row']";
+  return Array.from(document.querySelectorAll(rowSelector)).find(
+    (row) => isElementVisible(row) && visibleText(row).toLowerCase().includes(anchor.text!.toLowerCase())
+  );
+}
+
 function findReplayElementSync(action: RecordedAction): Element | undefined {
   const selectors = action.selectors;
+
+  // Anchor: scope the search to the matching row before falling back to the page.
+  const anchorRoot = resolveAnchorRoot(selectors);
+  if (anchorRoot) {
+    if (selectors.testId) {
+      const el = anchorRoot.querySelector(`[data-testid="${cssEscape(selectors.testId)}"]`);
+      if (el && isElementVisible(el)) return el;
+    }
+    if (selectors.css) {
+      const el = anchorRoot.querySelector(selectors.css);
+      if (el && isElementVisible(el)) return el;
+    }
+    if (selectors.role) {
+      const el = findByRole(selectors.role.role, selectors.role.name, anchorRoot);
+      if (el) return el;
+    }
+    if (selectors.text) {
+      const el = Array.from(anchorRoot.querySelectorAll("*")).find(
+        (e) => isElementVisible(e) && visibleText(e).toLowerCase().includes(selectors.text!.toLowerCase())
+      );
+      if (el) return el;
+    }
+  }
+
   if (selectors.css) {
     const element = document.querySelector(selectors.css);
     if (element && isElementVisible(element)) return element;
@@ -828,7 +915,7 @@ function findByLabel(labelText: string): Element | undefined {
   return aria.find((element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? "").toLowerCase().includes(labelText.toLowerCase()) && isElementVisible(element));
 }
 
-function findByRole(role: string, name?: string): Element | undefined {
+function findByRole(role: string, name?: string, root: ParentNode = document): Element | undefined {
   const selectors = role === "button"
     ? "button, [role='button'], input[type='button'], input[type='submit']"
     : role === "textbox"
@@ -836,7 +923,7 @@ function findByRole(role: string, name?: string): Element | undefined {
       : role === "checkbox"
         ? "input[type='checkbox'], [role='checkbox'], [class*='checkbox']"
         : `[role='${role}']`;
-  const elements = Array.from(document.querySelectorAll(selectors));
+  const elements = Array.from(root.querySelectorAll(selectors));
   return elements.find((element) => {
     if (!isElementVisible(element)) return false;
     if (!name) return true;

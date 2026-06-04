@@ -12,7 +12,7 @@ import {
   calculateQualityReport,
   replaceWithPlaceholders
 } from "./analysis.js";
-import type { AssertionType, OnFailure, RecordedAction, RecordedWorkflow, StepCondition } from "./types.js";
+import type { AssertionType, OnFailure, Predicate, RecordedAction, RecordedWorkflow, StepCondition } from "./types.js";
 
 // ─── ID + URL helpers ───────────────────────────────────────────────────────────
 
@@ -120,39 +120,90 @@ export function makeDialogAction(
   };
 }
 
-// ─── Array operations ─────────────────────────────────────────────────────────
+// ─── Control flow (IF blocks) ───────────────────────────────────────────────────
 
-export function insertStep(actions: RecordedAction[], action: RecordedAction, insertAfterActionId?: string | null): RecordedAction[] {
-  const next = [...actions];
-  if (insertAfterActionId === null) {
-    next.unshift(action);
-    return next;
-  }
-  if (insertAfterActionId) {
-    const index = next.findIndex((candidate) => candidate.id === insertAfterActionId);
-    if (index >= 0) {
-      next.splice(index + 1, 0, action);
-      return next;
+/** Create an empty IF block with the given condition (defaults to always-true). */
+export function makeIfBlock(condition?: Predicate): RecordedAction {
+  return {
+    id: createManualActionId("if"),
+    timestamp: Date.now(),
+    type: "if",
+    selectors: {},
+    ifCondition: condition ?? { kind: "always" },
+    thenActions: [],
+    elseActions: [],
+    pageUrl: "",
+    pageTitle: "Conditional block",
+    description: "IF block"
+  };
+}
+
+/** Depth-first flatten of an action tree (descends into IF then/else branches). */
+export function flattenActions(actions: RecordedAction[]): RecordedAction[] {
+  const out: RecordedAction[] = [];
+  for (const action of actions) {
+    out.push(action);
+    if (action.type === "if") {
+      if (action.thenActions) out.push(...flattenActions(action.thenActions));
+      if (action.elseActions) out.push(...flattenActions(action.elseActions));
     }
   }
-  next.push(action);
-  return next;
+  return out;
+}
+
+/** Recurse into an IF node's branches, applying `fn` to each branch array. */
+function mapBranches(action: RecordedAction, fn: (actions: RecordedAction[]) => RecordedAction[]): RecordedAction {
+  if (action.type !== "if") return action;
+  return {
+    ...action,
+    thenActions: action.thenActions ? fn(action.thenActions) : action.thenActions,
+    elseActions: action.elseActions ? fn(action.elseActions) : action.elseActions
+  };
+}
+
+// ─── Array operations (recursive — operate on an id anywhere in the tree) ───────
+
+export function insertStep(actions: RecordedAction[], action: RecordedAction, insertAfterActionId?: string | null): RecordedAction[] {
+  if (insertAfterActionId === null) return [action, ...actions];
+  if (insertAfterActionId === undefined) return [...actions, action];
+
+  const index = actions.findIndex((candidate) => candidate.id === insertAfterActionId);
+  if (index >= 0) {
+    const next = [...actions];
+    next.splice(index + 1, 0, action);
+    return next;
+  }
+  return actions.map((candidate) => mapBranches(candidate, (branch) => insertStep(branch, action, insertAfterActionId)));
+}
+
+/** Append a step into a specific branch of an IF block (used by the editor's "add to branch"). */
+export function insertIntoBranch(actions: RecordedAction[], ifId: string, branch: "then" | "else", action: RecordedAction): RecordedAction[] {
+  return actions.map((candidate) => {
+    if (candidate.id === ifId && candidate.type === "if") {
+      const key = branch === "then" ? "thenActions" : "elseActions";
+      return { ...candidate, [key]: [...(candidate[key] ?? []), action] };
+    }
+    return mapBranches(candidate, (children) => insertIntoBranch(children, ifId, branch, action));
+  });
 }
 
 export function moveStep(actions: RecordedAction[], actionId: string, direction: "up" | "down"): RecordedAction[] {
   const currentIndex = actions.findIndex((action) => action.id === actionId);
-  if (currentIndex === -1) return actions;
-  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-  if (nextIndex < 0 || nextIndex >= actions.length) return actions;
-
-  const next = [...actions];
-  const [action] = next.splice(currentIndex, 1);
-  next.splice(nextIndex, 0, action);
-  return next;
+  if (currentIndex !== -1) {
+    const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (nextIndex < 0 || nextIndex >= actions.length) return actions;
+    const next = [...actions];
+    const [action] = next.splice(currentIndex, 1);
+    next.splice(nextIndex, 0, action);
+    return next;
+  }
+  return actions.map((candidate) => mapBranches(candidate, (branch) => moveStep(branch, actionId, direction)));
 }
 
 export function deleteStep(actions: RecordedAction[], actionId: string): RecordedAction[] {
-  return actions.filter((action) => action.id !== actionId);
+  return actions
+    .filter((action) => action.id !== actionId)
+    .map((action) => mapBranches(action, (branch) => deleteStep(branch, actionId)));
 }
 
 export interface StepUpdate {
@@ -261,7 +312,31 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
 }
 
 export function updateStep(actions: RecordedAction[], actionId: string, update: StepUpdate): RecordedAction[] {
-  return actions.map((action) => (action.id === actionId ? applyStepUpdate(action, update) : action));
+  return actions.map((action) => {
+    if (action.id === actionId) return applyStepUpdate(action, update);
+    return mapBranches(action, (branch) => updateStep(branch, actionId, update));
+  });
+}
+
+/** Set the IF condition predicate on an `if` block (anywhere in the tree). */
+export function setIfCondition(actions: RecordedAction[], ifId: string, condition: Predicate): RecordedAction[] {
+  return actions.map((action) => {
+    if (action.id === ifId && action.type === "if") return { ...action, ifCondition: condition };
+    return mapBranches(action, (branch) => setIfCondition(branch, ifId, condition));
+  });
+}
+
+/** Set a step's compound guard predicate (anywhere in the tree). */
+export function setStepGuard(
+  actions: RecordedAction[],
+  actionId: string,
+  guard: Predicate | undefined,
+  guardElse?: RecordedAction["guardElse"]
+): RecordedAction[] {
+  return actions.map((action) => {
+    if (action.id === actionId) return { ...action, guard, guardElse: guard ? guardElse ?? action.guardElse : undefined };
+    return mapBranches(action, (branch) => setStepGuard(branch, actionId, guard, guardElse));
+  });
 }
 
 /**
@@ -296,6 +371,16 @@ export function sanitizeAction(action: RecordedAction): RecordedAction {
     delete next.elementScreenshot;
   }
   if (next.type !== "click") delete next.networkWaitUrl;
+
+  if (next.type === "if") {
+    // Keep control-flow fields; sanitize nested branches recursively.
+    next.thenActions = next.thenActions?.map(sanitizeAction);
+    next.elseActions = next.elseActions?.map(sanitizeAction);
+  } else {
+    delete next.ifCondition;
+    delete next.thenActions;
+    delete next.elseActions;
+  }
 
   return next;
 }
@@ -334,10 +419,7 @@ export function buildWorkflow(input: BuildWorkflowInput): RecordedWorkflow {
   const assertions = generateAssertions(actions);
   const startUrl = extractRelativeStartUrl(recordingStartUrl);
 
-  const workflowActions = actions.map((action) => ({
-    ...action,
-    value: replaceWithPlaceholders(action)
-  }));
+  const workflowActions = actions.map(applyPlaceholdersDeep);
 
   return {
     version: 1,
@@ -360,6 +442,16 @@ export function buildWorkflow(input: BuildWorkflowInput): RecordedWorkflow {
     },
     quality: calculateQualityReport(workflowActions, assertions)
   };
+}
+
+/** Replace confirmed parameter values with placeholders, recursing into IF branches. */
+function applyPlaceholdersDeep(action: RecordedAction): RecordedAction {
+  const next = { ...action, value: replaceWithPlaceholders(action) };
+  if (next.type === "if") {
+    next.thenActions = next.thenActions?.map(applyPlaceholdersDeep);
+    next.elseActions = next.elseActions?.map(applyPlaceholdersDeep);
+  }
+  return next;
 }
 
 export function extractRelativeStartUrl(fullUrl: string): string {

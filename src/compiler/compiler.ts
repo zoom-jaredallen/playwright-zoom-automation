@@ -325,6 +325,19 @@ ${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
       core = `${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       break;
 
+    case "if": {
+      // Control flow: run thenActions when the predicate holds, else elseActions.
+      const cond = JSON.stringify(action.ifCondition ?? { kind: "always" });
+      const thenCode = (action.thenActions ?? []).map((child, i) => generateActionCode(child, i, workflow)).join("\n\n");
+      const elseChildren = action.elseActions ?? [];
+      const elseCode = elseChildren.map((child, i) => generateActionCode(child, i, workflow)).join("\n\n");
+      const elseBlock = elseChildren.length > 0 ? ` else {\n${elseCode}\n${indent}}` : "";
+      return `${stepComment}
+${indent}if (await this.evalPredicate(page, ${cond})) {
+${thenCode}
+${indent}}${elseBlock}`;
+    }
+
     default:
       core = `${coreIndent}// TODO: Implement ${action.type} action`;
       break;
@@ -356,14 +369,30 @@ function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: 
   });
   const description = JSON.stringify(action.description ?? action.type);
 
+  // Phase 4: compound predicate guard. Only emitted when a guard is present.
+  // The skip-account decision is resolved at compile time to avoid a dead
+  // literal comparison in the generated code.
+  const accountSkip = action.guardElse === "skipAccount"
+    ? `
+${indent}  if (!guardOk) {
+${indent}    this.options.logger.info("Step guard not satisfied; skipping account", { step: ${description} });
+${indent}    return { status: "skipped", message: "Guard not satisfied" };
+${indent}  }`
+    : "";
+  const guardBlock = action.guard
+    ? `
+${indent}  const guardOk = await this.evalPredicate(page, ${JSON.stringify(action.guard)});${accountSkip}`
+    : "";
+  const guardCondition = action.guard ? " && guardOk" : "";
+
   return `${stepComment}
 ${indent}{
 ${indent}  const skip = await this.shouldSkipRecordedStep(page, ${condition}, ${selectors});
 ${indent}  if (skip === "account") {
 ${indent}    this.options.logger.info("Recorded workflow skip condition matched", { step: ${description} });
 ${indent}    return { status: "skipped", message: "Skip condition matched" };
-${indent}  }
-${indent}  if (skip !== "step") {
+${indent}  }${guardBlock}
+${indent}  if (skip !== "step"${guardCondition}) {
 ${indent}    await this.executeRecordedStep(page, artifactBase, ${description}, ${policy}, async () => {
 ${core}
 ${indent}    });

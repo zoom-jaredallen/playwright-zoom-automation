@@ -17,6 +17,11 @@ import {
   sanitizeAction,
   setParameterConfirmed,
   updateStep,
+  scoreSelector,
+  makeIfBlock,
+  insertIntoBranch,
+  flattenActions,
+  setStepGuard,
   type RecordedAction
 } from "@zoom-automation/workflow-core";
 
@@ -158,6 +163,66 @@ describe("model — sanitizeAction", () => {
   });
 });
 
+describe("confidence — scoreSelector", () => {
+  it("rates a test id as high and css-only as low", () => {
+    expect(scoreSelector({ testId: "save-btn" }).level).toBe("high");
+    expect(scoreSelector({ css: ".btn > span" }).level).toBe("low");
+  });
+
+  it("penalizes nth and rewards anchors", () => {
+    const withNth = scoreSelector({ role: { role: "button", name: "Save" }, nth: 3 }).score;
+    const withAnchor = scoreSelector({ role: { role: "button", name: "Save" }, anchor: { text: "michael.chen", scopeRole: "row" } }).score;
+    const plain = scoreSelector({ role: { role: "button", name: "Save" } }).score;
+    expect(withNth).toBeLessThan(plain);
+    expect(withAnchor).toBeGreaterThan(plain);
+  });
+
+  it("returns low with a reason when nothing was captured", () => {
+    const result = scoreSelector({});
+    expect(result.level).toBe("low");
+    expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+describe("model — IF blocks (recursive)", () => {
+  function tree(): RecordedAction[] {
+    const ifBlock = makeIfBlock({ kind: "textVisible", text: "Pending" });
+    ifBlock.id = "if1";
+    ifBlock.thenActions = [action("t1", { description: "then-1" })];
+    ifBlock.elseActions = [action("e1", { description: "else-1" })];
+    return [action("a"), ifBlock, action("b")];
+  }
+
+  it("flattens depth-first through then/else branches", () => {
+    expect(flattenActions(tree()).map((s) => s.id)).toEqual(["a", "if1", "t1", "e1", "b"]);
+  });
+
+  it("inserts a step into a specific branch", () => {
+    const next = insertIntoBranch(tree(), "if1", "then", action("t2", { description: "then-2" }));
+    const ifNode = next.find((s) => s.id === "if1");
+    expect(ifNode?.thenActions?.map((s) => s.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("deletes, moves, and updates a nested step by id", () => {
+    let next = updateStep(tree(), "t1", { description: "renamed" });
+    expect(next.find((s) => s.id === "if1")?.thenActions?.[0].description).toBe("renamed");
+
+    const withTwo = insertIntoBranch(next, "if1", "then", action("t2"));
+    next = moveStep(withTwo, "t2", "up");
+    expect(next.find((s) => s.id === "if1")?.thenActions?.map((s) => s.id)).toEqual(["t2", "t1"]);
+
+    next = deleteStep(next, "t1");
+    expect(next.find((s) => s.id === "if1")?.thenActions?.map((s) => s.id)).toEqual(["t2"]);
+  });
+
+  it("sets a step guard anywhere in the tree", () => {
+    const next = setStepGuard(tree(), "e1", { kind: "urlContains", text: "#/x" }, "skipAccount");
+    const guarded = flattenActions(next).find((s) => s.id === "e1");
+    expect(guarded?.guard).toEqual({ kind: "urlContains", text: "#/x" });
+    expect(guarded?.guardElse).toBe("skipAccount");
+  });
+});
+
 describe("schema — validation", () => {
   const valid = {
     version: 1,
@@ -182,5 +247,20 @@ describe("schema — validation", () => {
     const result = safeParseWorkflow({ nope: true });
     expect(result.success).toBe(false);
     if (!result.success) expect(result.error).toContain("Invalid workflow");
+  });
+
+  it("accepts a nested IF block with a compound predicate", () => {
+    const ifAction = {
+      id: "if1", timestamp: 1, type: "if", selectors: {}, pageUrl: "u", pageTitle: "t",
+      ifCondition: { kind: "and", operands: [{ kind: "textVisible", text: "Pending" }, { kind: "urlContains", text: "#/x" }] },
+      thenActions: [{ id: "t1", timestamp: 2, type: "click", selectors: { role: { role: "button", name: "Save" } }, pageUrl: "u", pageTitle: "t" }],
+      elseActions: []
+    };
+    expect(safeParseWorkflow({ ...valid, actions: [ifAction] }).success).toBe(true);
+  });
+
+  it("rejects a malformed predicate", () => {
+    const bad = { ...valid, actions: [{ ...valid.actions[0], guard: { kind: "and" } }] }; // missing operands
+    expect(safeParseWorkflow(bad).success).toBe(false);
   });
 });

@@ -426,6 +426,45 @@ export function getFieldContext(element: Element): {
   };
 }
 
+// ─── Anchors: relative selectors for table/list rows ─────────────────────────
+
+/**
+ * When the target sits inside one of several sibling rows/list-items, infer an
+ * anchor: the container role + a distinctive text (email or name) so the compiled
+ * flow can scope to "the row containing X". Returns undefined when there's no
+ * ambiguity (single row) or no distinctive text.
+ */
+export function computeAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const container = element.closest('tr, [role="row"], li, [role="listitem"]');
+  if (!container) return undefined;
+
+  // Only anchor when there are sibling rows — otherwise there's nothing to disambiguate.
+  const siblings = container.parentElement
+    ? Array.from(container.parentElement.children).filter((c) => c.matches('tr, [role="row"], li, [role="listitem"]'))
+    : [];
+  if (siblings.length < 2) return undefined;
+
+  const scopeRole = container.tagName === "TR" || container.getAttribute("role") === "row" ? "row" : "listitem";
+  const text = pickAnchorText(container, element);
+  if (!text) return undefined;
+  return { scopeRole, text, relationship: "within" };
+}
+
+function pickAnchorText(container: Element, target: Element): string | undefined {
+  const targetCell = target.closest("td, th, [role='gridcell'], [role='cell']");
+  const cells = Array.from(container.querySelectorAll("td, th, [role='gridcell'], [role='cell']"));
+  const texts = (cells.length > 0 ? cells : Array.from(container.children))
+    .filter((cell) => cell !== targetCell && !cell.contains(target))
+    .map((cell) => cell.textContent?.replace(/\s+/g, " ").trim() ?? "")
+    .filter((t) => t.length > 1 && t.length < 60);
+
+  const email = texts.find((t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t));
+  if (email) return email;
+  const name = texts.find((t) => /^[A-Z][a-z]+(\s+[A-Z][a-z.]+)+$/.test(t));
+  if (name) return name;
+  return texts.find(Boolean);
+}
+
 // ─── Feature 5: ARIA state capture (idempotent toggles) ──────────────────────
 
 /**
