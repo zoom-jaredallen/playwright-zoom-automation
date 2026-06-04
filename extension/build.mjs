@@ -65,6 +65,7 @@ async function build() {
 
     // Copy static files to dist
     cpSync("manifest.json", `${outdir}/manifest.json`);
+    cpSync("shared/prism-tokens.css", `${outdir}/prism-tokens.css`);
     cpSync("popup/popup.html", `${outdir}/popup/popup.html`);
     cpSync("popup/popup.css", `${outdir}/popup/popup.css`);
     mkdirSync(`${outdir}/sidepanel`, { recursive: true });

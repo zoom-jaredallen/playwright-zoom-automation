@@ -134,15 +134,15 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
       </div>
       {step.type === "if" ? (
         <div className="if-branches" style={{ marginLeft: 8 + depth * 18 }}>
-          <div className="branch-label">THEN</div>
+          <div className="branch-label">Then</div>
           {(step.thenActions ?? []).map((child) => renderRow(child, depth + 1))}
           {capabilities.canEditSteps ? (
-            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "then")}>+ step in THEN</button>
+            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "then")}>+ step in Then</button>
           ) : null}
-          <div className="branch-label">ELSE</div>
+          <div className="branch-label">Else</div>
           {(step.elseActions ?? []).map((child) => renderRow(child, depth + 1))}
           {capabilities.canEditSteps ? (
-            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "else")}>+ step in ELSE</button>
+            <button className="step-add-btn" onClick={() => handleAddToBranch(step.id, "else")}>+ step in Else</button>
           ) : null}
         </div>
       ) : null}
@@ -197,7 +197,7 @@ export function WorkflowEditor({ workflow, onSave, onClose, onDuplicate, capabil
               <span className="step-add-label">Add step:</span>
               {(["navigate", "assert", "screenshot", "wait", "dialog", "if"] as AddableType[]).map((type) => (
                 <button key={type} className="step-add-btn" onClick={() => handleAddStep(type, selectedStepId)}>
-                  {type === "if" ? "IF block" : type}
+                  {type === "if" ? "If block" : type}
                 </button>
               ))}
             </div>

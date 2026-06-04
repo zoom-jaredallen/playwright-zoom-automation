@@ -113,8 +113,8 @@ export function StepDetail({
       {/* IF block condition */}
       {isIf ? (
         <div className="detail-section">
-          <label className="detail-label">IF condition</label>
-          <small className="detail-hint">Steps in the THEN branch run when this is true; ELSE runs otherwise.</small>
+          <label className="detail-label">If condition</label>
+          <small className="detail-hint">Steps in the Then branch run when this is true; Else runs otherwise.</small>
           <PredicateEditor
             value={step.ifCondition ?? { kind: "always" }}
             onChange={(ifCondition) => onUpdate({ ...step, ifCondition })}
