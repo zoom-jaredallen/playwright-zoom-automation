@@ -74,6 +74,60 @@ export function makeAssertionAction(
   };
 }
 
+export function makeClickAction(startUrl = ""): RecordedAction {
+  return {
+    id: createManualActionId("click"),
+    timestamp: Date.now(),
+    type: "click",
+    selectors: {},
+    pageUrl: startUrl,
+    pageTitle: "Manual click",
+    description: "Click element"
+  };
+}
+
+export function makeFillAction(value = "", startUrl = ""): RecordedAction {
+  const normalizedValue = value.trim();
+  return {
+    id: createManualActionId("fill"),
+    timestamp: Date.now(),
+    type: "fill",
+    selectors: {},
+    value: normalizedValue,
+    pageUrl: startUrl,
+    pageTitle: "Manual text entry",
+    description: normalizedValue ? `Enter text: ${normalizedValue}` : "Enter text"
+  };
+}
+
+export function makeSelectAction(value = "", startUrl = ""): RecordedAction {
+  const normalizedValue = value.trim();
+  return {
+    id: createManualActionId("select"),
+    timestamp: Date.now(),
+    type: "select",
+    selectors: {},
+    value: normalizedValue,
+    pageUrl: startUrl,
+    pageTitle: "Manual option selection",
+    description: normalizedValue ? `Select option: ${normalizedValue}` : "Select option"
+  };
+}
+
+export function makePressAction(key = "Enter", startUrl = ""): RecordedAction {
+  const normalizedKey = key.trim() || "Enter";
+  return {
+    id: createManualActionId("press"),
+    timestamp: Date.now(),
+    type: "press",
+    selectors: {},
+    key: normalizedKey,
+    pageUrl: startUrl,
+    pageTitle: "Manual key press",
+    description: `Press ${normalizedKey}`
+  };
+}
+
 export function makeScreenshotAction(label?: string, startUrl = ""): RecordedAction {
   const normalizedLabel = label?.trim() || "evidence";
   return {
@@ -99,6 +153,18 @@ export function makeWaitAction(waitMs: number, startUrl = ""): RecordedAction {
     pageUrl: startUrl,
     pageTitle: "Manual wait",
     description: `Wait ${normalizedWaitMs}ms`
+  };
+}
+
+export function makeDismissAction(startUrl = ""): RecordedAction {
+  return {
+    id: createManualActionId("dismiss"),
+    timestamp: Date.now(),
+    type: "dismiss",
+    selectors: {},
+    pageUrl: startUrl,
+    pageTitle: "Manual popup dismissal",
+    description: "Dismiss blocking Zoom popup"
   };
 }
 
@@ -208,8 +274,10 @@ export function deleteStep(actions: RecordedAction[], actionId: string): Recorde
 
 export interface StepUpdate {
   description?: string;
+  selectors?: RecordedAction["selectors"];
   cssSelector?: string;
   selectorNote?: string;
+  frameSelector?: string;
   url?: string;
   assertionType?: RecordedAction["assertionType"];
   expected?: string;
@@ -222,6 +290,7 @@ export interface StepUpdate {
   condition?: StepCondition;
   screenshotLabel?: string;
   waitMs?: number;
+  value?: string;
   networkWaitUrl?: string;
   waitForUrl?: string;
   key?: string;
@@ -240,6 +309,9 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   if (update.description !== undefined) {
     action.description = update.description;
   }
+  if (update.selectors !== undefined) {
+    action.selectors = { ...update.selectors };
+  }
   if (update.cssSelector !== undefined) {
     const cssSelector = update.cssSelector.trim();
     if (cssSelector) {
@@ -250,6 +322,9 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   }
   if (update.selectorNote !== undefined) {
     action.selectorNote = update.selectorNote.trim() || undefined;
+  }
+  if (update.frameSelector !== undefined) {
+    action.frameSelector = update.frameSelector.trim() || undefined;
   }
   if (update.url !== undefined && action.type === "navigate") {
     const url = normalizeNavigationUrl(update.url);
@@ -262,7 +337,7 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   if (update.expected !== undefined && action.type === "assert") {
     action.expected = update.expected.trim();
   }
-  if (update.timeout !== undefined && action.type === "assert") {
+  if (update.timeout !== undefined) {
     action.timeout = clamp(Math.round(update.timeout), 500, 60_000);
   }
   if (update.onFailure !== undefined && action.type === "assert") {
@@ -288,6 +363,9 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   }
   if (update.waitMs !== undefined && action.type === "wait") {
     action.waitMs = clamp(Math.round(update.waitMs), 250, 60_000);
+  }
+  if (update.value !== undefined && (action.type === "fill" || action.type === "select")) {
+    action.value = update.value.trim();
   }
   if (update.networkWaitUrl !== undefined) {
     action.networkWaitUrl = update.networkWaitUrl.trim() || undefined;

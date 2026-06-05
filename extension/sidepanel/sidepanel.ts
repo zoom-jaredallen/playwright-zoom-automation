@@ -1,4 +1,5 @@
-import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow, SelectorTestResult, WorkflowQualityReport, WorkflowTestEvent } from "../shared/types.js";
+import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
+import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow, AnchorPickResult, SelectorPickResult, SelectorTestResult, WorkflowQualityReport, WorkflowTestEvent } from "../shared/types.js";
 
 const recordingStateEl = mustGet("recording-state");
 const statusPillEl = mustGet("status-pill");
@@ -16,6 +17,7 @@ const selectorTestResultEl = mustGet("selector-test-result");
 const qualityReportEl = mustGet("quality-report");
 const qualityScoreEl = mustGet("quality-score");
 
+const btnTheme = mustGet("btn-theme") as HTMLButtonElement;
 const workflowNameInput = mustGet("workflow-name") as HTMLInputElement;
 const workflowCategorySelect = mustGet("workflow-category") as HTMLSelectElement;
 const inspectorDescriptionInput = mustGet("inspector-description") as HTMLInputElement;
@@ -33,20 +35,35 @@ const assertTimeoutInput = mustGet("assert-timeout") as HTMLInputElement;
 const assertOnFailureSelect = mustGet("assert-on-failure") as HTMLSelectElement;
 const screenshotLabelInput = mustGet("screenshot-label") as HTMLInputElement;
 const waitMsInput = mustGet("wait-ms") as HTMLInputElement;
+const actionValueInput = mustGet("action-value") as HTMLInputElement;
+const actionValueLabel = mustGet("action-value-label") as HTMLLabelElement;
+const pressKeySelect = mustGet("press-key") as HTMLSelectElement;
 
 const btnStart = mustGet("btn-start") as HTMLButtonElement;
 const btnPause = mustGet("btn-pause") as HTMLButtonElement;
 const btnStop = mustGet("btn-stop") as HTMLButtonElement;
 const btnClear = mustGet("btn-clear") as HTMLButtonElement;
 const btnAddNavigation = mustGet("btn-add-navigation") as HTMLButtonElement;
+const btnAddClick = mustGet("btn-add-click") as HTMLButtonElement;
+const btnAddFill = mustGet("btn-add-fill") as HTMLButtonElement;
+const btnAddSelect = mustGet("btn-add-select") as HTMLButtonElement;
 const btnAddAssertion = mustGet("btn-add-assertion") as HTMLButtonElement;
+const btnAddPress = mustGet("btn-add-press") as HTMLButtonElement;
 const btnAddScreenshot = mustGet("btn-add-screenshot") as HTMLButtonElement;
 const btnAddWait = mustGet("btn-add-wait") as HTMLButtonElement;
+const btnAddDismiss = mustGet("btn-add-dismiss") as HTMLButtonElement;
+const workflowImportFileInput = mustGet("workflow-import-file") as HTMLInputElement;
+const btnImport = mustGet("btn-import") as HTMLButtonElement;
 const btnCopy = mustGet("btn-copy") as HTMLButtonElement;
 const btnDownload = mustGet("btn-download") as HTMLButtonElement;
 const btnSync = mustGet("btn-sync") as HTMLButtonElement;
 const btnTestWorkflow = mustGet("btn-test-workflow") as HTMLButtonElement;
+const btnTestStep = mustGet("btn-test-step") as HTMLButtonElement;
+const stepTestResultEl = mustGet("step-test-result");
+const btnPickSelector = mustGet("btn-pick-selector") as HTMLButtonElement;
+const btnPickAnchor = mustGet("btn-pick-anchor") as HTMLButtonElement;
 const btnTestSelector = mustGet("btn-test-selector") as HTMLButtonElement;
+const btnAddSuggestedValidation = mustGet("btn-add-suggested-validation") as HTMLButtonElement;
 
 let recording = false;
 let paused = false;
@@ -58,15 +75,21 @@ let testRunning = false;
 let testCurrentActionId: string | undefined;
 let testEvents: WorkflowTestEvent[] = [];
 let selectorTestResults: Record<string, SelectorTestResult> = {};
+let stepTestResults: Record<string, { level: "success" | "error" | "info"; message: string }> = {};
+let themeMode: "light" | "dark" = "light";
+let workflowDetailsHydrated = false;
 
 interface SelectorConfidence {
   level: "strong" | "medium" | "weak" | "manual";
   reason: string;
 }
 
+type StepToolbarIcon = "navigate" | "click" | "fill" | "select" | "validate" | "press" | "screenshot" | "wait" | "dismiss";
+
 void init();
 
 async function init(): Promise<void> {
+  await loadThemePreference();
   await refreshState();
   wireEvents();
 }
@@ -77,11 +100,19 @@ function wireEvents(): void {
   btnStop.addEventListener("click", () => void stopRecording());
   btnClear.addEventListener("click", () => void clearActions());
   btnAddNavigation.addEventListener("click", () => void addToolbarStep(addNavigationStep));
+  btnAddClick.addEventListener("click", () => void addToolbarStep(addClickStep));
+  btnAddFill.addEventListener("click", () => void addToolbarStep(addFillStep));
+  btnAddSelect.addEventListener("click", () => void addToolbarStep(addSelectStep));
   btnAddAssertion.addEventListener("click", () => void addToolbarStep(addAssertionStep));
+  btnAddPress.addEventListener("click", () => void addToolbarStep(addPressStep));
   btnAddScreenshot.addEventListener("click", () => void addToolbarStep(addScreenshotStep));
   btnAddWait.addEventListener("click", () => void addToolbarStep(addWaitStep));
+  btnAddDismiss.addEventListener("click", () => void addToolbarStep(addDismissStep));
+  btnTheme.addEventListener("click", () => void toggleTheme());
   wireInspectorEvents();
 
+  btnImport.addEventListener("click", () => workflowImportFileInput.click());
+  workflowImportFileInput.addEventListener("change", () => void importWorkflowFromFile());
   btnCopy.addEventListener("click", () => void copyWorkflow());
   btnDownload.addEventListener("click", () => void downloadWorkflow());
   btnSync.addEventListener("click", () => void syncWorkflow());
@@ -102,6 +133,28 @@ function wireEvents(): void {
       renderActions();
     }
   });
+}
+
+async function loadThemePreference(): Promise<void> {
+  const stored = await chrome.storage.local.get("sidepanelTheme");
+  const savedTheme = stored.sidepanelTheme === "light" || stored.sidepanelTheme === "dark"
+    ? stored.sidepanelTheme
+    : undefined;
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  applyTheme(savedTheme ?? (prefersDark ? "dark" : "light"));
+}
+
+async function toggleTheme(): Promise<void> {
+  applyTheme(themeMode === "dark" ? "light" : "dark");
+  await chrome.storage.local.set({ sidepanelTheme: themeMode });
+}
+
+function applyTheme(nextTheme: "light" | "dark"): void {
+  themeMode = nextTheme;
+  document.documentElement.dataset.theme = nextTheme;
+  const nextLabel = nextTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+  btnTheme.title = nextLabel;
+  btnTheme.setAttribute("aria-label", nextLabel);
 }
 
 function wireInspectorEvents(): void {
@@ -134,6 +187,14 @@ function wireInspectorEvents(): void {
   });
 
   waitMsInput.addEventListener("blur", () => void updateSelectedAction({ waitMs: Number(waitMsInput.value) || 1_000 }));
+  actionValueInput.addEventListener("blur", () => void updateSelectedAction({ value: actionValueInput.value }));
+  actionValueInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      actionValueInput.blur();
+    }
+  });
+  pressKeySelect.addEventListener("change", () => void updateSelectedAction({ key: pressKeySelect.value }));
 
   stepTimeoutInput.addEventListener("blur", () => void updateSelectedAction({ timeout: Number(stepTimeoutInput.value) || 10_000 }));
   stepRetryCountInput.addEventListener("blur", () => void updateSelectedAction({ retryCount: Number(stepRetryCountInput.value) || 0 }));
@@ -142,7 +203,14 @@ function wireInspectorEvents(): void {
   stepScreenshotOnFailureInput.addEventListener("change", () => void updateSelectedAction({ screenshotOnFailure: stepScreenshotOnFailureInput.checked }));
   stepConditionSelect.addEventListener("change", () => void updateCondition());
   stepConditionTextInput.addEventListener("blur", () => void updateCondition());
+  btnTestStep.addEventListener("click", () => {
+    const action = selectedAction();
+    if (action) void testSingleStep(action);
+  });
+  btnPickSelector.addEventListener("click", () => void pickSelectedSelector());
+  btnPickAnchor.addEventListener("click", () => void pickSelectedAnchor());
   btnTestSelector.addEventListener("click", () => void testSelectedSelector());
+  btnAddSuggestedValidation.addEventListener("click", () => void addSuggestedValidationStep());
 }
 
 async function refreshState(): Promise<void> {
@@ -152,6 +220,14 @@ async function refreshState(): Promise<void> {
   recording = Boolean(status?.recording);
   paused = Boolean(status?.paused);
   actions = actionResponse?.actions ?? [];
+  if (isRecordedWorkflow(actionResponse?.workflow)) {
+    const workflow = actionResponse.workflow;
+    currentWorkflow = workflow;
+    if (!workflowDetailsHydrated) {
+      hydrateWorkflowDetails(workflow, { force: true });
+      workflowDetailsHydrated = true;
+    }
+  }
   testRunning = Boolean(testResponse?.running);
   testCurrentActionId = testResponse?.currentActionId;
   testEvents = testResponse?.events ?? [];
@@ -167,6 +243,7 @@ async function startRecording(): Promise<void> {
       return;
     }
     currentWorkflow = undefined;
+    workflowDetailsHydrated = false;
     paused = false;
     setMessage("Recording started.");
     await refreshState();
@@ -205,6 +282,7 @@ async function stopRecording(): Promise<void> {
 
 async function clearActions(): Promise<void> {
   currentWorkflow = undefined;
+  workflowDetailsHydrated = false;
   paused = false;
   await sendMessage({ type: "CLEAR_ACTIONS" });
   workflowNameInput.value = "";
@@ -227,6 +305,38 @@ async function addAssertionStep(): Promise<void> {
   await refreshState();
 }
 
+async function addClickStep(): Promise<void> {
+  const response = await sendMessage({ type: "ADD_CLICK_ACTION", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Click step added. Add a stable selector in Selector details.");
+  await refreshState();
+}
+
+async function addFillStep(): Promise<void> {
+  const response = await sendMessage({ type: "ADD_FILL_ACTION", value: "", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Text entry step added. Configure the value and selector in Properties.");
+  await refreshState();
+}
+
+async function addSelectStep(): Promise<void> {
+  const response = await sendMessage({ type: "ADD_SELECT_ACTION", value: "", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Select option step added. Configure the option and selector in Properties.");
+  await refreshState();
+}
+
+async function addPressStep(): Promise<void> {
+  const response = await sendMessage({ type: "ADD_PRESS_ACTION", key: "Enter", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Key press step added. Configure the key in Properties.");
+  await refreshState();
+}
+
 async function addScreenshotStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_SCREENSHOT_ACTION", label: "evidence", insertAfterActionId });
   selectedActionId = response?.actionId;
@@ -240,6 +350,14 @@ async function addWaitStep(): Promise<void> {
   selectedActionId = response?.actionId;
   insertAfterActionId = undefined;
   setMessage("Wait step added. Configure it in Properties.");
+  await refreshState();
+}
+
+async function addDismissStep(): Promise<void> {
+  const response = await sendMessage({ type: "ADD_DISMISS_ACTION", insertAfterActionId });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Dismiss popup step added.");
   await refreshState();
 }
 
@@ -356,6 +474,7 @@ function renderActions(): void {
     const controls = document.createElement("div");
     controls.className = "action-actions";
     controls.append(
+      makeActionButton("Test", testRunning || recording, () => void testSingleStep(action)),
       makeActionButton("Up", index === 0, () => moveAction(action.id, "up")),
       makeActionButton("Down", index === actions.length - 1, () => moveAction(action.id, "down")),
       makeActionButton("Delete", false, () => deleteAction(action.id), "delete")
@@ -387,10 +506,15 @@ function renderInsertRow(afterActionId: string | null, isLast = false): HTMLElem
     const tools = document.createElement("div");
     tools.className = "insert-tools";
     tools.append(
-      makeInsertTool("↗", "Navigate", () => void addNavigationStep()),
-      makeInsertTool("✓", "Validate", () => void addAssertionStep()),
-      makeInsertTool("▣", "Shot", () => void addScreenshotStep()),
-      makeInsertTool("⏱", "Wait", () => void addWaitStep())
+      makeInsertTool("navigate", "Navigate", () => void addNavigationStep()),
+      makeInsertTool("click", "Click", () => void addClickStep()),
+      makeInsertTool("fill", "Type text", () => void addFillStep()),
+      makeInsertTool("select", "Select option", () => void addSelectStep()),
+      makeInsertTool("validate", "Validate", () => void addAssertionStep()),
+      makeInsertTool("press", "Press key", () => void addPressStep()),
+      makeInsertTool("screenshot", "Shot", () => void addScreenshotStep()),
+      makeInsertTool("wait", "Wait", () => void addWaitStep()),
+      makeInsertTool("dismiss", "Dismiss popup", () => void addDismissStep())
     );
     row.appendChild(tools);
   }
@@ -398,12 +522,17 @@ function renderInsertRow(afterActionId: string | null, isLast = false): HTMLElem
   return row;
 }
 
-function makeInsertTool(icon: string, label: string, onClick: () => void): HTMLButtonElement {
+function makeInsertTool(icon: StepToolbarIcon, label: string, onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "insert-tool";
   button.title = label;
-  button.textContent = `${icon} ${label}`;
+  button.setAttribute("aria-label", label);
+  const iconEl = document.createElement("span");
+  iconEl.className = "insert-tool-icon";
+  iconEl.innerHTML = toolbarIconSvg(icon);
+  iconEl.setAttribute("aria-hidden", "true");
+  button.append(iconEl);
   button.addEventListener("click", onClick);
   return button;
 }
@@ -420,6 +549,7 @@ function renderInspector(): void {
 
   inspectorSummaryEl.textContent = `${action.type} step`;
   inspectorDescriptionInput.value = action.description ?? describeAction(action);
+  btnTestStep.disabled = testRunning || recording;
   stepTimeoutInput.value = String(action.timeout ?? 10_000);
   stepRetryCountInput.value = String(action.retryCount ?? 0);
   stepRetryDelayInput.value = String(action.retryDelayMs ?? 1_000);
@@ -428,10 +558,13 @@ function renderInspector(): void {
   stepConditionSelect.value = action.condition?.type ?? "none";
   stepConditionTextInput.value = action.condition?.text ?? "";
 
-  const selectorBased = !["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type);
+  const selectorBased = isSelectorBased(action);
   togglePropertyField("field-selector-test", selectorBased);
   togglePropertyField("field-url", action.type === "navigate");
   togglePropertyField("field-assertion", action.type === "assert");
+  togglePropertyField("field-validation-suggestion", isSubmitLikeClick(action));
+  togglePropertyField("field-action-value", action.type === "fill" || action.type === "select");
+  togglePropertyField("field-key", action.type === "press");
   togglePropertyField("field-screenshot", action.type === "screenshot");
   togglePropertyField("field-wait", action.type === "wait");
 
@@ -444,12 +577,21 @@ function renderInspector(): void {
     assertTimeoutInput.value = String(action.timeout ?? 10_000);
     assertOnFailureSelect.value = action.onFailure ?? "screenshot";
   }
+  if (action.type === "fill" || action.type === "select") {
+    actionValueLabel.textContent = action.type === "fill" ? "Text" : "Option value";
+    actionValueInput.placeholder = action.type === "fill" ? "Text to enter" : "Visible option text or value";
+    actionValueInput.value = action.value ?? "";
+  }
+  if (action.type === "press") {
+    pressKeySelect.value = action.key ?? "Enter";
+  }
   if (action.type === "screenshot") {
     screenshotLabelInput.value = action.screenshotLabel ?? "evidence";
   }
   if (action.type === "wait") {
     waitMsInput.value = String(action.waitMs ?? 1_000);
   }
+  renderStepTestResult(action);
   renderSelectorTestResult(action);
 }
 
@@ -472,6 +614,11 @@ function renderSelectorRepair(action: RecordedAction, confidence: SelectorConfid
   detail.className = "selector-detail";
   detail.title = formatSelectors(action);
   detail.textContent = formatSelectors(action);
+
+  const confidenceScore = scoreSelector(action.selectors);
+  const confidenceDetail = document.createElement("div");
+  confidenceDetail.className = "selector-confidence";
+  confidenceDetail.textContent = `Confidence ${confidenceScore.score}/100: ${confidenceScore.reasons.join("; ") || confidence.reason}`;
 
   const cssLabel = document.createElement("label");
   cssLabel.className = "field-label";
@@ -497,7 +644,7 @@ function renderSelectorRepair(action: RecordedAction, confidence: SelectorConfid
     if (event.key === "Enter") noteInput.blur();
   });
 
-  grid.append(detail, cssLabel, cssInput, noteLabel, noteInput);
+  grid.append(detail, confidenceDetail, cssLabel, cssInput, noteLabel, noteInput);
   wrapper.appendChild(grid);
   return wrapper;
 }
@@ -554,6 +701,63 @@ function renderTestState(): void {
     item.textContent = `${new Date(event.timestamp).toLocaleTimeString()} ${event.message}`;
     testEventsEl.appendChild(item);
   }
+
+  const failedEvent = [...testEvents].reverse().find((event) => event.level === "error" && event.actionId);
+  const failedAction = failedEvent?.actionId ? actions.find((action) => action.id === failedEvent.actionId) : undefined;
+  if (failedAction) {
+    testEventsEl.appendChild(renderRepairActions(failedAction));
+  }
+}
+
+function renderRepairActions(action: RecordedAction): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "repair-actions";
+
+  wrapper.appendChild(makeRepairButton("Select step", () => {
+    selectedActionId = action.id;
+    render();
+  }));
+
+  if (isSelectorBased(action)) {
+    wrapper.appendChild(makeRepairButton("Re-pick target", () => {
+      selectedActionId = action.id;
+      render();
+      void pickSelectorForAction(action);
+    }));
+    wrapper.appendChild(makeRepairButton("Pick anchor", () => {
+      selectedActionId = action.id;
+      render();
+      void pickAnchorForAction(action);
+    }));
+  }
+
+  wrapper.appendChild(makeRepairButton("Increase timeout", () => void increaseStepTimeout(action)));
+
+  if (isSubmitLikeClick(action)) {
+    wrapper.appendChild(makeRepairButton("Add validation", () => {
+      selectedActionId = action.id;
+      render();
+      void addSuggestedValidationStep();
+    }));
+  }
+
+  wrapper.appendChild(makeRepairButton("Continue on fail", () => void updateActionPatch(action.id, { continueOnFailure: true, screenshotOnFailure: true })));
+  return wrapper;
+}
+
+function makeRepairButton(label: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "icon-button";
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+async function increaseStepTimeout(action: RecordedAction): Promise<void> {
+  const nextTimeout = Math.min((action.timeout ?? 10_000) + 5_000, 60_000);
+  await updateActionPatch(action.id, { timeout: nextTimeout });
+  setMessage(`Timeout increased to ${nextTimeout}ms.`);
 }
 
 function renderQualityReport(): void {
@@ -600,7 +804,9 @@ function renderSelectorTestResult(action: RecordedAction): void {
   const result = selectorTestResults[action.id];
   selectorTestResultEl.innerHTML = "";
   if (!result) {
-    selectorTestResultEl.textContent = "Test this selector against the current page.";
+    selectorTestResultEl.textContent = hasUsableSelector(action)
+      ? "Test this selector against the current page."
+      : "Pick the real page target to populate this step.";
     return;
   }
   if (result.error) {
@@ -624,11 +830,31 @@ function renderSelectorTestResult(action: RecordedAction): void {
     list.className = "selector-candidates";
     for (const candidate of result.fallbackCandidates) {
       const item = document.createElement("div");
-      item.textContent = `${candidate.label}: ${candidate.visibleCount}/${candidate.matchedCount} visible`;
+      item.className = "selector-candidate";
+      const label = document.createElement("span");
+      label.textContent = `${candidate.label}: ${candidate.visibleCount}/${candidate.matchedCount} visible`;
+      const use = document.createElement("button");
+      use.type = "button";
+      use.className = "icon-button";
+      use.textContent = "Use";
+      use.disabled = candidate.visibleCount === 0;
+      use.addEventListener("click", () => void useSelectorCandidate(action.id, candidate.selector));
+      item.append(label, use);
       list.appendChild(item);
     }
     selectorTestResultEl.appendChild(list);
   }
+}
+
+function renderStepTestResult(action: RecordedAction): void {
+  const result = stepTestResults[action.id];
+  stepTestResultEl.className = "selector-test-result";
+  if (!result) {
+    stepTestResultEl.textContent = "Test only this step against the current page.";
+    return;
+  }
+  stepTestResultEl.classList.toggle("error", result.level === "error");
+  stepTestResultEl.textContent = result.message;
 }
 
 function makeActionButton(label: string, disabled: boolean, onClick: () => void, className?: string): HTMLButtonElement {
@@ -657,7 +883,11 @@ async function updateActionDescription(actionId: string, description: string): P
 
 async function updateSelectedAction(update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId">): Promise<void> {
   if (!selectedActionId) return;
-  await sendMessage({ type: "UPDATE_ACTION", actionId: selectedActionId, ...update });
+  await updateActionPatch(selectedActionId, update);
+}
+
+async function updateActionPatch(actionId: string, update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId">): Promise<void> {
+  await sendMessage({ type: "UPDATE_ACTION", actionId, ...update });
   await refreshState();
 }
 
@@ -686,6 +916,152 @@ async function testSelectedSelector(): Promise<void> {
   const result = await sendMessage({ type: "TEST_SELECTOR", action }) as SelectorTestResult;
   selectorTestResults = { ...selectorTestResults, [action.id]: result };
   renderSelectorTestResult(action);
+}
+
+async function testSingleStep(action: RecordedAction): Promise<void> {
+  selectedActionId = action.id;
+  stepTestResults = {
+    ...stepTestResults,
+    [action.id]: { level: "info", message: "Testing this step against the active tab..." }
+  };
+  render();
+
+  const response = await sendMessage({ type: "RUN_TEST_ACTION", action });
+  stepTestResults = {
+    ...stepTestResults,
+    [action.id]: {
+      level: response?.ok ? "success" : "error",
+      message: response?.ok
+        ? `Passed: ${action.description ?? action.type}`
+        : `Failed: ${response?.error ?? "Step test failed."}`
+    }
+  };
+  setMessage(response?.ok ? "Step test passed." : (response?.error ?? "Step test failed."));
+  await refreshState();
+}
+
+async function pickSelectedSelector(): Promise<void> {
+  const action = selectedAction();
+  if (!action) return;
+  await pickSelectorForAction(action);
+}
+
+async function pickSelectorForAction(action: RecordedAction): Promise<void> {
+  if (!["click", "fill", "select", "press", "assert"].includes(action.type)) {
+    setMessage("This step does not need a page target.");
+    return;
+  }
+
+  selectorTestResultEl.textContent = "Click the target element in the active Zoom tab. Press Esc to cancel.";
+  const result = await sendMessage({ type: "PICK_SELECTOR", action }) as SelectorPickResult;
+  if (result.error) {
+    selectorTestResults = {
+      ...selectorTestResults,
+      [action.id]: { actionId: action.id, matchedCount: 0, visibleCount: 0, fallbackCandidates: [], error: result.error }
+    };
+    renderSelectorTestResult(action);
+    setMessage(result.error);
+    return;
+  }
+
+  const update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId"> = {
+    selectors: result.selectors,
+    frameSelector: result.frameSelector,
+    description: result.description
+  };
+  if ((action.type === "fill" || action.type === "select") && result.value) {
+    update.value = result.value;
+  }
+  if (action.type === "assert" && result.value) {
+    update.assertionType = "textVisible";
+    update.expected = result.value;
+  }
+  await sendMessage({ type: "UPDATE_ACTION", actionId: action.id, ...update });
+  selectorTestResults = {
+    ...selectorTestResults,
+    [action.id]: {
+      actionId: action.id,
+      matchedCount: 1,
+      visibleCount: 1,
+      chosenPreview: result.preview,
+      chosenSelector: formatSelectors({ ...action, selectors: result.selectors }),
+      fallbackCandidates: []
+    }
+  };
+  setMessage("Target selected for this step.");
+  await refreshState();
+}
+
+async function pickSelectedAnchor(): Promise<void> {
+  const action = selectedAction();
+  if (!action) return;
+  await pickAnchorForAction(action);
+}
+
+async function pickAnchorForAction(action: RecordedAction): Promise<void> {
+  if (!["click", "fill", "select", "press"].includes(action.type)) {
+    setMessage("This step does not need an anchor.");
+    return;
+  }
+  if (!hasUsableSelector(action)) {
+    setMessage("Pick a target before adding an anchor.");
+    return;
+  }
+
+  selectorTestResultEl.textContent = "Click stable row or list text in the active Zoom tab. Press Esc to cancel.";
+  const result = await sendMessage({ type: "PICK_ANCHOR", action }) as AnchorPickResult;
+  if (result.error || !result.anchor) {
+    selectorTestResults = {
+      ...selectorTestResults,
+      [action.id]: { actionId: action.id, matchedCount: 0, visibleCount: 0, fallbackCandidates: [], error: result.error ?? "No anchor was selected." }
+    };
+    renderSelectorTestResult(action);
+    setMessage(result.error ?? "No anchor was selected.");
+    return;
+  }
+
+  const selectors = { ...action.selectors, anchor: result.anchor };
+  await sendMessage({ type: "UPDATE_ACTION", actionId: action.id, selectors });
+  selectorTestResults = {
+    ...selectorTestResults,
+    [action.id]: {
+      actionId: action.id,
+      matchedCount: 1,
+      visibleCount: 1,
+      chosenPreview: result.preview,
+      chosenSelector: formatSelectors({ ...action, selectors }),
+      fallbackCandidates: []
+    }
+  };
+  setMessage("Anchor selected for this step.");
+  await refreshState();
+}
+
+async function useSelectorCandidate(actionId: string, selector: RecordedAction["selectors"]): Promise<void> {
+  const action = actions.find((candidate) => candidate.id === actionId);
+  const selectors = action?.selectors.anchor && !selector.anchor
+    ? { ...selector, anchor: action.selectors.anchor }
+    : selector;
+  await updateActionPatch(actionId, { selectors });
+  setMessage("Selector candidate applied.");
+}
+
+async function addSuggestedValidationStep(): Promise<void> {
+  const action = selectedAction();
+  if (!action || !isSubmitLikeClick(action)) return;
+
+  const response = await sendMessage({
+    type: "ADD_ASSERTION_ACTION",
+    assertionType: "textVisible",
+    expected: "success|saved|added|submitted",
+    timeout: 10_000,
+    onFailure: "screenshot",
+    insertAfterActionId: action.id
+  });
+  selectedActionId = response?.actionId;
+  insertAfterActionId = undefined;
+  setMessage("Validation step added after the submit action.");
+  await refreshState();
 }
 
 async function moveAction(actionId: string, direction: "up" | "down"): Promise<void> {
@@ -720,6 +1096,67 @@ async function downloadWorkflow(): Promise<void> {
   anchor.click();
   URL.revokeObjectURL(url);
   setMessage("Workflow JSON downloaded.");
+}
+
+async function importWorkflowFromFile(): Promise<void> {
+  const file = workflowImportFileInput.files?.[0];
+  workflowImportFileInput.value = "";
+  if (!file) return;
+
+  try {
+    const workflow = parseWorkflowJson(await file.text());
+    const response = await sendMessage({ type: "IMPORT_WORKFLOW", workflow });
+    if (!response?.ok) {
+      setMessage(`Import failed: ${response?.error ?? "Unknown error"}`);
+      return;
+    }
+
+    currentWorkflow = workflow;
+    workflowDetailsHydrated = true;
+    selectedActionId = workflow.actions[0]?.id;
+    insertAfterActionId = undefined;
+    selectorTestResults = {};
+    stepTestResults = {};
+    hydrateWorkflowDetails(workflow, { force: true });
+    setMessage(`Imported "${workflow.meta.name || file.name}" with ${workflow.actions.length} step(s).`);
+    await refreshState();
+  } catch (error) {
+    setMessage(`Import failed: ${formatError(error)}`);
+  }
+}
+
+function parseWorkflowJson(rawJson: string): RecordedWorkflow {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error("The selected file is not valid JSON.");
+  }
+
+  if (!isRecordedWorkflow(parsed)) {
+    throw new Error("The selected file is not a recorded workflow JSON file.");
+  }
+  if (parsed.actions.length === 0) {
+    throw new Error("The selected workflow does not contain any steps.");
+  }
+  return parsed;
+}
+
+function isRecordedWorkflow(value: unknown): value is RecordedWorkflow {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<RecordedWorkflow>;
+  return candidate.version === 1
+    && Boolean(candidate.meta && typeof candidate.meta === "object")
+    && Array.isArray(candidate.actions);
+}
+
+function hydrateWorkflowDetails(workflow: RecordedWorkflow, options: { force?: boolean } = {}): void {
+  if (options.force || !workflowNameInput.value) {
+    workflowNameInput.value = workflow.meta.name ?? "";
+  }
+  if (options.force || workflowCategorySelect.value === "custom") {
+    workflowCategorySelect.value = workflow.meta.category ?? "custom";
+  }
 }
 
 async function syncWorkflow(): Promise<void> {
@@ -780,6 +1217,10 @@ function describeAction(action: RecordedAction): string {
   if (action.type === "fill") return `Fill ${action.selectors.label ?? "field"}`;
   if (action.type === "click") return `Click ${action.selectors.role?.name ?? action.selectors.text ?? "element"}`;
   if (action.type === "select") return `Select ${action.value ?? "option"}`;
+  if (action.type === "press") return `Press ${action.key ?? "Enter"}`;
+  if (action.type === "dismiss") return "Dismiss blocking popup";
+  if (action.type === "screenshot") return `Take screenshot${action.screenshotLabel ? `: ${action.screenshotLabel}` : ""}`;
+  if (action.type === "wait") return `Wait ${action.waitMs ?? 1_000}ms`;
   if (action.type === "upload") return "Upload file";
   return action.type;
 }
@@ -789,7 +1230,7 @@ function selectedAction(): RecordedAction | undefined {
 }
 
 function selectorConfidence(action: RecordedAction): SelectorConfidence {
-  if (["navigate", "wait", "assert", "screenshot", "dismiss"].includes(action.type)) {
+  if (!isSelectorBased(action)) {
     return { level: "manual", reason: "Manual or page-level step" };
   }
   if (action.selectors.role?.name || action.selectors.testId) {
@@ -804,6 +1245,21 @@ function selectorConfidence(action: RecordedAction): SelectorConfidence {
   return { level: "weak", reason: "No usable selector captured" };
 }
 
+function hasUsableSelector(action: RecordedAction): boolean {
+  const selectors = action.selectors;
+  return Boolean(selectors.role || selectors.label || selectors.text || selectors.testId || selectors.css);
+}
+
+function isSelectorBased(action: RecordedAction): boolean {
+  return !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type);
+}
+
+function isSubmitLikeClick(action: RecordedAction): boolean {
+  if (action.type !== "click") return false;
+  const label = action.selectors.role?.name ?? action.selectors.text ?? action.selectors.label ?? action.description ?? "";
+  return isCommitClickLabel(label);
+}
+
 function formatSelectors(action: RecordedAction): string {
   const selectors = action.selectors;
   const parts = [
@@ -812,6 +1268,7 @@ function formatSelectors(action: RecordedAction): string {
     selectors.text ? `text="${selectors.text}"` : undefined,
     selectors.testId ? `testId="${selectors.testId}"` : undefined,
     selectors.css ? `css="${selectors.css}"` : undefined,
+    selectors.anchor?.text ? `anchor=${selectors.anchor.scopeRole ?? "row"} containing "${selectors.anchor.text}"` : undefined,
     action.selectorNote ? `note="${action.selectorNote}"` : undefined
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" | ") : "No selector required";
@@ -821,7 +1278,7 @@ function calculateQualityReport(inputActions: RecordedAction[]): WorkflowQuality
   const actionable = inputActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss"].includes(action.type));
   const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
   const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
-  const submitActions = inputActions.filter((action) => action.type === "click" && /save|submit|add|continue|confirm/i.test(action.selectors.role?.name ?? action.selectors.text ?? ""));
+  const submitActions = inputActions.filter((action) => action.type === "click" && isCommitClickLabel(action.selectors.role?.name ?? action.selectors.text ?? ""));
   const assertionActions = inputActions.filter((action) => action.type === "assert");
   const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertionActions.length, submitActions.length) / submitActions.length) * 100);
   const evidenceCount = inputActions.filter((action) => action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
@@ -869,6 +1326,21 @@ function slugify(text: string): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function toolbarIconSvg(icon: StepToolbarIcon): string {
+  const icons: Record<StepToolbarIcon, string> = {
+    navigate: '<svg viewBox="0 0 24 24"><path d="M5 19 19 5"></path><path d="M9 5h10v10"></path><path d="M5 19l5.5-1.5"></path></svg>',
+    click: '<svg viewBox="0 0 24 24"><path d="m5 3 8 18 2-7 6-2L5 3Z"></path><path d="m13 13 5 5"></path></svg>',
+    fill: '<svg viewBox="0 0 24 24"><path d="M8 5h8"></path><path d="M12 5v14"></path><path d="M9 19h6"></path></svg>',
+    select: '<svg viewBox="0 0 24 24"><path d="M8 6h11"></path><path d="M8 12h11"></path><path d="M8 18h11"></path><path d="m3 12 1.5 1.5L7 10"></path></svg>',
+    validate: '<svg viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.3 2.8 7.2 7 8.5 4.2-1.3 7-4.2 7-8.5V6l-7-3Z"></path><path d="m8.5 12 2.2 2.2L15.8 9"></path></svg>',
+    press: '<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M19 10h.01M7 14h6"></path></svg>',
+    screenshot: '<svg viewBox="0 0 24 24"><path d="M6.5 8.5h2l1.4-2h4.2l1.4 2h2A2.5 2.5 0 0 1 20 11v5.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5V11a2.5 2.5 0 0 1 2.5-2.5Z"></path><circle cx="12" cy="13.5" r="3"></circle></svg>',
+    wait: '<svg viewBox="0 0 24 24"><path d="M12 7v5l3 2"></path><circle cx="12" cy="13" r="7"></circle><path d="M9 2h6"></path><path d="M12 2v3"></path></svg>',
+    dismiss: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"></circle><path d="m9 9 6 6"></path><path d="m15 9-6 6"></path></svg>'
+  };
+  return icons[icon];
 }
 
 function mustGet(id: string): HTMLElement {

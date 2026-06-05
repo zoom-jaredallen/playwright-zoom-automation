@@ -116,6 +116,8 @@ describe("compileWorkflow", () => {
 
     expect(flowContent).toContain("impersonateSubAccount");
     expect(flowContent).toContain("dismissBlockingZoomPopups");
+    expect(flowContent).toContain('from "../../../zoom/impersonation.js"');
+    expect(flowContent).toContain('from "../../../zoom/popups.js"');
     expect(flowContent).toContain("resolveValue");
     expect(flowContent).toContain("{{address.line1}}");
     expect(flowContent).toContain("clickElement");
@@ -171,6 +173,35 @@ describe("compileWorkflow", () => {
     expect(existsSync(path.join(result.outputDir, "schema.json"))).toBe(true);
   });
 
+  it("keeps the requested id when a workflow is saved with a renamed display name", () => {
+    const workflow = createTestWorkflow({
+      meta: {
+        ...createTestWorkflow().meta,
+        name: "Renamed in editor"
+      }
+    });
+    const result = compileWorkflow(workflow, testOutputDir, "original-recorded-id");
+
+    expect(result.id).toBe("original-recorded-id");
+    expect(result.outputDir).toBe(path.join(testOutputDir, "original-recorded-id"));
+    expect(existsSync(path.join(result.outputDir, "flow.ts"))).toBe(true);
+    expect(existsSync(path.join(testOutputDir, "renamed-in-editor"))).toBe(false);
+  });
+
+  it("falls back to a generated id when the workflow name slug is empty", () => {
+    const workflow = createTestWorkflow({
+      meta: {
+        ...createTestWorkflow().meta,
+        name: "!!!"
+      }
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+
+    expect(result.id).toMatch(/^recorded-\d+$/);
+    expect(result.outputDir).not.toBe(testOutputDir);
+    expect(existsSync(path.join(result.outputDir, "schema.json"))).toBe(true);
+  });
+
   it("emits a default export on the flow class so it can be dynamically imported", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);
@@ -215,7 +246,10 @@ describe("compileWorkflow", () => {
     expect(flow).toContain('{ status: "skipped", message: "Dry run');
     // Per-account values consulted before the address profile
     expect(flow).toContain("config.accountValues");
-    expect(flow).toContain("this.activeAccountId");
+    expect(flow).toContain("const activeAccountId = input.account.id");
+    expect(flow).toContain("config.accountValues?.[activeAccountId]?.[paramName]");
+    expect(flow).toContain("this.resolveValue(\"{{address.line1}}\", activeAccountId)");
+    expect(flow).not.toContain("this.activeAccountId");
   });
 
   it("compiles after-action assertions so a failed submit is detected", () => {
@@ -225,6 +259,41 @@ describe("compileWorkflow", () => {
     const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
     expect(flow).toContain("Auto verification");
     expect(flow).toContain("getByText(new RegExp(");
+  });
+
+  it("waits for page readiness after generated recorded steps", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("private async waitForPageReady");
+    expect(flow).toContain("await this.waitForPageReady(page, policy.readyTimeoutMs ?? 10_000)");
+    expect(flow).toContain('"readyTimeoutMs":10000');
+    expect(flow).toContain("[class*='spinner']");
+  });
+
+  it("uses recorded selectors for element-visible assertion steps", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        ...createTestWorkflow().actions,
+        {
+          id: "act_5",
+          timestamp: 6000,
+          type: "assert",
+          selectors: { role: { role: "link", name: "Michael Chen" }, text: "Michael Chen" },
+          assertionType: "elementVisible",
+          expected: "Michael Chen",
+          pageUrl: "https://zoom.us/cci/index/admin#/admin-agents",
+          pageTitle: "Users",
+          description: "Assert Michael Chen exists"
+        }
+      ]
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain('const element = await this.findElement(page, {"role":{"role":"link","name":"Michael Chen"},"text":"Michael Chen"}, 10000);');
+    expect(flow).not.toContain('page.locator("Michael Chen").first().waitFor');
   });
 
   it("preserves the original schema.json", () => {

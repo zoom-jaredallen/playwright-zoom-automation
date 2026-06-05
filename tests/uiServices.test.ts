@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterSelectableAccounts } from "../src/server/services/accountSelectionService.js";
 import { createJobStore } from "../src/server/services/inMemoryJobStore.js";
+import { createJobProgressAdapter } from "../src/server/services/jobRunner.js";
 import { createWorkflowRegistry } from "../src/server/services/workflowRegistry.js";
 import type { SubAccount } from "../src/automation/types.js";
 
@@ -93,6 +94,41 @@ describe("inMemoryJobStore", () => {
         accountId: "a301",
         status: "completed",
         workflowId: "add-business-address"
+      })
+    );
+  });
+
+  it("keeps a failed account failed when a later pipeline workflow starts", async () => {
+    const store = createJobStore();
+    const job = store.createJob({
+      accountIds: ["a301"],
+      workflowIds: ["first-workflow", "second-workflow"],
+      dryRun: true,
+      addressProfile: "australia_sydney"
+    });
+    const subAccount = account("a301", "michael.chen@lab494-s301.zoomdemos.com");
+
+    const firstWorkflow = createJobProgressAdapter(store, job.id, "first-workflow");
+    await firstWorkflow.markRunning(subAccount);
+    await firstWorkflow.markFailed(subAccount, new Error("first workflow failed"), false);
+
+    const secondWorkflow = createJobProgressAdapter(store, job.id, "second-workflow");
+    await expect(secondWorkflow.shouldSkip(subAccount)).resolves.toBe(true);
+
+    const snapshot = store.getJob(job.id);
+    expect(snapshot?.summary).toEqual({ queued: 0, running: 0, completed: 0, skipped: 0, failed: 1 });
+    expect(snapshot?.accounts[0]).toEqual(
+      expect.objectContaining({
+        accountId: "a301",
+        status: "failed",
+        workflowId: "first-workflow",
+        error: "first workflow failed"
+      })
+    );
+    expect(snapshot?.accounts[0].logs?.at(-1)).toEqual(
+      expect.objectContaining({
+        step: "Skipping workflow",
+        detail: "Previous workflow failed"
       })
     );
   });

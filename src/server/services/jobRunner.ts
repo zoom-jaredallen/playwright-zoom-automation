@@ -1,5 +1,7 @@
 import { chromium } from "playwright";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ProgressAdapter, SubAccount } from "../../automation/types.js";
+import type { FlowInput, FlowResult } from "../../automation/types.js";
 import { AutomationRunner } from "../../automation/runner.js";
 import { loadConfig } from "../../config.js";
 import { createLogger, parseLogLevel } from "../../logger.js";
@@ -117,36 +119,26 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
       logger.info(`Starting pipeline step: ${workflow.name}`, { workflowId: workflow.id });
       options.store.markJob(options.jobId, "running", `Running step: ${workflow.name}`);
 
-      const flow = options.registry.createFlow(workflow.id, {
+      const createFlow = () => options.registry.createFlow(workflow.id, {
         browser,
         masterStorageState,
         getMasterStorageState: () => sessionMonitor.getStorageState(),
         config,
         logger
       });
+      const flow = {
+        name: workflow.id,
+        run(input: FlowInput): Promise<FlowResult> {
+          return logger.runWithAccount(input.account.id, () => createFlow().run(input));
+        }
+      };
       const progressAdapter = createJobProgressAdapter(options.store, options.jobId, workflow.id);
-      // Wrap markRunning to set active account on the step-tracking logger
       const trackingProgress: ProgressAdapter = {
         ...progressAdapter,
-        markRunning: async (account) => {
-          logger.setActiveAccount(account.id);
-          return progressAdapter.markRunning(account);
-        },
-        markCompleted: async (account, message) => {
-          const result = await progressAdapter.markCompleted(account, message);
-          logger.setActiveAccount(undefined);
-          return result;
-        },
-        markFailed: async (account, error, retryable) => {
-          const result = await progressAdapter.markFailed(account, error, retryable);
-          logger.setActiveAccount(undefined);
-          return result;
-        },
-        markSkipped: async (account, message) => {
-          const result = await progressAdapter.markSkipped(account, message);
-          logger.setActiveAccount(undefined);
-          return result;
-        }
+        markRunning: async (account) => logger.runWithAccount(account.id, () => progressAdapter.markRunning(account)),
+        markCompleted: async (account, message) => logger.runWithAccount(account.id, () => progressAdapter.markCompleted(account, message)),
+        markFailed: async (account, error, retryable) => logger.runWithAccount(account.id, () => progressAdapter.markFailed(account, error, retryable)),
+        markSkipped: async (account, message) => logger.runWithAccount(account.id, () => progressAdapter.markSkipped(account, message))
       };
       const runner = new AutomationRunner({
         flow,
@@ -179,9 +171,18 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
   }
 }
 
-function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: string): ProgressAdapter {
+export function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: string): ProgressAdapter {
   return {
-    shouldSkip: async () => false,
+    shouldSkip: async (account) => {
+      const job = store.getJob(jobId);
+      const accountState = job?.accounts.find((item) => item.accountId === account.id);
+      if (accountState?.status !== "failed") {
+        return false;
+      }
+
+      store.logAccountStep(jobId, account.id, "Skipping workflow", "Previous workflow failed");
+      return true;
+    },
     markRunning: async (account) => {
       store.markAccount(jobId, account.id, { status: "running", workflowId });
       store.logAccountStep(jobId, account.id, "Starting workflow", workflowId);
@@ -208,37 +209,39 @@ function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: st
 function createStepTrackingLogger(
   baseLogger: import("../../logger.js").Logger,
   store: JobStore,
-  jobId: string
-): import("../../logger.js").Logger & { setActiveAccount(accountId: string | undefined): void } {
-  let activeAccountId: string | undefined;
-
+  jobId: string,
+  activeAccount = new AsyncLocalStorage<string>()
+): import("../../logger.js").Logger & { runWithAccount<T>(accountId: string, callback: () => T): T } {
   return {
-    setActiveAccount(accountId: string | undefined) {
-      activeAccountId = accountId;
+    runWithAccount<T>(accountId: string, callback: () => T): T {
+      return activeAccount.run(accountId, callback);
     },
     debug(message: string, meta?: Record<string, unknown>) {
       baseLogger.debug(message, meta);
     },
     info(message: string, meta?: Record<string, unknown>) {
       baseLogger.info(message, meta);
+      const activeAccountId = activeAccount.getStore();
       if (activeAccountId && isUserFacingStep(message)) {
         try { store.logAccountStep(jobId, activeAccountId, message); } catch { /* ignore */ }
       }
     },
     warn(message: string, meta?: Record<string, unknown>) {
       baseLogger.warn(message, meta);
+      const activeAccountId = activeAccount.getStore();
       if (activeAccountId) {
         try { store.logAccountStep(jobId, activeAccountId, `⚠ ${message}`); } catch { /* ignore */ }
       }
     },
     error(message: string, meta?: Record<string, unknown>) {
       baseLogger.error(message, meta);
+      const activeAccountId = activeAccount.getStore();
       if (activeAccountId) {
         try { store.logAccountStep(jobId, activeAccountId, `✗ ${message}`); } catch { /* ignore */ }
       }
     },
     child(meta: Record<string, unknown>) {
-      return createStepTrackingLogger(baseLogger.child(meta), store, jobId);
+      return createStepTrackingLogger(baseLogger.child(meta), store, jobId, activeAccount);
     }
   };
 }
@@ -255,5 +258,3 @@ function isUserFacingStep(message: string): boolean {
   ];
   return patterns.some((p) => p.test(message));
 }
-
-

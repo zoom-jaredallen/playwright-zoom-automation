@@ -1,5 +1,5 @@
 import { ZoomCxBusinessAddressAustraliaFlow } from "./flow.js";
-import type { WorkflowPlugin } from "../../workflows/types.js";
+import type { WorkflowPlugin } from "../../types.js";
 
 const plugin: WorkflowPlugin = {
   id: "zoom-cx-business-address-australia",

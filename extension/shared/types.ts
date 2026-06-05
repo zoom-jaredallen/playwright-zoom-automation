@@ -37,6 +37,23 @@ export interface SelectorTestResult {
   error?: string;
 }
 
+export interface SelectorPickResult {
+  actionId: string;
+  selectors: SelectorStrategy;
+  frameSelector?: string;
+  preview?: string;
+  description?: string;
+  value?: string;
+  error?: string;
+}
+
+export interface AnchorPickResult {
+  actionId: string;
+  anchor?: NonNullable<SelectorStrategy["anchor"]>;
+  preview?: string;
+  error?: string;
+}
+
 export interface WorkflowTestEvent {
   timestamp: number;
   level: "info" | "success" | "error";
@@ -52,6 +69,7 @@ export type ExtensionMessage =
   | { type: "PAUSE_RECORDING" }
   | { type: "RESUME_RECORDING" }
   | { type: "GET_STATUS" }
+  | { type: "SET_EXTENSION_ENABLED"; enabled: boolean }
   | { type: "ACTION_RECORDED"; action: RecordedAction }
   | { type: "STATUS_RESPONSE"; recording: boolean; paused: boolean; actionCount: number }
   | { type: "RECORDER_STATE_UPDATED"; recording: boolean; paused: boolean; actions: RecordedAction[] }
@@ -63,8 +81,10 @@ export type ExtensionMessage =
       type: "UPDATE_ACTION";
       actionId: string;
       description?: string;
+      selectors?: RecordedAction["selectors"];
       cssSelector?: string;
       selectorNote?: string;
+      frameSelector?: string;
       url?: string;
       assertionType?: RecordedAction["assertionType"];
       expected?: string;
@@ -77,6 +97,7 @@ export type ExtensionMessage =
       condition?: RecordedAction["condition"];
       screenshotLabel?: string;
       waitMs?: number;
+      value?: string;
       networkWaitUrl?: string;
       waitForUrl?: string;
       key?: string;
@@ -89,13 +110,23 @@ export type ExtensionMessage =
   | { type: "DELETE_ACTION"; actionId: string }
   | { type: "ADD_NAVIGATION_ACTION"; url: string; insertAfterActionId?: string | null }
   | { type: "ADD_ASSERTION_ACTION"; assertionType: RecordedAction["assertionType"]; expected: string; timeout?: number; onFailure?: RecordedAction["onFailure"]; insertAfterActionId?: string | null }
+  | { type: "ADD_CLICK_ACTION"; insertAfterActionId?: string | null }
+  | { type: "ADD_FILL_ACTION"; value?: string; insertAfterActionId?: string | null }
+  | { type: "ADD_SELECT_ACTION"; value?: string; insertAfterActionId?: string | null }
+  | { type: "ADD_PRESS_ACTION"; key?: string; insertAfterActionId?: string | null }
   | { type: "ADD_SCREENSHOT_ACTION"; label?: string; insertAfterActionId?: string | null }
   | { type: "ADD_WAIT_ACTION"; waitMs: number; insertAfterActionId?: string | null }
+  | { type: "ADD_DISMISS_ACTION"; insertAfterActionId?: string | null }
   | { type: "CLEAR_ACTIONS" }
+  | { type: "IMPORT_WORKFLOW"; workflow: RecordedWorkflow }
   | { type: "GET_ACTIONS" }
   | { type: "BUILD_WORKFLOW" }
   | { type: "RUN_TEST_WORKFLOW" }
+  | { type: "RUN_TEST_ACTION"; action: RecordedAction }
   | { type: "GET_TEST_WORKFLOW_STATE" }
+  | { type: "WAIT_FOR_PAGE_READY"; timeout?: number }
   | { type: "EXECUTE_TEST_ACTION"; action: RecordedAction }
   | { type: "TEST_SELECTOR"; action: RecordedAction }
+  | { type: "PICK_SELECTOR"; action: RecordedAction }
+  | { type: "PICK_ANCHOR"; action: RecordedAction }
   | { type: "ACTIONS_RESPONSE"; actions: RecordedAction[] };

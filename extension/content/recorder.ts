@@ -5,7 +5,7 @@
  */
 import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth, computeAnchor } from "../shared/selectors.js";
 import { detectParameters } from "../shared/parameterizer.js";
-import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, SelectorTestResult } from "../shared/types.js";
+import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
 
 let recording = false;
 let paused = false;
@@ -14,6 +14,7 @@ let lastFillTimeout: ReturnType<typeof setTimeout> | undefined;
 let lastFillElement: Element | null = null;
 let lastFillValue = "";
 let impersonationDetected = false;
+let activeSelectorPick: { cancel: (message: string) => void } | undefined;
 
 // Click deduplication state
 let lastClickTarget: Element | null = null;
@@ -25,6 +26,9 @@ let activeCombobox: { element: Element; label: string | undefined; openedAt: num
 
 // Hover deduplication state (feature 4)
 let lastHoverTarget: Element | null = null;
+// Hover capture is intentionally off by default: Zoom pages produce many
+// incidental mouseovers, which makes recorded workflows noisy and hard to review.
+const RECORD_HOVER_STEPS_BY_DEFAULT = false;
 
 // Frame selector for this recorder context — undefined in the top frame (feature 1)
 const frameSelector = getFrameSelector();
@@ -33,6 +37,33 @@ const frameSelector = getFrameSelector();
 const SUBMIT_LABEL_PATTERN = /save|submit|add|continue|next|confirm|apply|create|update/i;
 const recentNetworkEntries: Array<{ url: string; startTime: number }> = [];
 startNetworkObserver();
+
+const PAGE_READY_QUIET_MS = 450;
+const PAGE_READY_INITIAL_SETTLE_MS = 150;
+const PAGE_READY_LOADING_SELECTORS = [
+  "[aria-busy='true']",
+  "[role='progressbar']",
+  ".loading",
+  ".loader",
+  ".spinner",
+  ".zm-loader",
+  ".zm-loading",
+  ".cpzui-loading",
+  ".cpzui-spinner",
+  "[class*='loading']",
+  "[class*='spinner']"
+].join(",");
+
+const CHECKBOX_TARGET_SELECTOR = [
+  'input[type="checkbox"]',
+  '[role="checkbox"]',
+  'label:has(input[type="checkbox"])',
+  '[class*="checkbox"]',
+  '[class*="Checkbox"]',
+  '[class*="cpzui-checkbox"]',
+  '[class*="zm-checkbox"]',
+  '[class*="zmu-checkbox"]'
+].join(",");
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -54,10 +85,19 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     sendResponse({ ok: true });
   } else if (message.type === "GET_STATUS") {
     sendResponse({ recording, paused, actionCount: actionQueue.length });
+  } else if (message.type === "WAIT_FOR_PAGE_READY") {
+    void waitForPageReady(message.timeout ?? 10_000).then(
+      () => sendResponse({ ok: true }),
+      (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })
+    );
   } else if (message.type === "EXECUTE_TEST_ACTION") {
     void executeTestAction(message.action).then(sendResponse);
   } else if (message.type === "TEST_SELECTOR") {
     void testSelector(message.action).then(sendResponse);
+  } else if (message.type === "PICK_SELECTOR") {
+    void pickSelector(message.action).then(sendResponse);
+  } else if (message.type === "PICK_ANCHOR") {
+    void pickAnchor(message.action).then(sendResponse);
   }
   return true;
 });
@@ -114,7 +154,9 @@ function attachListeners(): void {
   document.addEventListener("input", handleInput, true);
   document.addEventListener("change", handleChange, true);
   document.addEventListener("keydown", handleKeydown, true);
-  document.addEventListener("mouseover", handleMouseOver, true);
+  if (RECORD_HOVER_STEPS_BY_DEFAULT) {
+    document.addEventListener("mouseover", handleMouseOver, true);
+  }
   window.addEventListener("hashchange", handleNavigation);
   window.addEventListener("popstate", handleNavigation);
 }
@@ -124,7 +166,9 @@ function detachListeners(): void {
   document.removeEventListener("input", handleInput, true);
   document.removeEventListener("change", handleChange, true);
   document.removeEventListener("keydown", handleKeydown, true);
-  document.removeEventListener("mouseover", handleMouseOver, true);
+  if (RECORD_HOVER_STEPS_BY_DEFAULT) {
+    document.removeEventListener("mouseover", handleMouseOver, true);
+  }
   window.removeEventListener("hashchange", handleNavigation);
   window.removeEventListener("popstate", handleNavigation);
 }
@@ -132,6 +176,7 @@ function detachListeners(): void {
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 function handleClick(event: MouseEvent): void {
+  if (activeSelectorPick) return;
   if (!recording || paused) return;
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
@@ -273,6 +318,7 @@ function handleClick(event: MouseEvent): void {
 }
 
 function handleInput(event: Event): void {
+  if (activeSelectorPick) return;
   if (!recording || paused) return;
   const target = event.target as HTMLInputElement | HTMLTextAreaElement;
   if (!target || !isInputElement(target)) return;
@@ -292,6 +338,7 @@ function handleInput(event: Event): void {
 }
 
 function handleChange(event: Event): void {
+  if (activeSelectorPick) return;
   if (!recording || paused) return;
   const target = event.target as HTMLSelectElement;
   if (!target || target.tagName.toLowerCase() !== "select") return;
@@ -318,6 +365,7 @@ function handleChange(event: Event): void {
 const PRESS_KEYS = new Set(["Tab", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp"]);
 
 function handleKeydown(event: KeyboardEvent): void {
+  if (activeSelectorPick) return;
   if (!recording || paused) return;
   const target = event.target as Element;
 
@@ -358,10 +406,12 @@ function handleKeydown(event: KeyboardEvent): void {
 }
 
 /**
- * Record hover only on elements that reveal content on hover (menus, popovers,
- * tooltips). Auto-recording every mouseover would be far too noisy (feature 4).
+ * Optional hover capture for elements that reveal content on hover (menus,
+ * popovers, tooltips). Disabled by default because Zoom surfaces still generate
+ * too many incidental hover steps during normal recording.
  */
 function handleMouseOver(event: MouseEvent): void {
+  if (activeSelectorPick) return;
   if (!recording || paused) return;
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
@@ -546,6 +596,7 @@ function stableNetworkPath(url: string): string | undefined {
 
 async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean; error?: string; skipped?: boolean; message?: string }> {
   try {
+    await waitForPageReady(action.timeout ?? 10_000);
     const condition = await evaluatePreflightCondition(action);
     if (condition.skip) {
       return { ok: true, skipped: true, message: condition.message };
@@ -624,7 +675,77 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
     }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await waitForPageReady(action.timeout ?? 10_000, { afterAction: true }).catch(() => undefined);
   }
+}
+
+async function waitForPageReady(timeout: number, options: { afterAction?: boolean } = {}): Promise<void> {
+  const deadline = Date.now() + Math.max(timeout, 1_000);
+  if (options.afterAction) {
+    await sleep(PAGE_READY_INITIAL_SETTLE_MS);
+  }
+
+  await waitForDocumentComplete(deadline);
+  await waitForNoVisibleLoading(deadline);
+  await waitForDomQuiet(deadline, PAGE_READY_QUIET_MS);
+}
+
+async function waitForDocumentComplete(deadline: number): Promise<void> {
+  while (Date.now() < deadline) {
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+      return;
+    }
+    await sleep(50);
+  }
+  throw new Error("Page did not reach a ready document state before the step timeout.");
+}
+
+async function waitForNoVisibleLoading(deadline: number): Promise<void> {
+  while (Date.now() < deadline) {
+    if (!hasVisibleLoadingIndicator()) {
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error("Page still shows a loading indicator after the step timeout.");
+}
+
+async function waitForDomQuiet(deadline: number, quietMs: number): Promise<void> {
+  let lastMutation = Date.now();
+  const observer = new MutationObserver(() => {
+    lastMutation = Date.now();
+  });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+
+  try {
+    while (Date.now() < deadline) {
+      if (Date.now() - lastMutation >= quietMs && !hasVisibleLoadingIndicator()) {
+        return;
+      }
+      await sleep(75);
+    }
+  } finally {
+    observer.disconnect();
+  }
+
+  throw new Error("Page did not settle before the step timeout.");
+}
+
+function hasVisibleLoadingIndicator(): boolean {
+  return Array.from(document.querySelectorAll(PAGE_READY_LOADING_SELECTORS)).some((element) => {
+    if (!isElementVisible(element)) return false;
+    const text = visibleText(element).toLowerCase();
+    if (text.includes("loaded") || text.includes("not loading")) return false;
+    return true;
+  });
+}
+
+function hasUsableSelector(selectors: SelectorStrategy): boolean {
+  return Boolean(selectors.role || selectors.label || selectors.text || selectors.testId || selectors.css);
 }
 
 async function evaluatePreflightCondition(action: RecordedAction): Promise<{ skip: boolean; message?: string }> {
@@ -744,6 +865,373 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
   }
 }
 
+async function pickSelector(action: RecordedAction): Promise<SelectorPickResult> {
+  activeSelectorPick?.cancel("Replaced by a newer target picker.");
+
+  return await new Promise<SelectorPickResult>((resolve) => {
+    let currentTarget: Element | undefined;
+
+    const finish = (result: SelectorPickResult): void => {
+      cleanup();
+      resolve(result);
+    };
+    const cancel = (message: string): void => {
+      finish({ actionId: action.id, selectors: action.selectors, error: message });
+    };
+    const onPointerMove = (event: MouseEvent): void => {
+      const target = pickableTargetAtPoint(event, action.type);
+      if (!target || isRecorderUI(target)) return;
+      currentTarget = target;
+      showPickerHighlight(target);
+    };
+    const onClick = (event: MouseEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const target = pickableTargetAtPoint(event, action.type) ?? currentTarget;
+      if (!target || isRecorderUI(target)) {
+        cancel("No selectable page element was found under the pointer.");
+        return;
+      }
+
+      const selectors = extractedSelectorsForTarget(target);
+      highlightElement(target);
+      finish({
+        actionId: action.id,
+        selectors,
+        frameSelector,
+        preview: elementPreview(target),
+        description: describePickedTarget(action, target, selectors),
+        value: pickedValue(action, target)
+      });
+    };
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancel("Target picker cancelled.");
+    };
+    const cleanup = (): void => {
+      document.removeEventListener("mousemove", onPointerMove, true);
+      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("keydown", onKeydown, true);
+      hidePickerInstruction();
+      clearPickerHighlight();
+      if (activeSelectorPick?.cancel === cancel) {
+        activeSelectorPick = undefined;
+      }
+    };
+
+    activeSelectorPick = { cancel };
+    showPickerInstruction(action);
+    document.addEventListener("mousemove", onPointerMove, true);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKeydown, true);
+    window.setTimeout(() => {
+      if (activeSelectorPick?.cancel === cancel) {
+        cancel("Target picker timed out.");
+      }
+    }, 30_000);
+  });
+}
+
+async function pickAnchor(action: RecordedAction): Promise<AnchorPickResult> {
+  activeSelectorPick?.cancel("Replaced by a newer anchor picker.");
+
+  return await new Promise<AnchorPickResult>((resolve) => {
+    let currentTarget: Element | undefined;
+
+    const finish = (result: AnchorPickResult): void => {
+      cleanup();
+      resolve(result);
+    };
+    const cancel = (message: string): void => {
+      finish({ actionId: action.id, error: message });
+    };
+    const onPointerMove = (event: MouseEvent): void => {
+      const target = semanticPickTarget(event.target as Element);
+      if (!target || isRecorderUI(target)) return;
+      currentTarget = target;
+      showPickerHighlight(target);
+    };
+    const onClick = (event: MouseEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const target = currentTarget ?? semanticPickTarget(event.target as Element);
+      if (!target || isRecorderUI(target)) {
+        cancel("No anchor text was selected.");
+        return;
+      }
+
+      const anchor = anchorFromPickedElement(target);
+      if (!anchor) {
+        cancel("Pick stable text inside a repeated row or list item.");
+        return;
+      }
+
+      highlightElement(target);
+      finish({
+        actionId: action.id,
+        anchor,
+        preview: elementPreview(target)
+      });
+    };
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancel("Anchor picker cancelled.");
+    };
+    const cleanup = (): void => {
+      document.removeEventListener("mousemove", onPointerMove, true);
+      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("keydown", onKeydown, true);
+      hidePickerInstruction();
+      clearPickerHighlight();
+      if (activeSelectorPick?.cancel === cancel) {
+        activeSelectorPick = undefined;
+      }
+    };
+
+    activeSelectorPick = { cancel };
+    showPickerInstruction(action, "anchor");
+    document.addEventListener("mousemove", onPointerMove, true);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKeydown, true);
+    window.setTimeout(() => {
+      if (activeSelectorPick?.cancel === cancel) {
+        cancel("Anchor picker timed out.");
+      }
+    }, 30_000);
+  });
+}
+
+function pickableTargetAtPoint(event: MouseEvent, actionType: RecordedAction["type"]): Element | undefined {
+  for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
+    if (isRecorderUI(element)) continue;
+    const target = pickableTarget(element, actionType, { allowSemanticFallback: false });
+    if (target) return target;
+  }
+  return pickableTarget(event.target as Element | null, actionType);
+}
+
+function pickableTarget(
+  element: Element | null,
+  actionType: RecordedAction["type"],
+  options: { allowSemanticFallback?: boolean } = {}
+): Element | undefined {
+  if (!element) return undefined;
+  const allowSemanticFallback = options.allowSemanticFallback !== false;
+  if (actionType === "assert") {
+    return assertionTarget(element) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
+  }
+  const checkbox = actionType === "click" ? checkboxTarget(element) : undefined;
+  if (checkbox) return checkbox;
+
+  if (actionType === "fill") {
+    return element.closest("input, textarea, [contenteditable='true'], [role='textbox']") ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
+  }
+  if (actionType === "select") {
+    return element.closest(
+      "select, [role='combobox'], [role='option'], [class*='cpzui-select'], [class*='cpzui-virtual-filter-select']"
+    ) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
+  }
+  if (actionType === "press") {
+    return element.closest("input, textarea, button, a, [role='button'], [role='textbox'], [tabindex]") ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
+  }
+  return element.closest(
+    `button, a, input[type='button'], input[type='submit'], ${CHECKBOX_TARGET_SELECTOR}, [role='button'], [role='link'], [aria-expanded], [class*='cpzui-button']`
+  ) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
+}
+
+function checkboxTarget(element: Element): Element | undefined {
+  const direct = element.closest(CHECKBOX_TARGET_SELECTOR);
+  if (direct) return bestCheckboxTarget(direct);
+
+  const row = element.closest('tr, [role="row"], li, [role="listitem"]');
+  const rowCheckbox = row?.querySelector(CHECKBOX_TARGET_SELECTOR);
+  return rowCheckbox ? bestCheckboxTarget(rowCheckbox) : undefined;
+}
+
+function bestCheckboxTarget(element: Element): Element {
+  const label = element.closest("label");
+  if (label && isElementVisible(label)) return label;
+  const visibleWrapper = element.closest('[role="checkbox"], [class*="checkbox"], [class*="Checkbox"], [class*="cpzui-checkbox"], [class*="zm-checkbox"], [class*="zmu-checkbox"]');
+  if (visibleWrapper && isElementVisible(visibleWrapper)) return visibleWrapper;
+  return element;
+}
+
+function assertionTarget(element: Element): Element | undefined {
+  let current: Element | null = element;
+  let depth = 0;
+  while (current && depth < 6) {
+    if (isMeaningfulAssertionTarget(current)) {
+      return current;
+    }
+    current = current.parentElement;
+    depth++;
+  }
+  return undefined;
+}
+
+function isMeaningfulAssertionTarget(element: Element): boolean {
+  const tag = element.tagName.toLowerCase();
+  if (["html", "body", "main", "form", "table", "thead", "tbody", "tr"].includes(tag)) return false;
+  if (!isElementVisible(element)) return false;
+
+  const text = visibleText(element);
+  if (text.length < 2 || text.length > 120) return false;
+  if (!/[A-Za-z0-9]/.test(text)) return false;
+
+  if (element.matches("a, button, td, th, span, strong, p, label, [role='link'], [role='button'], [role='gridcell'], [role='cell'], [data-testid]")) {
+    return true;
+  }
+
+  return element.children.length === 0;
+}
+
+function semanticPickTarget(element: Element): Element {
+  let current: Element | null = element;
+  let depth = 0;
+  while (current && depth < 6) {
+    if (
+      current.matches("button, a, input, textarea, select, [role], [aria-label], [data-testid]") ||
+      /cpzui-(button|select|virtual-filter-select|checkbox|tab)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(current.className ?? ""))
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+    depth++;
+  }
+  return element;
+}
+
+function anchorFromPickedElement(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const container = element.closest('tr, [role="row"], li, [role="listitem"]');
+  if (!container) return undefined;
+
+  const scopeRole = container.tagName === "TR" || container.getAttribute("role") === "row" ? "row" : "listitem";
+  const text = manualAnchorText(element, container);
+  if (!text) return undefined;
+  return { scopeRole, text, relationship: "within" };
+}
+
+function manualAnchorText(element: Element, container: Element): string | undefined {
+  const ownText = visibleText(element);
+  if (ownText.length > 1 && ownText.length <= 80) return ownText;
+
+  const candidates = Array.from(container.querySelectorAll("td, th, [role='gridcell'], [role='cell'], span, strong, a"))
+    .map((candidate) => visibleText(candidate))
+    .filter((text) => text.length > 1 && text.length <= 80);
+  const email = candidates.find((text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text));
+  return email ?? candidates[0];
+}
+
+function extractedSelectorsForTarget(target: Element): SelectorStrategy {
+  let selectors = extractSelectors(target);
+  const nth = computeNth(target, selectors);
+  if (nth !== undefined) {
+    selectors = { ...selectors, nth };
+  }
+  const anchor = computeAnchor(target);
+  if (anchor) {
+    selectors = { ...selectors, anchor };
+  }
+  return selectors;
+}
+
+function describePickedTarget(action: RecordedAction, target: Element, selectors: SelectorStrategy): string {
+  const label = selectors.role?.name ?? selectors.label ?? selectors.text ?? elementPreview(target);
+  if (action.type === "assert") return `Assert text visible: ${assertionText(target) ?? label}`;
+  if (action.type === "fill") return `Fill "${label}"`;
+  if (action.type === "select") return `Select option in "${label}"`;
+  if (action.type === "press") return `Press ${action.key ?? "Enter"}${label ? ` in "${label}"` : ""}`;
+  return `Click "${label}"`;
+}
+
+function pickedValue(action: RecordedAction, target: Element): string | undefined {
+  if (action.type === "assert") return assertionText(target);
+  if (action.type !== "select") return undefined;
+  if (target instanceof HTMLOptionElement) return target.text.trim() || target.value;
+  if (target.getAttribute("role") === "option") return visibleText(target);
+  return undefined;
+}
+
+function assertionText(target: Element): string | undefined {
+  const text = visibleText(target).replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.length > 120 ? text.slice(0, 120).trim() : text;
+}
+
+function showPickerInstruction(action: RecordedAction, mode: "target" | "anchor" = "target"): void {
+  const existing = document.getElementById("__zoom_recorder_picker_instruction");
+  if (existing) existing.remove();
+  const instruction = document.createElement("div");
+  instruction.id = "__zoom_recorder_picker_instruction";
+  instruction.textContent = mode === "anchor"
+    ? "Click stable row/list text to anchor this step. Press Esc to cancel."
+    : `Click the ${pickerNoun(action.type)} to use for this step. Press Esc to cancel.`;
+  instruction.style.cssText = [
+    "position: fixed",
+    "top: 8px",
+    "left: 50%",
+    "transform: translateX(-50%)",
+    "z-index: 999999",
+    "background: #0b5cff",
+    "color: white",
+    "padding: 7px 14px",
+    "border-radius: 18px",
+    "font-family: system-ui, sans-serif",
+    "font-size: 12px",
+    "font-weight: 700",
+    "box-shadow: 0 2px 10px rgba(0,0,0,0.24)",
+    "pointer-events: none"
+  ].join(";");
+  document.body.appendChild(instruction);
+}
+
+function pickerNoun(actionType: RecordedAction["type"]): string {
+  if (actionType === "assert") return "text or element to validate";
+  if (actionType === "fill") return "field";
+  if (actionType === "select") return "dropdown or option";
+  if (actionType === "press") return "field or control";
+  return "button or link";
+}
+
+function hidePickerInstruction(): void {
+  document.getElementById("__zoom_recorder_picker_instruction")?.remove();
+}
+
+function showPickerHighlight(element: Element): void {
+  const id = "__zoom_recorder_picker_highlight";
+  let overlay = document.getElementById(id);
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = id;
+    overlay.style.cssText = [
+      "position: fixed",
+      "border: 3px solid #0b5cff",
+      "box-shadow: 0 0 0 3px rgba(11,92,255,0.22)",
+      "border-radius: 6px",
+      "z-index: 999998",
+      "pointer-events: none"
+    ].join(";");
+    document.body.appendChild(overlay);
+  }
+  const rect = element.getBoundingClientRect();
+  overlay.style.left = `${Math.max(rect.left - 3, 0)}px`;
+  overlay.style.top = `${Math.max(rect.top - 3, 0)}px`;
+  overlay.style.width = `${Math.max(rect.width + 6, 6)}px`;
+  overlay.style.height = `${Math.max(rect.height + 6, 6)}px`;
+}
+
+function clearPickerHighlight(): void {
+  document.getElementById("__zoom_recorder_picker_highlight")?.remove();
+}
+
 async function executeAssertion(action: RecordedAction): Promise<void> {
   const expected = action.expected ?? action.value ?? "";
   const timeout = action.timeout ?? 10_000;
@@ -755,7 +1243,9 @@ async function executeAssertion(action: RecordedAction): Promise<void> {
       return;
     case "elementVisible":
       await waitFor(() => {
-        const element = document.querySelector(expected);
+        const element = hasUsableSelector(action.selectors)
+          ? findReplayElementSync(action)
+          : document.querySelector(expected);
         return Boolean(element && isElementVisible(element));
       }, timeout, `Expected selector to be visible: ${expected}`);
       return;
@@ -802,70 +1292,77 @@ function findReplayElementSync(action: RecordedAction): Element | undefined {
   const anchorRoot = resolveAnchorRoot(selectors);
   if (anchorRoot) {
     if (selectors.testId) {
-      const el = anchorRoot.querySelector(`[data-testid="${cssEscape(selectors.testId)}"]`);
-      if (el && isElementVisible(el)) return el;
+      const el = pickElement(Array.from(anchorRoot.querySelectorAll(`[data-testid="${cssEscape(selectors.testId)}"]`)));
+      if (el) return el;
     }
     if (selectors.css) {
-      const el = anchorRoot.querySelector(selectors.css);
-      if (el && isElementVisible(el)) return el;
+      const el = pickElement(Array.from(anchorRoot.querySelectorAll(selectors.css)));
+      if (el) return el;
     }
     if (selectors.role) {
       const el = findByRole(selectors.role.role, selectors.role.name, anchorRoot);
       if (el) return el;
     }
     if (selectors.text) {
-      const el = Array.from(anchorRoot.querySelectorAll("*")).find(
+      const el = pickElement(Array.from(anchorRoot.querySelectorAll("*")).filter(
         (e) => isElementVisible(e) && visibleText(e).toLowerCase().includes(selectors.text!.toLowerCase())
-      );
+      ));
       if (el) return el;
     }
   }
 
   if (selectors.css) {
-    const element = document.querySelector(selectors.css);
-    if (element && isElementVisible(element)) return element;
+    const element = pickElement(Array.from(document.querySelectorAll(selectors.css)), selectors.nth);
+    if (element) return element;
   }
   if (selectors.testId) {
-    const element = document.querySelector(`[data-testid="${cssEscape(selectors.testId)}"]`);
-    if (element && isElementVisible(element)) return element;
+    const element = pickElement(Array.from(document.querySelectorAll(`[data-testid="${cssEscape(selectors.testId)}"]`)), selectors.nth);
+    if (element) return element;
   }
   if (selectors.label) {
     const element = findByLabel(selectors.label);
     if (element) return element;
   }
   if (selectors.role) {
-    const element = findByRole(selectors.role.role, selectors.role.name);
+    const element = findByRole(selectors.role.role, selectors.role.name, document, selectors.nth);
     if (element) return element;
   }
   if (selectors.text) {
-    return Array.from(document.querySelectorAll("body *")).find((element) => isElementVisible(element) && visibleText(element).toLowerCase().includes(selectors.text!.toLowerCase()));
+    return pickElement(
+      Array.from(document.querySelectorAll("body *")).filter((element) => isElementVisible(element) && visibleText(element).toLowerCase().includes(selectors.text!.toLowerCase())),
+      selectors.nth
+    );
   }
   return undefined;
 }
 
 function selectorCandidates(selectors: SelectorStrategy): Array<{ label: string; selector: SelectorStrategy }> {
   const candidates: Array<{ label: string; selector: SelectorStrategy }> = [];
-  if (selectors.role) candidates.push({ label: `Role: ${selectors.role.role}${selectors.role.name ? ` / ${selectors.role.name}` : ""}`, selector: { role: selectors.role } });
-  if (selectors.label) candidates.push({ label: `Label: ${selectors.label}`, selector: { label: selectors.label } });
-  if (selectors.text) candidates.push({ label: `Text: ${selectors.text}`, selector: { text: selectors.text } });
-  if (selectors.testId) candidates.push({ label: `Test ID: ${selectors.testId}`, selector: { testId: selectors.testId } });
-  if (selectors.css) candidates.push({ label: `CSS: ${selectors.css}`, selector: { css: selectors.css } });
+  const withAnchor = (selector: SelectorStrategy): SelectorStrategy =>
+    selectors.anchor ? { ...selector, anchor: selectors.anchor } : selector;
+  const anchorSuffix = selectors.anchor?.text ? ` anchored to "${selectors.anchor.text}"` : "";
+
+  if (selectors.role) candidates.push({ label: `Role: ${selectors.role.role}${selectors.role.name ? ` / ${selectors.role.name}` : ""}${anchorSuffix}`, selector: withAnchor({ role: selectors.role }) });
+  if (selectors.label) candidates.push({ label: `Label: ${selectors.label}${anchorSuffix}`, selector: withAnchor({ label: selectors.label }) });
+  if (selectors.text) candidates.push({ label: `Text: ${selectors.text}${anchorSuffix}`, selector: withAnchor({ text: selectors.text }) });
+  if (selectors.testId) candidates.push({ label: `Test ID: ${selectors.testId}${anchorSuffix}`, selector: withAnchor({ testId: selectors.testId }) });
+  if (selectors.css) candidates.push({ label: `CSS: ${selectors.css}${anchorSuffix}`, selector: withAnchor({ css: selectors.css }) });
   return candidates;
 }
 
 function resolveCandidate(selector: SelectorStrategy, label: string): Element[] {
-  if (selector.css) return Array.from(document.querySelectorAll(selector.css));
-  if (selector.testId) return Array.from(document.querySelectorAll(`[data-testid="${cssEscape(selector.testId)}"]`));
+  const root = resolveAnchorRoot(selector) ?? document;
+  if (selector.css) return actionableElements(Array.from(root.querySelectorAll(selector.css)));
+  if (selector.testId) return actionableElements(Array.from(root.querySelectorAll(`[data-testid="${cssEscape(selector.testId)}"]`)));
   if (selector.label) {
-    const target = findByLabel(selector.label);
+    const target = findByLabel(selector.label, root);
     return target ? [target] : [];
   }
   if (selector.role) {
-    const target = findByRole(selector.role.role, selector.role.name);
-    return target ? [target] : [];
+    return findAllByRole(selector.role.role, selector.role.name, root);
   }
   if (selector.text) {
-    return Array.from(document.querySelectorAll("body *")).filter((element) => visibleText(element).toLowerCase().includes(selector.text!.toLowerCase()));
+    return actionableElements(Array.from(root.querySelectorAll("*")).filter((element) => visibleText(element).toLowerCase().includes(selector.text!.toLowerCase())));
   }
   if (label) return [];
   return [];
@@ -899,8 +1396,8 @@ function elementPreview(element: Element): string {
   return `<${tag}> ${label.replace(/\s+/g, " ").trim().slice(0, 120)}`;
 }
 
-function findByLabel(labelText: string): Element | undefined {
-  const labels = Array.from(document.querySelectorAll("label"));
+function findByLabel(labelText: string, root: ParentNode = document): Element | undefined {
+  const labels = Array.from(root.querySelectorAll("label"));
   for (const label of labels) {
     if (!visibleText(label).toLowerCase().includes(labelText.toLowerCase())) continue;
     if (label.htmlFor) {
@@ -911,25 +1408,48 @@ function findByLabel(labelText: string): Element | undefined {
     if (nested && isElementVisible(nested)) return nested;
   }
 
-  const aria = Array.from(document.querySelectorAll("input, textarea, select, button, [aria-label]"));
+  const aria = Array.from(root.querySelectorAll("input, textarea, select, button, [aria-label]"));
   return aria.find((element) => (element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? "").toLowerCase().includes(labelText.toLowerCase()) && isElementVisible(element));
 }
 
-function findByRole(role: string, name?: string, root: ParentNode = document): Element | undefined {
+function findByRole(role: string, name?: string, root: ParentNode = document, nth?: number): Element | undefined {
+  return pickElement(findAllByRole(role, name, root), nth);
+}
+
+function findAllByRole(role: string, name?: string, root: ParentNode = document): Element[] {
   const selectors = role === "button"
     ? "button, [role='button'], input[type='button'], input[type='submit']"
     : role === "textbox"
       ? "input, textarea, [role='textbox']"
       : role === "checkbox"
-        ? "input[type='checkbox'], [role='checkbox'], [class*='checkbox']"
+        ? CHECKBOX_TARGET_SELECTOR
         : `[role='${role}']`;
-  const elements = Array.from(root.querySelectorAll(selectors));
-  return elements.find((element) => {
-    if (!isElementVisible(element)) return false;
+  return actionableElements(Array.from(root.querySelectorAll(selectors))).filter((element) => {
     if (!name) return true;
-    const accessible = `${visibleText(element)} ${element.getAttribute("aria-label") ?? ""} ${(element as HTMLInputElement).value ?? ""}`.trim();
+    const accessible = `${visibleText(element)} ${element.getAttribute("aria-label") ?? ""} ${(element as HTMLInputElement).value ?? ""} ${associatedCheckboxLabel(element) ?? ""}`.trim();
     return accessible.toLowerCase().includes(name.toLowerCase());
   });
+}
+
+function pickElement(elements: Element[], nth = 0): Element | undefined {
+  const actionable = actionableElements(elements);
+  return actionable[nth] ?? actionable[0];
+}
+
+function actionableElements(elements: Element[]): Element[] {
+  return elements
+    .map((element) => isCheckboxLike(element) ? bestCheckboxTarget(element) : element)
+    .filter((element, index, all) => all.indexOf(element) === index)
+    .filter(isElementVisible);
+}
+
+function isCheckboxLike(element: Element): boolean {
+  return element.matches(CHECKBOX_TARGET_SELECTOR) || Boolean(element.closest(CHECKBOX_TARGET_SELECTOR));
+}
+
+function associatedCheckboxLabel(element: Element): string | undefined {
+  const label = element.closest("label") ?? (element.id ? document.querySelector(`label[for="${element.id}"]`) : null);
+  return label?.textContent?.replace(/\s+/g, " ").trim();
 }
 
 async function findByText(text: string, timeout: number): Promise<Element> {
@@ -1066,7 +1586,7 @@ function getOptionText(element: Element): string | undefined {
 }
 
 function isRecorderUI(el: Element): boolean {
-  return Boolean(el.closest("#__zoom_recorder_indicator"));
+  return Boolean(el.closest("#__zoom_recorder_indicator, #__zoom_recorder_picker_instruction, #__zoom_recorder_picker_highlight"));
 }
 
 /**

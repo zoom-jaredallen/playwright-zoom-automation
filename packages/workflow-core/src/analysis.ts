@@ -93,10 +93,12 @@ export function generateAssertions(actionTree: RecordedAction[]): WorkflowAssert
       });
     }
 
-    // After click on Save/Submit buttons, add success assertion
+    // After finalizing clicks, add success assertion. Opening controls such as
+    // "Add user" should not be treated as commits because they often open forms
+    // or dialogs without showing a toast.
     if (action.type === "click") {
       const name = action.selectors.role?.name ?? action.selectors.text ?? "";
-      if (/save|submit|add|continue|confirm/i.test(name)) {
+      if (isCommitClickLabel(name)) {
         assertions.push({
           afterAction: action.id,
           type: "textVisible",
@@ -121,6 +123,10 @@ export function generateAssertions(actionTree: RecordedAction[]): WorkflowAssert
   }
 
   return assertions;
+}
+
+export function isCommitClickLabel(label: string): boolean {
+  return /\b(save|submit|confirm|apply|create|update|finish|done)\b/i.test(label.trim());
 }
 
 /** Map a recorded assertion type to the narrower WorkflowAssertion.type union. */
@@ -166,7 +172,7 @@ export function calculateQualityReport(
   const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type));
   const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
   const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
-  const submitActions = workflowActions.filter((action) => action.type === "click" && /save|submit|add|continue|confirm/i.test(action.selectors.role?.name ?? action.selectors.text ?? ""));
+  const submitActions = workflowActions.filter((action) => action.type === "click" && isCommitClickLabel(action.selectors.role?.name ?? action.selectors.text ?? ""));
   const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertions.length, submitActions.length) / submitActions.length) * 100);
   const evidenceCount = workflowActions.filter((action) => action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
   const evidenceCoverage = workflowActions.length === 0 ? 100 : Math.round((evidenceCount / workflowActions.length) * 100);

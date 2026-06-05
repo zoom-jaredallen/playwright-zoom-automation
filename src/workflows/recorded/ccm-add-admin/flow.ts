@@ -8,7 +8,7 @@ import type { StorageState } from "../../../zoom/auth.js";
 import { impersonateSubAccount } from "../../../zoom/impersonation.js";
 import { dismissBlockingZoomPopups } from "../../../zoom/popups.js";
 
-export interface UntitledWorkflowFlowOptions {
+export interface CcmAddAdminFlowOptions {
   browser: Browser;
   masterStorageState: StorageState;
   getMasterStorageState?: () => StorageState;
@@ -16,10 +16,10 @@ export interface UntitledWorkflowFlowOptions {
   logger: Logger;
 }
 
-export class UntitledWorkflowFlow implements AutomationFlow {
-  readonly name = "untitled-workflow";
+export class CcmAddAdminFlow implements AutomationFlow {
+  readonly name = "ccm-add-admin";
 
-  constructor(private readonly options: UntitledWorkflowFlowOptions) {}
+  constructor(private readonly options: CcmAddAdminFlowOptions) {}
 
   async run(input: FlowInput): Promise<FlowResult> {
     const activeAccountId = input.account.id;
@@ -30,7 +30,7 @@ export class UntitledWorkflowFlow implements AutomationFlow {
     const page = await context.newPage();
     const artifactBase = path.join(
       this.options.config.runtime.artifactsDir,
-      `${input.account.id.replace(/[^a-z0-9_.-]/gi, "_")}-untitled-workflow-${Date.now()}`
+      `${input.account.id.replace(/[^a-z0-9_.-]/gi, "_")}-ccm-add-admin-${Date.now()}`
     );
 
     try {
@@ -51,15 +51,15 @@ export class UntitledWorkflowFlow implements AutomationFlow {
     // Assertions are checked inline after their triggering actions
 
       // ─── Recorded Actions ────────────────────────────────────────────
-      // Step 1: Navigate to Contact Center - Zoom
+      // Step 1: Navigate to CCM > Users
       {
         const skip = await this.shouldSkipRecordedStep(page, undefined, {});
         if (skip === "account") {
-          this.options.logger.info("Recorded workflow skip condition matched", { step: "Navigate to Contact Center - Zoom" });
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Navigate to CCM > Users" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
-          await this.executeRecordedStep(page, artifactBase, "Navigate to Contact Center - Zoom", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+          await this.executeRecordedStep(page, artifactBase, "Navigate to CCM > Users", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
         await page.goto(`${this.options.config.zoom.webBaseUrl.replace(/\/$/, "")}/cci/index/admin#/admin-agents`, { waitUntil: "domcontentloaded", timeout: 10000 });
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => undefined);
         await dismissBlockingZoomPopups(page, this.options.logger);
@@ -69,61 +69,129 @@ export class UntitledWorkflowFlow implements AutomationFlow {
       // Auto verification (urlContains)
         await page.waitForURL((url) => url.href.includes("#/admin-agents"), { timeout: 15000 });
 
-      // Step 2: Click "+ Add user"
+      // Step 2: Wait 1000ms
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Add user"},"label":"Add user","text":"+ Add user","css":"div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md > span.zcc-compat-zoom-button__label"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {});
         if (skip === "account") {
-          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"+ Add user\"" });
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Wait 1000ms" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Wait 1000ms", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await page.waitForTimeout(1000);
+          });
+        }
+      }
+
+      // Step 3: Click "Add user"
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Add user"},"text":"Add user","testId":"agents-add-user-btn","css":"div.operation-panel.mg-b-16:nth-child(1) > div.buttons-wrapper:nth-child(2) > div.agents__operation.mg-t-8 > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Add user\"" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
           if (this.options.config.runtime.dryRun) {
             dryRunSkipped = true;
-            this.options.logger.info("Dry run: skipping mutating step", { step: "Click \"+ Add user\"" });
+            this.options.logger.info("Dry run: skipping mutating step", { step: "Click \"Add user\"" });
           } else {
-            await this.executeRecordedStep(page, artifactBase, "Click \"+ Add user\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.clickElement(page, {"role":{"role":"button","name":"Add user"},"label":"Add user","text":"+ Add user","css":"div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md > span.zcc-compat-zoom-button__label"}, 10000, undefined);
+            await this.executeRecordedStep(page, artifactBase, "Click \"Add user\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await this.clickElement(page, {"role":{"role":"button","name":"Add user"},"text":"Add user","testId":"agents-add-user-btn","css":"div.operation-panel.mg-b-16:nth-child(1) > div.buttons-wrapper:nth-child(2) > div.agents__operation.mg-t-8 > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"}, 10000, undefined);
           });
           }
         }
       }
       // Auto verification (textVisible)
       try {
-        await page.getByText(new RegExp("success|saved|added|submitted", "i")).first().waitFor({ state: "visible", timeout: 10000 });
+        await page.getByText(new RegExp("User\\(s\\)", "i")).first().waitFor({ state: "visible", timeout: 10000 });
       } catch (error) {
         await page.screenshot({ path: `${artifactBase}-verify-failure.png`, fullPage: true }).catch(() => undefined);
         throw error;
       }
 
-      // Step 3: Fill "Search by name or email address" with "chen"
+      // Step 4: Wait 1000ms
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"textbox"},"label":"Search by name or email address","css":"div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {});
         if (skip === "account") {
-          this.options.logger.info("Recorded workflow skip condition matched", { step: "Fill \"Search by name or email address\" with \"chen\"" });
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Wait 1000ms" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
-          await this.executeRecordedStep(page, artifactBase, "Fill \"Search by name or email address\" with \"chen\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.fillField(page, {"role":{"role":"textbox"},"label":"Search by name or email address","css":"div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner"}, "chen", 10000, undefined);
+          await this.executeRecordedStep(page, artifactBase, "Wait 1000ms", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await page.waitForTimeout(1000);
           });
         }
       }
 
-      // Step 4: Click ""
+      // Step 5: Click "Add user"
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"css":"span.zcc-compat-zoom-checkbox > span.zcc-compat-zoom-checkbox__wrap > span.zcc-compat-zoom-checkbox__inner > i.zcc-compat-zoom-checkbox__knob"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Add user"},"label":"Add user","text":"+ Add user","css":"div.zcc-compat-zoom-form-item__row > div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"});
         if (skip === "account") {
-          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"\"" });
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Add user\"" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
-          await this.executeRecordedStep(page, artifactBase, "Click \"\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.clickElement(page, {"css":"span.zcc-compat-zoom-checkbox > span.zcc-compat-zoom-checkbox__wrap > span.zcc-compat-zoom-checkbox__inner > i.zcc-compat-zoom-checkbox__knob"}, 10000, undefined);
+          if (this.options.config.runtime.dryRun) {
+            dryRunSkipped = true;
+            this.options.logger.info("Dry run: skipping mutating step", { step: "Click \"Add user\"" });
+          } else {
+            await this.executeRecordedStep(page, artifactBase, "Click \"Add user\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await this.clickElement(page, {"role":{"role":"button","name":"Add user"},"label":"Add user","text":"+ Add user","css":"div.zcc-compat-zoom-form-item__row > div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"}, 10000, undefined);
+          });
+          }
+        }
+      }
+      // Auto verification (textVisible)
+      try {
+        await page.getByText(new RegExp("Choose from users", "i")).first().waitFor({ state: "visible", timeout: 10000 });
+      } catch (error) {
+        await page.screenshot({ path: `${artifactBase}-verify-failure.png`, fullPage: true }).catch(() => undefined);
+        throw error;
+      }
+
+      // Step 6: Fill "Search by name or email address"
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"textbox","name":"Search by name or email address"},"label":"Search by name or email address","css":"div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner"});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Fill \"Search by name or email address\"" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Fill \"Search by name or email address\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await this.fillField(page, {"role":{"role":"textbox","name":"Search by name or email address"},"label":"Search by name or email address","css":"div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner"}, "michael.chen", 10000, undefined);
           });
         }
       }
 
-      // Step 5: Click "Add"
+      // Step 7: Wait 1000ms
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Wait 1000ms" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Wait 1000ms", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await page.waitForTimeout(1000);
+          });
+        }
+      }
+
+      // Step 8: Click "Checkbox" for user
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"checkbox"},"anchor":{"text":"Michael Chen","scopeRole":"row","relationship":"within"}});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Checkbox\" for user" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Click \"Checkbox\" for user", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await this.clickElement(page, {"role":{"role":"checkbox"},"anchor":{"text":"Michael Chen","scopeRole":"row","relationship":"within"}}, 10000, undefined);
+          });
+        }
+      }
+
+      // Step 9: Click "Add"
       {
         const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Add"},"text":"Add","css":"div.zcc-compat-zoom-overlay-dialog > div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__footer:nth-child(3) > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(2)"});
         if (skip === "account") {
@@ -138,43 +206,57 @@ export class UntitledWorkflowFlow implements AutomationFlow {
       }
       // Auto verification (textVisible)
       try {
-        await page.getByText(new RegExp("success|saved|added|submitted", "i")).first().waitFor({ state: "visible", timeout: 10000 });
+        await page.getByText(new RegExp("Michael Chen", "i")).first().waitFor({ state: "visible", timeout: 10000 });
       } catch (error) {
         await page.screenshot({ path: `${artifactBase}-verify-failure.png`, fullPage: true }).catch(() => undefined);
         throw error;
       }
 
-      // Step 6: Click "Select user package"
+      // Step 10: Click "Select user package"
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"text":"Select user package","css":"div.zcc-compat-zoom-scrollbar > div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"combobox","name":"Select user package"},"label":"Select user package","text":"Select user package","css":"div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper > span.zcc-compat-zoom-select-input__span"});
         if (skip === "account") {
           this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Select user package\"" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
           await this.executeRecordedStep(page, artifactBase, "Click \"Select user package\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.clickElement(page, {"text":"Select user package","css":"div.zcc-compat-zoom-scrollbar > div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper"}, 10000, undefined);
+        await this.clickElement(page, {"role":{"role":"combobox","name":"Select user package"},"label":"Select user package","text":"Select user package","css":"div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper > span.zcc-compat-zoom-select-input__span"}, 10000, undefined);
           });
         }
       }
 
-      // Step 7: Click "Zoom Contact Center Elite (10 available)"
+      // Step 11: Wait 1000ms
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"option","name":"Zoom Contact Center Elite (10 available)"},"label":"Zoom Contact Center Elite (10 available)","text":"Zoom Contact Center Elite (10 available)","css":"li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3) > div.zcc-compat-zoom-select-option__content > span > span"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {});
         if (skip === "account") {
-          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Zoom Contact Center Elite (10 available)\"" });
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Wait 1000ms" });
           return { status: "skipped", message: "Skip condition matched" };
         }
         if (skip !== "step") {
-          await this.executeRecordedStep(page, artifactBase, "Click \"Zoom Contact Center Elite (10 available)\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.clickElement(page, {"role":{"role":"option","name":"Zoom Contact Center Elite (10 available)"},"label":"Zoom Contact Center Elite (10 available)","text":"Zoom Contact Center Elite (10 available)","css":"li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3) > div.zcc-compat-zoom-select-option__content > span > span"}, 10000, undefined);
+          await this.executeRecordedStep(page, artifactBase, "Wait 1000ms", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await page.waitForTimeout(1000);
           });
         }
       }
 
-      // Step 8: Click "Save"
+      // Step 12: Click "Zoom Contact Center Elite (200 available)"
       {
-        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Save"},"text":"Save","testId":"edit-agent-save-btn","css":"div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1) > span.zcc-compat-zoom-button__label"});
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"option","name":"Zoom Contact Center Elite (200 available)"},"label":"Zoom Contact Center Elite (200 available)","text":"Zoom Contact Center Elite (200 available)","css":"div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > ul.zcc-compat-zoom-select__list > li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3)","anchor":{"text":"Zoom Contact Center Elite (200 available)","scopeRole":"listitem","relationship":"within"}});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Zoom Contact Center Elite (200 available)\"" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Click \"Zoom Contact Center Elite (200 available)\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
+        await this.clickElement(page, {"role":{"role":"option","name":"Zoom Contact Center Elite (200 available)"},"label":"Zoom Contact Center Elite (200 available)","text":"Zoom Contact Center Elite (200 available)","css":"div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > ul.zcc-compat-zoom-select__list > li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3)","anchor":{"text":"Zoom Contact Center Elite (200 available)","scopeRole":"listitem","relationship":"within"}}, 10000, undefined);
+          });
+        }
+      }
+
+      // Step 13: Click "Save"
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"button","name":"Save"},"text":"Save","testId":"edit-agent-save-btn","css":"div.zcc-compat-zoom-sticky.zcc-migration-sticky:nth-child(1) > div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1)"});
         if (skip === "account") {
           this.options.logger.info("Recorded workflow skip condition matched", { step: "Click \"Save\"" });
           return { status: "skipped", message: "Skip condition matched" };
@@ -185,7 +267,7 @@ export class UntitledWorkflowFlow implements AutomationFlow {
             this.options.logger.info("Dry run: skipping mutating step", { step: "Click \"Save\"" });
           } else {
             await this.executeRecordedStep(page, artifactBase, "Click \"Save\"", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":false,"readyTimeoutMs":10000}, async () => {
-        await this.clickElement(page, {"role":{"role":"button","name":"Save"},"text":"Save","testId":"edit-agent-save-btn","css":"div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1) > span.zcc-compat-zoom-button__label"}, 10000, undefined);
+        await this.clickElement(page, {"role":{"role":"button","name":"Save"},"text":"Save","testId":"edit-agent-save-btn","css":"div.zcc-compat-zoom-sticky.zcc-migration-sticky:nth-child(1) > div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1)"}, 10000, undefined);
           });
           }
         }
@@ -193,6 +275,32 @@ export class UntitledWorkflowFlow implements AutomationFlow {
       // Auto verification (textVisible)
       try {
         await page.getByText(new RegExp("success|saved|added|submitted", "i")).first().waitFor({ state: "visible", timeout: 10000 });
+      } catch (error) {
+        await page.screenshot({ path: `${artifactBase}-verify-failure.png`, fullPage: true }).catch(() => undefined);
+        throw error;
+      }
+
+      // Step 14: Assert text visible: Michael Chen
+      {
+        const skip = await this.shouldSkipRecordedStep(page, undefined, {"role":{"role":"link"},"text":"Michael Chen","testId":"agents-name-link","css":"div.user_table_clo_name.zcc-migration-flex:nth-child(1) > a.agents-list__name.ellispis > div.ellipsis-overflowed-container > div.ellipsis-overflowed","anchor":{"text":"Zoom Contact Center Elite","scopeRole":"row","relationship":"within"}});
+        if (skip === "account") {
+          this.options.logger.info("Recorded workflow skip condition matched", { step: "Assert text visible: Michael Chen" });
+          return { status: "skipped", message: "Skip condition matched" };
+        }
+        if (skip !== "step") {
+          await this.executeRecordedStep(page, artifactBase, "Assert text visible: Michael Chen", {"retryCount":0,"retryDelayMs":1000,"continueOnFailure":false,"screenshotOnFailure":true,"readyTimeoutMs":10000}, async () => {
+        try {
+        await page.getByText("Michael Chen", { exact: false }).first().waitFor({ state: "visible", timeout: 10000 });
+        } catch (error) {
+          await page.screenshot({ path: `${artifactBase}-assert-text-visible-michael-chen-assertion-failure.png`, fullPage: true }).catch(() => undefined);
+          throw error;
+        }
+          });
+        }
+      }
+      // Auto verification (textVisible)
+      try {
+        await page.getByText(new RegExp("Michael Chen", "i")).first().waitFor({ state: "visible", timeout: 10000 });
       } catch (error) {
         await page.screenshot({ path: `${artifactBase}-verify-failure.png`, fullPage: true }).catch(() => undefined);
         throw error;
@@ -561,4 +669,4 @@ export class UntitledWorkflowFlow implements AutomationFlow {
 }
 
 // Default export lets the server load and instantiate this flow via dynamic import.
-export default UntitledWorkflowFlow;
+export default CcmAddAdminFlow;

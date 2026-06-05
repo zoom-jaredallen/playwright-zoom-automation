@@ -2,6 +2,8 @@
  * Webhook Notification Service — sends notifications to external services
  * when automation events occur (job completed, failed, cancelled).
  */
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { AutomationJob } from "./inMemoryJobStore.js";
 
 export type WebhookEvent = "job.completed" | "job.failed" | "job.cancelled" | "account.failed" | "schedule.triggered";
@@ -133,14 +135,25 @@ export class WebhookService {
           headers["X-Webhook-Signature"] = `sha256=${signature}`;
         }
 
+        if (!(await isAllowedWebhookUrl(config.url))) {
+          throw new Error("Webhook URL must use https: and resolve to a public host");
+        }
+
         const response = await fetch(config.url, {
           method: "POST",
           headers,
           body: JSON.stringify(payload),
+          redirect: "manual",
           signal: AbortSignal.timeout(10_000)
         });
 
         delivery.responseStatus = response.status;
+
+        if (response.status >= 300 && response.status < 400) {
+          delivery.status = "failed";
+          delivery.error = "Redirects are not allowed for webhook deliveries";
+          break;
+        }
 
         if (response.ok) {
           delivery.status = "success";
@@ -179,4 +192,80 @@ async function computeHmac(secret: string, payload: string): Promise<string> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// RFC-1918, loopback, link-local, multicast, and unique-local prefixes that
+// must not receive webhook deliveries.
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (isIP(normalized) === 4) {
+    return (
+      /^0\./.test(normalized) ||
+      /^10\./.test(normalized) ||
+      /^127\./.test(normalized) ||
+      /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(normalized) ||
+      /^169\.254\./.test(normalized) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(normalized) ||
+      /^192\.168\./.test(normalized) ||
+      /^198\.(1[89])\./.test(normalized) ||
+      /^22[4-9]\./.test(normalized) ||
+      /^23\d\./.test(normalized)
+    );
+  }
+
+  return (
+    normalized === "::" ||
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:") ||
+    normalized.startsWith("ff") ||
+    normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") ||
+    normalized.startsWith("::ffff:192.168.") ||
+    /^::ffff:172\.(1[6-9]|2\d|3[01])\./.test(normalized)
+  );
+}
+
+/**
+ * Return true only if the URL is syntactically valid https and the hostname
+ * resolves to public addresses. Set ALLOW_PRIVATE_WEBHOOK_URLS=true for local
+ * test targets.
+ */
+export async function isAllowedWebhookUrl(urlString: string): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== "https:") {
+    return false;
+  }
+  if (process.env.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
+    return true;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname === "localhost" ||
+    hostname === "localhost." ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".localhost.") ||
+    hostname.endsWith(".internal")
+  ) {
+    return false;
+  }
+
+  if (isIP(hostname)) {
+    return !isPrivateAddress(hostname);
+  }
+
+  try {
+    const addresses = await lookup(hostname, { all: true, verbatim: true });
+    return addresses.length > 0 && addresses.every((entry) => !isPrivateAddress(entry.address));
+  } catch {
+    return false;
+  }
 }

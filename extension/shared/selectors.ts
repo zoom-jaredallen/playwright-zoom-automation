@@ -48,6 +48,16 @@ export function extractSelectors(element: Element): SelectorStrategy {
     visibleText = zoomOption.text;
   }
 
+  const checkbox = detectCheckboxControl(element);
+  if (checkbox) {
+    role = "checkbox";
+    accessibleName = checkbox.name ?? accessibleName;
+    label = checkbox.name ?? label;
+    if (checkbox.name) {
+      visibleText = checkbox.name;
+    }
+  }
+
   // ─── Build Selector Strategies ─────────────────────────────────────────
 
   // Strategy 1: ARIA role + accessible name (most stable)
@@ -109,9 +119,9 @@ function findSemanticParent(element: Element): Element | undefined {
 function isSemanticElement(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
   if (tag === "button" || tag === "a" || tag === "input" || tag === "select" || tag === "textarea") return true;
+  if (tag === "label" && el.querySelector("input, textarea, select")) return true;
   if (el.getAttribute("role")) return true;
   if (el.getAttribute("aria-label")) return true;
-  if (el.id && !el.id.match(/^[a-f0-9-]{20,}/)) return true;
   return false;
 }
 
@@ -122,10 +132,49 @@ function hasZoomComponentSemantics(el: Element): boolean {
   // Zoom select/combobox components
   if (/cpzui-select(?!-)/.test(classes) || /cpzui-virtual-filter-select(?!-)/.test(classes)) return true;
   // Zoom checkbox
-  if (/cpzui-checkbox(?!__)/.test(classes)) return true;
+  if (/cpzui-checkbox(?!__)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(classes))) return true;
   // Zoom tab
   if (/cpzui-tab(?!__)/.test(classes)) return true;
   return false;
+}
+
+function detectCheckboxControl(element: Element): { name?: string } | undefined {
+  const control = element.closest(
+    'input[type="checkbox"], [role="checkbox"], [class*="checkbox"], [class*="Checkbox"], [class*="cpzui-checkbox"], [class*="zm-checkbox"], [class*="zmu-checkbox"]'
+  );
+  const label = element.closest("label");
+  const labelInput = label?.querySelector('input[type="checkbox"]');
+  const checkboxElement = control ?? labelInput;
+  if (!checkboxElement) return undefined;
+
+  return { name: getCheckboxName(checkboxElement, label ?? undefined) };
+}
+
+function getCheckboxName(element: Element, label?: Element): string | undefined {
+  const ariaLabel = element.getAttribute("aria-label");
+  if (ariaLabel?.trim()) return ariaLabel.trim();
+
+  const labelledBy = element.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const text = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent?.trim())
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (text && text.length < 100) return text;
+  }
+
+  if (element.id) {
+    const associated = document.querySelector(`label[for="${element.id}"]`);
+    const text = associated?.textContent?.replace(/\s+/g, " ").trim();
+    if (text && text.length < 100) return text;
+  }
+
+  const labelText = label?.textContent?.replace(/\s+/g, " ").trim();
+  if (labelText && labelText.length < 100) return labelText;
+
+  return undefined;
 }
 
 /**
@@ -565,7 +614,7 @@ function resolvePrimaryMatches(selectors: SelectorStrategy): Element[] {
         : selectors.role.role === "textbox"
           ? "input, textarea, [role='textbox']"
           : selectors.role.role === "checkbox"
-            ? "input[type='checkbox'], [role='checkbox']"
+            ? "input[type='checkbox'], [role='checkbox'], label:has(input[type='checkbox']), [class*='checkbox'], [class*='Checkbox']"
             : `[role='${selectors.role.role}']`;
     const name = selectors.role.name?.toLowerCase();
     const matches = Array.from(document.querySelectorAll(tagFilter)).filter((el) => {

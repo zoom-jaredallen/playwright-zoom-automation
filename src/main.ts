@@ -10,6 +10,7 @@ import { ZoomApiClient } from "./zoom/api.js";
 import { loginAsMasterAdmin } from "./zoom/auth.js";
 import { BusinessAddressFlow } from "./zoom/businessAddressFlow.js";
 import { TokenManager } from "./zoom/oauth.js";
+import { SessionHealthMonitor } from "./zoom/sessionHealth.js";
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvFile(process.env.ENV_PATH ?? ".env");
@@ -57,11 +58,30 @@ async function main(): Promise<void> {
       config: config.zoom,
       logger
     });
+    const sessionMonitor = new SessionHealthMonitor(masterStorageState, {
+      browser,
+      config: config.zoom,
+      logger
+    });
+    const refreshAtMs = 40 * 60 * 1_000;
+    let refreshInFlight: Promise<unknown> | undefined;
+    const refreshSessionIfStale = async (): Promise<void> => {
+      if (sessionMonitor.getHealthState().sessionAgeMs < refreshAtMs) {
+        return;
+      }
+
+      refreshInFlight ??= sessionMonitor.refresh().finally(() => {
+        refreshInFlight = undefined;
+      });
+      await refreshInFlight;
+    };
+
     const fileProgress = new ProgressStore(config.runtime.progressPath);
     const cliProgress = new CliProgressAdapter(fileProgress, accounts.length);
     const flow = new BusinessAddressFlow({
       browser,
       masterStorageState,
+      getMasterStorageState: () => sessionMonitor.getStorageState(),
       config,
       logger
     });
@@ -84,7 +104,8 @@ async function main(): Promise<void> {
       },
       accountDelayMs: config.runtime.accountDelayMs,
       concurrency: config.runtime.concurrency,
-      cancellation
+      cancellation,
+      beforeEachAccount: refreshSessionIfStale
     });
     const summary = await runner.run(accounts);
 

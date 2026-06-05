@@ -204,6 +204,55 @@ export function generateHealingCode(): string {
     return frameSelector ? page.frameLocator(frameSelector) : page;
   }
 
+  private async findAnchoredCheckbox(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, esc: (value: string) => string, timeout: number): Promise<import("playwright").Locator | undefined> {
+    if (selectors.role?.role !== "checkbox" || !selectors.anchor?.text) return undefined;
+
+    const anchorText = new RegExp(esc(selectors.anchor.text), "i");
+    const rowSelector = [
+      "tr",
+      "[role='row']",
+      ".zcc-compat-zoom-virtual-table__row",
+      ".zcc-compat-zoom-table__row",
+      ".zcc-compat-zoom-table-row",
+      ".zcc-compat-zoom-table__body-row"
+    ].join(", ");
+    const checkboxSelector = [
+      "[role='checkbox']",
+      ".zcc-compat-zoom-checkbox__wrap",
+      ".zcc-compat-zoom-checkbox",
+      ".zcc-compat-zoom-checkbox__inner",
+      "input[type='checkbox']"
+    ].join(", ");
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      const remaining = Math.max(250, deadline - Date.now());
+      const visibleDialog = root.getByRole("dialog").last();
+      const rowCandidates = [
+        visibleDialog.locator(rowSelector).filter({ hasText: anchorText }).first(),
+        root.locator(rowSelector).filter({ hasText: anchorText }).first()
+      ];
+
+      for (const row of rowCandidates) {
+        try {
+          await row.waitFor({ state: "visible", timeout: Math.min(remaining, 750) });
+          const roleCheckbox = row.getByRole("checkbox").first();
+          if (await roleCheckbox.isVisible({ timeout: 250 }).catch(() => false)) {
+            return roleCheckbox;
+          }
+          const wrapper = row.locator(checkboxSelector).first();
+          if (await wrapper.isVisible({ timeout: 250 }).catch(() => false)) {
+            return wrapper;
+          }
+        } catch { /* try the next candidate */ }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    return undefined;
+  }
+
   private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, timeout: number): Promise<import("playwright").Locator> {
     const esc = (value: string) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
 
@@ -225,6 +274,13 @@ export function generateHealingCode(): string {
       typeof selectors.nth === "number" ? base.nth(selectors.nth) : base.first();
 
     const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
+
+    const anchoredCheckbox = await this.findAnchoredCheckbox(root, selectors, esc, timeout);
+    if (anchoredCheckbox) {
+      this.healingReport.push({ actionDescription: "", originalStrategy: "role:checkbox", healedStrategy: "anchored-checkbox", confidence: 0.9 });
+      this.options.logger.warn("Selector healed", { original: "role:checkbox", healed: "anchored-checkbox" });
+      return anchoredCheckbox;
+    }
 
     if (selectors.role) {
       const { role, name, exact, checked, expanded, selected, pressed } = selectors.role;
@@ -262,16 +318,21 @@ export function generateHealingCode(): string {
       strategies.push({ name: \`css:\${selectors.css}\`, locator: () => pick(scope.locator(selectors.css)) });
     }
 
-    for (const strategy of strategies) {
-      try {
-        const el = strategy.locator();
-        await el.waitFor({ state: "visible", timeout: Math.min(timeout, 3000) });
-        if (strategy !== strategies[0]) {
-          this.healingReport.push({ actionDescription: "", originalStrategy: strategies[0].name, healedStrategy: strategy.name, confidence: 0.8 });
-          this.options.logger.warn("Selector healed", { original: strategies[0].name, healed: strategy.name });
-        }
-        return el;
-      } catch { continue; }
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const remaining = Math.max(250, deadline - Date.now());
+      for (const strategy of strategies) {
+        try {
+          const el = strategy.locator();
+          await el.waitFor({ state: "visible", timeout: Math.min(remaining, 750) });
+          if (strategy !== strategies[0]) {
+            this.healingReport.push({ actionDescription: "", originalStrategy: strategies[0].name, healedStrategy: strategy.name, confidence: 0.8 });
+            this.options.logger.warn("Selector healed", { original: strategies[0].name, healed: strategy.name });
+          }
+          return el;
+        } catch { continue; }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
     throw new Error(\`Element not found with any selector strategy: \${JSON.stringify(selectors)}\`);

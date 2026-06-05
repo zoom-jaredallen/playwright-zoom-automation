@@ -8,7 +8,12 @@ import {
   generateAssertions,
   insertStep,
   makeAssertionAction,
+  makeClickAction,
+  makeDismissAction,
+  makeFillAction,
   makeNavigationAction,
+  makePressAction,
+  makeSelectAction,
   makeWaitAction,
   moveStep,
   normalizeNavigationUrl,
@@ -69,6 +74,15 @@ describe("model — array mutations", () => {
     expect(original.timeout).toBeUndefined(); // input untouched
   });
 
+  it("updates value fields on fill/select steps", () => {
+    expect(applyStepUpdate(action("f", { type: "fill", value: "" }), { value: "  Jared  " }).value).toBe("Jared");
+    expect(applyStepUpdate(action("s", { type: "select", value: "" }), { value: "  Australia  " }).value).toBe("Australia");
+  });
+
+  it("updates timeout policy on non-assert steps", () => {
+    expect(applyStepUpdate(action("c", { type: "click" }), { timeout: 15_000 }).timeout).toBe(15_000);
+  });
+
   it("updateStep only touches the targeted action", () => {
     const list = [action("a", { description: "one" }), action("b", { description: "two" })];
     const next = updateStep(list, "b", { description: "changed" });
@@ -92,8 +106,13 @@ describe("model — factories", () => {
 
   it("creates typed manual steps", () => {
     expect(makeNavigationAction("/x").type).toBe("navigate");
+    expect(makeClickAction("https://zoom.us/x").type).toBe("click");
+    expect(makeFillAction("hello").value).toBe("hello");
+    expect(makeSelectAction("Australia").value).toBe("Australia");
+    expect(makePressAction().key).toBe("Enter");
     expect(makeWaitAction(100).waitMs).toBe(250); // clamped to min
     expect(makeAssertionAction("hasText", "ok").assertionType).toBe("hasText");
+    expect(makeDismissAction().type).toBe("dismiss");
   });
 });
 
@@ -106,6 +125,20 @@ describe("analysis — quality report (regression-locked)", () => {
     expect(report.score).toBe(50);
     expect(report.warnings).toContain("Add validations after important submit/save actions.");
     expect(report.warnings).toContain("Add screenshots for evidence and failure diagnosis.");
+  });
+});
+
+describe("analysis — assertion generation", () => {
+  it("does not treat Add user modal openers as success-toast commits", () => {
+    const steps = [
+      action("open-add-user", { type: "click", selectors: { role: { role: "button", name: "Add user" } } }),
+      action("save", { type: "click", selectors: { role: { role: "button", name: "Save" } } })
+    ];
+
+    const assertions = generateAssertions(steps);
+
+    expect(assertions.some((assertion) => assertion.afterAction === "open-add-user")).toBe(false);
+    expect(assertions.some((assertion) => assertion.afterAction === "save" && assertion.type === "textVisible")).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import dotenv from "dotenv";
 import { listAddressProfiles } from "../addressProfiles.js";
 import { compileWorkflow, slugify } from "../compiler/compiler.js";
@@ -14,7 +14,7 @@ import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { computeDashboardMetrics } from "./services/analytics.js";
 import { listJobArtifacts } from "./services/artifacts.js";
 import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./services/scheduler.js";
-import { WebhookService } from "./services/webhooks.js";
+import { isAllowedWebhookUrl, WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
@@ -101,10 +101,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         response.status(400).json({ error: validation.error });
         return;
       }
-      const dir = resolveRecordedWorkflowPath(request.params.id);
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(dir, "schema.json"), JSON.stringify(workflow, null, 2) + "\n", "utf8");
-      const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"));
+      resolveRecordedWorkflowPath(request.params.id);
+      const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"), request.params.id);
       response.json({ ok: true, compiled: result.id });
     } catch (error) {
       if (error instanceof PathTraversalError) {
@@ -559,14 +557,19 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.json({ deliveries: webhookService.getDeliveryLog() });
   });
 
-  app.post("/api/webhooks", (request, response) => {
+  app.post("/api/webhooks", async (request, response, next) => {
     const body = request.body;
     if (!body.name || !body.url || !body.events) {
       response.status(400).json({ error: "name, url, and events are required" });
       return;
     }
-    if (!isAllowedWebhookUrl(body.url)) {
-      response.status(400).json({ error: "Webhook URL must use https: and resolve to a public host" });
+    try {
+      if (!(await isAllowedWebhookUrl(body.url))) {
+        response.status(400).json({ error: "Webhook URL must use https: and resolve to a public host" });
+        return;
+      }
+    } catch (error) {
+      next(error);
       return;
     }
     const config = {
@@ -680,41 +683,4 @@ function resolveRecordedWorkflowPath(id: string, ...segments: string[]): string 
     throw new PathTraversalError(`Invalid workflow id: "${id}"`);
   }
   return resolved;
-}
-
-// RFC-1918 and link-local prefixes that must not receive webhook deliveries.
-const PRIVATE_RANGES = [
-  /^127\./,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^169\.254\./,
-  /^::1$/,
-  /^fc00:/i,
-  /^fe80:/i,
-];
-
-/**
- * Return true only if the URL is a syntactically valid https URL pointing to a
- * non-private host. Set ALLOW_PRIVATE_WEBHOOK_URLS=true to skip the host check
- * (useful when the webhook target is an internal test server).
- */
-function isAllowedWebhookUrl(urlString: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(urlString);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "https:") {
-    return false;
-  }
-  if (process.env.ALLOW_PRIVATE_WEBHOOK_URLS === "true") {
-    return true;
-  }
-  const hostname = parsed.hostname;
-  if (hostname === "localhost") return false;
-  if (hostname.endsWith(".internal")) return false;
-  if (PRIVATE_RANGES.some((re) => re.test(hostname))) return false;
-  return true;
 }

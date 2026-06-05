@@ -8,7 +8,8 @@ import type { CompileResult, RecordedAction, RecordedWorkflow, SelectorStrategy 
 import { generateHealingCode } from "./selectorHealing.js";
 
 export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, idOverride?: string): CompileResult {
-  const id = idOverride ?? slugify(workflow.meta.name || `recorded-${Date.now()}`);
+  const generatedId = slugify(workflow.meta.name || "");
+  const id = idOverride ?? (generatedId || `recorded-${Date.now()}`);
   const outputDir = path.join(outputBase, id);
   mkdirSync(outputDir, { recursive: true });
 
@@ -88,7 +89,7 @@ export class ${className} implements AutomationFlow {
   constructor(private readonly options: ${className}Options) {}
 
   async run(input: FlowInput): Promise<FlowResult> {
-    this.activeAccountId = input.account.id;
+    const activeAccountId = input.account.id;
     let dryRunSkipped = false;
     const context = await this.options.browser.newContext({
       storageState: this.options.getMasterStorageState?.() ?? this.options.masterStorageState
@@ -131,12 +132,10 @@ ${actionCode}
     }
   }
 
-  private activeAccountId?: string;
-
-  private resolve(paramName: string): string {
+  private resolve(paramName: string, activeAccountId?: string): string {
     const config = this.options.config;
     // Per-account value (e.g. a distinct user per sub-account) takes precedence.
-    const perAccount = this.activeAccountId ? config.accountValues?.[this.activeAccountId]?.[paramName] : undefined;
+    const perAccount = activeAccountId ? config.accountValues?.[activeAccountId]?.[paramName] : undefined;
     if (perAccount !== undefined && perAccount !== "") {
       return perAccount;
     }
@@ -160,8 +159,8 @@ ${actionCode}
     return value;
   }
 
-  private resolveValue(template: string): string {
-    return template.replace(/\\{\\{([^}]+)\\}\\}/g, (_, paramName) => this.resolve(paramName.trim()));
+  private resolveValue(template: string, activeAccountId?: string): string {
+    return template.replace(/\\{\\{([^}]+)\\}\\}/g, (_, paramName) => this.resolve(paramName.trim(), activeAccountId));
   }
 
 ${generateHealingCode()}
@@ -170,7 +169,7 @@ ${generateHealingCode()}
     page: Page,
     artifactBase: string,
     description: string,
-    policy: { retryCount?: number; retryDelayMs?: number; continueOnFailure?: boolean; screenshotOnFailure?: boolean },
+    policy: { retryCount?: number; retryDelayMs?: number; continueOnFailure?: boolean; screenshotOnFailure?: boolean; readyTimeoutMs?: number },
     step: () => Promise<void>
   ): Promise<void> {
     const attempts = Math.max(1, (policy.retryCount ?? 0) + 1);
@@ -178,6 +177,7 @@ ${generateHealingCode()}
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         await step();
+        await this.waitForPageReady(page, policy.readyTimeoutMs ?? 10_000);
         return;
       } catch (error) {
         lastError = error;
@@ -195,6 +195,38 @@ ${generateHealingCode()}
       return;
     }
     throw lastError;
+  }
+
+  private async waitForPageReady(page: Page, timeout: number): Promise<void> {
+    const shortTimeout = Math.min(Math.max(timeout, 1_000), 5_000);
+    const loadingSelectors = [
+      "[aria-busy='true']",
+      "[role='progressbar']",
+      ".loading",
+      ".loader",
+      ".spinner",
+      ".zm-loader",
+      ".zm-loading",
+      ".cpzui-loading",
+      ".cpzui-spinner",
+      "[class*='loading']",
+      "[class*='spinner']"
+    ].join(",");
+
+    await page.waitForLoadState("domcontentloaded", { timeout: shortTimeout }).catch(() => undefined);
+    await page.waitForLoadState("networkidle", { timeout: shortTimeout }).catch(() => undefined);
+    await page.waitForFunction((selectors) => {
+      const visible = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      return !Array.from(document.querySelectorAll(selectors)).some((element) => {
+        const text = element.textContent?.toLowerCase() ?? "";
+        return visible(element) && !text.includes("loaded") && !text.includes("not loading");
+      });
+    }, loadingSelectors, { timeout: shortTimeout }).catch(() => undefined);
+    await page.waitForTimeout(300);
   }
 
   private async shouldSkipRecordedStep(page: Page, condition: Record<string, any> | undefined, actionSelectors: Record<string, any>): Promise<"step" | "account" | undefined> {
@@ -273,7 +305,7 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
 
     case "fill": {
       const value = action.value?.includes("{{")
-        ? `this.resolveValue(${JSON.stringify(action.value)})`
+        ? `this.resolveValue(${JSON.stringify(action.value)}, activeAccountId)`
         : JSON.stringify(action.value ?? "");
       core = `${coreIndent}await this.fillField(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
       break;
@@ -281,7 +313,7 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
 
     case "select": {
       const value = action.value?.includes("{{")
-        ? `this.resolveValue(${JSON.stringify(action.value)})`
+        ? `this.resolveValue(${JSON.stringify(action.value)}, activeAccountId)`
         : JSON.stringify(action.value ?? "");
       core = `${coreIndent}await this.selectOption(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
       break;
@@ -430,7 +462,8 @@ function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: 
     retryCount: action.retryCount ?? 0,
     retryDelayMs: action.retryDelayMs ?? workflow.config.defaultTimeout / 10,
     continueOnFailure: action.continueOnFailure ?? action.onFailure === "skip",
-    screenshotOnFailure: action.screenshotOnFailure ?? action.onFailure === "screenshot"
+    screenshotOnFailure: action.screenshotOnFailure ?? action.onFailure === "screenshot",
+    readyTimeoutMs: action.timeout ?? workflow.config.defaultTimeout
   });
   const description = JSON.stringify(action.description ?? action.type);
 
@@ -484,10 +517,15 @@ function isMutatingForDryRun(action: RecordedAction): boolean {
   return /\b(save|submit|create|confirm|apply|delete|remove|add user|invite|provision)\b/i.test(name);
 }
 
+function hasUsableSelector(selectors: SelectorStrategy): boolean {
+  return Boolean(selectors.role || selectors.label || selectors.text || selectors.testId || selectors.css);
+}
+
 function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number): string {
   const expected = JSON.stringify(action.expected ?? action.value ?? "");
   const actionTimeout = action.timeout ?? timeout;
   const onFailure = action.onFailure ?? "screenshot";
+  const selectors = JSON.stringify(action.selectors);
   // Feature 6: assertions use Playwright's auto-waiting locators (waitFor / polling)
   // so they retry until the timeout instead of checking once.
   const assertionBody = (() => {
@@ -495,7 +533,12 @@ function generateAssertionActionCode(action: RecordedAction, indent: string, tim
       case "urlContains":
         return `${indent}await page.waitForURL((url) => url.href.includes(${expected}), { timeout: ${actionTimeout} });`;
       case "elementVisible":
-        return `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
+        return hasUsableSelector(action.selectors)
+          ? `${indent}{
+${indent}  const element = await this.findElement(page, ${selectors}, ${actionTimeout});
+${indent}  await element.waitFor({ state: "visible", timeout: ${actionTimeout} });
+${indent}}`
+          : `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
       case "hasValue":
       case "fieldValue":
         return `${indent}await this.expectFieldValue(page, ${expected}, ${actionTimeout});`;

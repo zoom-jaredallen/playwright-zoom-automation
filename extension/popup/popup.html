@@ -8,106 +8,42 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div id="app">
+  <main class="popup-shell">
     <header class="header">
-      <div class="logo">
-        <span class="logo-text">zoom</span>
-        <span class="logo-sub">Workflow Recorder</span>
+      <div>
+        <div class="brand">Zoom Workflow Recorder</div>
+        <div id="status-text" class="subtle">Checking status...</div>
       </div>
+      <label class="switch" title="Enable or disable recorder capture">
+        <input id="extension-enabled" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="sr-only">Enable extension</span>
+      </label>
     </header>
 
-    <!-- Idle State -->
-    <section id="idle-view" class="view">
-      <div class="status-card">
-        <div class="status-icon idle">⏺</div>
-        <p>Ready to record a reusable workflow.</p>
+    <section class="panel">
+      <div class="status-row">
+        <span id="enabled-pill" class="pill">Enabled</span>
+        <span id="recording-pill" class="pill neutral">Idle</span>
       </div>
-      <div class="instructions">
-        <h4>How it works:</h4>
-        <ol>
-          <li><strong>Navigate</strong> to any sub-account page in Zoom admin</li>
-          <li><strong>Click Record</strong> below</li>
-          <li><strong>Perform the workflow</strong> once (fill forms, click buttons)</li>
-          <li><strong>Stop</strong> when done — account-specific values are auto-detected</li>
-          <li><strong>Export</strong> → the workflow runs on any sub-account automatically</li>
-        </ol>
-        <p class="note">💡 You don't need to record login or account switching — the automation engine handles impersonation for each sub-account automatically.</p>
-      </div>
-      <button id="btn-start" class="btn btn-record">
-        <span class="record-dot"></span>
-        Start Recording
-      </button>
-      <button id="btn-open-panel" class="btn btn-secondary btn-spaced">
-        Open Side Panel
-      </button>
+      <button id="btn-open-panel" class="button primary" type="button">Open Side Panel</button>
     </section>
 
-    <!-- Recording State -->
-    <section id="recording-view" class="view hidden">
-      <div class="status-card recording">
-        <div class="status-icon recording">●</div>
-        <p>Recording… <span id="action-count">0</span> actions captured</p>
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>Web UI</h2>
+          <p id="server-url" class="subtle">localhost:4174</p>
+        </div>
+        <span id="connection-pill" class="pill neutral">Unknown</span>
       </div>
-      <div id="action-list" class="action-list"></div>
-      <button id="btn-stop" class="btn btn-stop">
-        ■ Stop Recording
-      </button>
-      <button id="btn-open-panel-recording" class="btn btn-secondary btn-spaced">
-        Open Side Panel
-      </button>
+      <div class="button-row">
+        <button id="btn-check-connection" class="button secondary" type="button">Check Connection</button>
+        <button id="btn-open-web-ui" class="button secondary" type="button">Open Web UI</button>
+      </div>
+      <p id="connection-message" class="message" role="status"></p>
     </section>
-
-    <!-- Review State -->
-    <section id="review-view" class="view hidden">
-      <div class="status-card complete">
-        <div class="status-icon complete">✓</div>
-        <p>Recording complete! Review parameters and export.</p>
-      </div>
-
-      <div class="form-group">
-        <label for="workflow-name">Workflow Name</label>
-        <input id="workflow-name" type="text" placeholder="e.g., Add AU Toll Business Address">
-      </div>
-
-      <div class="form-group">
-        <label for="workflow-category">Category</label>
-        <select id="workflow-category">
-          <option value="phone">Phone</option>
-          <option value="settings">Settings</option>
-          <option value="compliance">Compliance</option>
-          <option value="custom">Custom</option>
-        </select>
-      </div>
-
-      <div id="parameters-section" class="parameters-section">
-        <h3>Detected Parameters</h3>
-        <p class="hint">These values will become template variables. Confirm or dismiss each one.</p>
-        <div id="parameter-list"></div>
-      </div>
-
-      <div class="export-actions">
-        <button id="btn-export-json" class="btn btn-primary">Download JSON</button>
-        <button id="btn-export-sync" class="btn btn-secondary">Sync & Run in Console</button>
-        <button id="btn-copy" class="btn btn-tertiary">Copy JSON</button>
-      </div>
-
-      <div class="run-info">
-        <h4>What happens next?</h4>
-        <p>After export, open the Automation Console to:</p>
-        <ol>
-          <li>Query sub-accounts from the master account</li>
-          <li>Select which accounts to run this workflow against</li>
-          <li>Choose address profile (for parameterized values)</li>
-          <li>Start the batch — each account is impersonated automatically</li>
-        </ol>
-      </div>
-
-      <button id="btn-new" class="btn btn-link">Record another workflow</button>
-      <button id="btn-open-panel-review" class="btn btn-secondary btn-spaced">
-        Open Side Panel
-      </button>
-    </section>
-  </div>
+  </main>
 
   <script src="popup.js"></script>
 </body>

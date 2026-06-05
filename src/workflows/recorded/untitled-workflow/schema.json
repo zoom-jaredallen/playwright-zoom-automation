@@ -1,7 +1,7 @@
 {
   "version": 1,
   "meta": {
-    "name": "Untitled Workflow",
+    "name": "Add ZCX Admin",
     "description": "Recorded workflow: 1 navigation(s), 1 field fill(s), 6 click(s), 0 assertion(s), 0 screenshot(s).",
     "recordedAt": "2026-06-03T08:48:40.874Z",
     "recordedOnUrl": "https://zoom.us/cci/index/admin#/admin-agents",
@@ -166,6 +166,19 @@
       "temporarily unavailable",
       "net::",
       "target closed"
+    ]
+  },
+  "quality": {
+    "score": 53,
+    "selectorStability": 71,
+    "assertionCoverage": 100,
+    "evidenceCoverage": 0,
+    "riskySteps": 2,
+    "hardcodedValues": 1,
+    "unsupportedBrowserPreflightSteps": 0,
+    "warnings": [
+      "Add screenshots for evidence and failure diagnosis.",
+      "Review hardcoded values and parameterize tenant-specific inputs."
     ]
   }
 }

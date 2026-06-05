@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "meta": {
+    "name": "Add ZCX Admin Michael Chen",
+    "description": "Recorded workflow: 1 navigation(s), 1 field fill(s), 7 click(s), 0 assertion(s), 0 screenshot(s).",
+    "recordedAt": "2026-06-05T02:17:43.010Z",
+    "recordedOnUrl": "https://zoom.us/",
+    "durationMs": 710947,
+    "category": "custom"
+  },
+  "parameters": [],
+  "actions": [
+    {
+      "id": "manual_mq050wl6_4c37r8",
+      "timestamp": 1780616391162,
+      "type": "navigate",
+      "selectors": {},
+      "url": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual navigation",
+      "description": "Navigate to CCM > Users"
+    },
+    {
+      "id": "manual_wait_mq051uf2_sracca",
+      "timestamp": 1780616435006,
+      "type": "wait",
+      "selectors": {},
+      "waitMs": 1000,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual wait",
+      "description": "Wait 1000ms"
+    },
+    {
+      "id": "manual_click_mq0520h0_d1uwjk",
+      "timestamp": 1780616442852,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Add user"
+        },
+        "text": "Add user",
+        "testId": "agents-add-user-btn",
+        "css": "div.operation-panel.mg-b-16:nth-child(1) > div.buttons-wrapper:nth-child(2) > div.agents__operation.mg-t-8 > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Add user\""
+    },
+    {
+      "id": "manual_wait_mq056pl1_4bs4jg",
+      "timestamp": 1780616662021,
+      "type": "wait",
+      "selectors": {},
+      "waitMs": 1000,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual wait",
+      "description": "Wait 1000ms"
+    },
+    {
+      "id": "manual_click_mq056yr0_q9a8iu",
+      "timestamp": 1780616673900,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Add user"
+        },
+        "label": "Add user",
+        "text": "+ Add user",
+        "css": "div.zcc-compat-zoom-form-item__row > div.zcc-compat-zoom-form-item__widgets:nth-child(2) > div.edit-agent__tag.zcc-migration-user__choose-selected_tag_container > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md"
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Add user\""
+    },
+    {
+      "id": "manual_fill_mq057g1z_vfijmb",
+      "timestamp": 1780616696327,
+      "type": "fill",
+      "selectors": {
+        "role": {
+          "role": "textbox"
+        },
+        "label": "Search by name or email address",
+        "css": "div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__body:nth-child(2) > div.zcc-compat-zoom-input.zcc-compat-zoom-input--md:nth-child(1) > input.zcc-compat-zoom-input__inner",
+        "nth": 66
+      },
+      "value": "michael.chen",
+      "timeout": 15000,
+      "retryCount": 1,
+      "retryDelayMs": 1000,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual text entry",
+      "description": "Fill \"Search by name or email address\""
+    },
+    {
+      "id": "manual_wait_mq058lql_9g5znk",
+      "timestamp": 1780616750349,
+      "type": "wait",
+      "selectors": {},
+      "waitMs": 1000,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual wait",
+      "description": "Wait 1000ms"
+    },
+    {
+      "id": "manual_click_mq058soe_do0kl9",
+      "timestamp": 1780616759342,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "checkbox"
+        },
+        "css": "span.zcc-compat-zoom-checkbox > span.zcc-compat-zoom-checkbox__wrap > span.zcc-compat-zoom-checkbox__inner > i.zcc-compat-zoom-checkbox__knob",
+        "nth": 26,
+        "anchor": {
+          "text": "Michael Chen",
+          "scopeRole": "row",
+          "relationship": "within"
+        }
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"<i> \""
+    },
+    {
+      "id": "manual_click_mq05b3cb_rg8v2j",
+      "timestamp": 1780616866475,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Add"
+        },
+        "text": "Add",
+        "css": "div.zcc-compat-zoom-overlay-dialog > div.zcc-compat-zoom-dialog.zcc-migration-dialog > div.zcc-compat-zoom-dialog__footer:nth-child(3) > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(2)",
+        "nth": 10
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Add\""
+    },
+    {
+      "id": "manual_click_mq05byw3_r8yy25",
+      "timestamp": 1780616907363,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "combobox",
+          "name": "Select user package"
+        },
+        "label": "Select user package",
+        "text": "Select user package",
+        "css": "div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > div.zcc-compat-zoom-select-input__wrapper > span.zcc-compat-zoom-select-input__span"
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Select user package\""
+    },
+    {
+      "id": "manual_wait_mq05d4qk_vyzr0j",
+      "timestamp": 1780616961596,
+      "type": "wait",
+      "selectors": {},
+      "waitMs": 1000,
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual wait",
+      "description": "Wait 1000ms"
+    },
+    {
+      "id": "manual_click_mq05d7bd_1se3ia",
+      "timestamp": 1780616964937,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "option",
+          "name": "Zoom Contact Center Elite (200 available)"
+        },
+        "label": "Zoom Contact Center Elite (200 available)",
+        "text": "Zoom Contact Center Elite (200 available)",
+        "css": "div.zcc-compat-zoom-scrollbar__wrap.zcc-compat-zoom-scrollbar__wrap--hidden:nth-child(1) > div.zcc-compat-zoom-scrollbar__view > ul.zcc-compat-zoom-select__list > li.zcc-compat-zoom-select-option.zcc-migration-max-w-900:nth-child(3)",
+        "anchor": {
+          "text": "Zoom Contact Center Elite (200 available)",
+          "scopeRole": "listitem",
+          "relationship": "within"
+        }
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Zoom Contact Center Elite (200 available)\""
+    },
+    {
+      "id": "manual_click_mq05dkod_ah3ov2",
+      "timestamp": 1780616982253,
+      "type": "click",
+      "selectors": {
+        "role": {
+          "role": "button",
+          "name": "Save"
+        },
+        "text": "Save",
+        "testId": "edit-agent-save-btn",
+        "css": "div.zcc-compat-zoom-sticky.zcc-migration-sticky:nth-child(1) > div.zcc-compat-zoom-sticky--fixed:nth-child(2) > div.edit-agent__actions > button.zcc-compat-zoom-button.zcc-compat-zoom-button--md:nth-child(1)"
+      },
+      "pageUrl": "https://zoom.us/cci/index/admin#/admin-agents",
+      "pageTitle": "Manual click",
+      "description": "Click \"Save\""
+    }
+  ],
+  "assertions": [
+    {
+      "afterAction": "manual_mq050wl6_4c37r8",
+      "type": "urlContains",
+      "expected": "#/admin-agents",
+      "timeout": 15000,
+      "onFailure": "fail"
+    },
+    {
+      "afterAction": "manual_click_mq0520h0_d1uwjk",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "manual_click_mq056yr0_q9a8iu",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "manual_click_mq05b3cb_rg8v2j",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    },
+    {
+      "afterAction": "manual_click_mq05dkod_ah3ov2",
+      "type": "textVisible",
+      "expected": "success|saved|added|submitted",
+      "timeout": 10000,
+      "onFailure": "screenshot"
+    }
+  ],
+  "config": {
+    "startUrl": "/",
+    "requiresImpersonation": true,
+    "defaultTimeout": 10000,
+    "retryableErrors": [
+      "timeout",
+      "temporarily unavailable",
+      "net::",
+      "target closed"
+    ]
+  },
+  "quality": {
+    "score": 36,
+    "selectorStability": 88,
+    "assertionCoverage": 0,
+    "evidenceCoverage": 0,
+    "riskySteps": 1,
+    "hardcodedValues": 1,
+    "unsupportedBrowserPreflightSteps": 0,
+    "warnings": [
+      "Add validations after important submit/save actions.",
+      "Add screenshots for evidence and failure diagnosis.",
+      "Review hardcoded values and parameterize tenant-specific inputs."
+    ]
+  }
+}

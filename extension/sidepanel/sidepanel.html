@@ -14,7 +14,18 @@
         <div class="brand">Zoom Workflow Recorder</div>
         <div id="recording-state" class="subtle">Ready</div>
       </div>
-      <span id="status-pill" class="status-pill idle">Idle</span>
+      <div class="topbar-actions">
+        <button id="btn-theme" class="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77"></path>
+          </svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 14.1A7.8 7.8 0 0 1 9.9 4a8.8 8.8 0 1 0 10.1 10.1Z"></path>
+          </svg>
+        </button>
+        <span id="status-pill" class="status-pill idle">Idle</span>
+      </div>
     </header>
 
     <section class="panel-section controls">
@@ -43,21 +54,50 @@
         </div>
       </div>
       <div class="tool-grid">
-        <button id="btn-add-navigation" class="tool-button" title="Add navigate step" aria-label="Add navigate step">
-          <span class="tool-icon">↗</span>
-          <span>Navigate</span>
+        <button id="btn-add-navigation" class="tool-button" title="Navigate to Page" data-tooltip="Navigate to Page" aria-label="Navigate to Page">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 19 19 5"></path><path d="M9 5h10v10"></path><path d="M5 19l5.5-1.5"></path></svg>
+          </span>
         </button>
-        <button id="btn-add-assertion" class="tool-button" title="Add validation step" aria-label="Add validation step">
-          <span class="tool-icon">✓</span>
-          <span>Validate</span>
+        <button id="btn-add-click" class="tool-button" title="Click Button or Link" data-tooltip="Click Button or Link" aria-label="Click Button or Link">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m5 3 8 18 2-7 6-2L5 3Z"></path><path d="m13 13 5 5"></path></svg>
+          </span>
         </button>
-        <button id="btn-add-screenshot" class="tool-button" title="Add evidence screenshot step" aria-label="Add evidence screenshot step">
-          <span class="tool-icon">▣</span>
-          <span>Shot</span>
+        <button id="btn-add-fill" class="tool-button" title="Enter Text" data-tooltip="Enter Text" aria-label="Enter Text">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M8 5h8"></path><path d="M12 5v14"></path><path d="M9 19h6"></path></svg>
+          </span>
         </button>
-        <button id="btn-add-wait" class="tool-button" title="Add wait step" aria-label="Add wait step">
-          <span class="tool-icon">⏱</span>
-          <span>Wait</span>
+        <button id="btn-add-select" class="tool-button" title="Select Option" data-tooltip="Select Option" aria-label="Select Option">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M8 6h11"></path><path d="M8 12h11"></path><path d="M8 18h11"></path><path d="m3 12 1.5 1.5L7 10"></path></svg>
+          </span>
+        </button>
+        <button id="btn-add-assertion" class="tool-button" title="Validate Page" data-tooltip="Validate Page" aria-label="Validate Page">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.3 2.8 7.2 7 8.5 4.2-1.3 7-4.2 7-8.5V6l-7-3Z"></path><path d="m8.5 12 2.2 2.2L15.8 9"></path></svg>
+          </span>
+        </button>
+        <button id="btn-add-press" class="tool-button" title="Press Key" data-tooltip="Press Key" aria-label="Press Key">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"></rect><path d="M7 10h.01M11 10h.01M15 10h.01M19 10h.01M7 14h6"></path></svg>
+          </span>
+        </button>
+        <button id="btn-add-screenshot" class="tool-button" title="Take Screenshot" data-tooltip="Take Screenshot" aria-label="Take Screenshot">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M6.5 8.5h2l1.4-2h4.2l1.4 2h2A2.5 2.5 0 0 1 20 11v5.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5V11a2.5 2.5 0 0 1 2.5-2.5Z"></path><circle cx="12" cy="13.5" r="3"></circle></svg>
+          </span>
+        </button>
+        <button id="btn-add-wait" class="tool-button" title="Wait" data-tooltip="Wait" aria-label="Wait">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 7v5l3 2"></path><circle cx="12" cy="13" r="7"></circle><path d="M9 2h6"></path><path d="M12 2v3"></path></svg>
+          </span>
+        </button>
+        <button id="btn-add-dismiss" class="tool-button" title="Dismiss Popup" data-tooltip="Dismiss Popup" aria-label="Dismiss Popup">
+          <span class="tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"></circle><path d="m9 9 6 6"></path><path d="m15 9-6 6"></path></svg>
+          </span>
         </button>
       </div>
     </section>
@@ -121,14 +161,52 @@
           <label class="field-label" for="step-condition-text">Condition text</label>
           <input id="step-condition-text" type="text" placeholder="Address text or status to check">
           <div class="check-row">
-            <label><input id="step-continue-on-failure" type="checkbox"> Continue on failure</label>
-            <label><input id="step-screenshot-on-failure" type="checkbox"> Screenshot on failure</label>
+            <label class="checkbox-control">
+              <input id="step-continue-on-failure" type="checkbox">
+              <span>Continue on failure</span>
+            </label>
+            <label class="checkbox-control">
+              <input id="step-screenshot-on-failure" type="checkbox">
+              <span>Screenshot on failure</span>
+            </label>
           </div>
         </div>
 
+        <div id="field-step-test" class="property-field">
+          <button id="btn-test-step" class="button secondary" type="button">Test step</button>
+          <div id="step-test-result" class="selector-test-result"></div>
+        </div>
+
         <div id="field-selector-test" class="property-field hidden">
-          <button id="btn-test-selector" class="button secondary" type="button">Test selector on page</button>
+          <div class="selector-controls">
+            <button id="btn-pick-selector" class="button primary" type="button">Pick target on page</button>
+            <button id="btn-pick-anchor" class="button secondary" type="button">Pick anchor</button>
+            <button id="btn-test-selector" class="button secondary" type="button">Test selector</button>
+          </div>
           <div id="selector-test-result" class="selector-test-result"></div>
+        </div>
+
+        <div id="field-validation-suggestion" class="property-field hidden">
+          <button id="btn-add-suggested-validation" class="button secondary" type="button">Add validation after this step</button>
+        </div>
+
+        <div id="field-action-value" class="property-field hidden">
+          <label id="action-value-label" class="field-label" for="action-value">Value</label>
+          <input id="action-value" type="text" placeholder="Text or option value">
+        </div>
+
+        <div id="field-key" class="property-field hidden">
+          <label class="field-label" for="press-key">Key</label>
+          <select id="press-key">
+            <option value="Enter">Enter</option>
+            <option value="Tab">Tab</option>
+            <option value="Escape">Escape</option>
+            <option value="ArrowDown">ArrowDown</option>
+            <option value="ArrowUp">ArrowUp</option>
+            <option value="ArrowLeft">ArrowLeft</option>
+            <option value="ArrowRight">ArrowRight</option>
+            <option value="Space">Space</option>
+          </select>
         </div>
 
         <div id="field-url" class="property-field hidden">
@@ -214,6 +292,8 @@
     </section>
 
     <section class="panel-section export-actions">
+      <input id="workflow-import-file" class="visually-hidden" type="file" accept="application/json,.json">
+      <button id="btn-import" class="button secondary">Import JSON</button>
       <button id="btn-copy" class="button primary">Copy JSON</button>
       <button id="btn-download" class="button secondary">Download JSON</button>
       <button id="btn-sync" class="button secondary">Sync to Console</button>
