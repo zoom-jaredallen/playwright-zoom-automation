@@ -4,8 +4,9 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { CompileResult, RecordedAction, RecordedWorkflow, SelectorStrategy } from "./types.js";
+import type { CompileResult, RecordedAction, RecordedWorkflow } from "./types.js";
 import { generateHealingCode } from "./selectorHealing.js";
+import { generateAssertionBody } from "./assertionCompiler.js";
 
 export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, idOverride?: string): CompileResult {
   const generatedId = slugify(workflow.meta.name || "");
@@ -406,22 +407,15 @@ function generateAfterActionAssertions(action: RecordedAction, workflow: Recorde
 function generateWorkflowAssertionCode(assertion: RecordedWorkflow["assertions"][number]): string {
   const indent = "      ";
   const ci = "        ";
-  const expected = JSON.stringify(assertion.expected);
   const t = assertion.timeout;
   const onFailure = assertion.onFailure ?? "screenshot";
 
-  if (assertion.type === "responseOk") {
-    return `${indent}// (responseOk assertion is not enforced at replay time)`;
-  }
-
-  const body =
-    assertion.type === "urlContains"
-      ? `${ci}await page.waitForURL((url) => url.href.includes(${expected}), { timeout: ${t} });`
-      : assertion.type === "elementVisible"
-        ? `${ci}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${t} });`
-        : assertion.type === "fieldValue"
-          ? `${ci}await this.expectFieldValue(page, ${expected}, ${t});`
-          : `${ci}await page.getByText(new RegExp(${expected}, "i")).first().waitFor({ state: "visible", timeout: ${t} });`;
+  const body = generateAssertionBody({
+    assertionType: assertion.type,
+    expected: assertion.expected,
+    timeout: t,
+    indent: ci
+  });
 
   if (onFailure === "skip") {
     return `${indent}// Auto verification (${assertion.type})
@@ -520,40 +514,19 @@ function isMutatingForDryRun(action: RecordedAction): boolean {
   return /\b(save|submit|create|confirm|apply|delete|remove|invite|provision)\b/i.test(name);
 }
 
-function hasUsableSelector(selectors: SelectorStrategy): boolean {
-  return Boolean(selectors.role || selectors.label || selectors.text || selectors.testId || selectors.css);
-}
-
 function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number): string {
-  const expected = JSON.stringify(action.expected ?? action.value ?? "");
   const actionTimeout = action.timeout ?? timeout;
   const onFailure = action.onFailure ?? "screenshot";
-  const selectors = JSON.stringify(action.selectors);
-  const selectorCandidates = JSON.stringify(action.selectorCandidates ?? []);
   // Feature 6: assertions use Playwright's auto-waiting locators (waitFor / polling)
   // so they retry until the timeout instead of checking once.
-  const assertionBody = (() => {
-    switch (action.assertionType) {
-      case "urlContains":
-        return `${indent}await page.waitForURL((url) => url.href.includes(${expected}), { timeout: ${actionTimeout} });`;
-      case "elementVisible":
-        return hasUsableSelector(action.selectors)
-          ? `${indent}{
-${indent}  const element = await this.findElement(page, ${selectors}, ${selectorCandidates}, ${actionTimeout});
-${indent}  await element.waitFor({ state: "visible", timeout: ${actionTimeout} });
-${indent}}`
-          : `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
-      case "hasValue":
-      case "fieldValue":
-        return `${indent}await this.expectFieldValue(page, ${expected}, ${actionTimeout});`;
-      case "tableRowContains":
-        return `${indent}await page.locator("tr", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
-      case "hasText":
-      case "textVisible":
-      default:
-        return `${indent}await page.getByText(${expected}, { exact: false }).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;
-    }
-  })();
+  const assertionBody = generateAssertionBody({
+    assertionType: action.assertionType,
+    expected: action.expected ?? action.value ?? "",
+    timeout: actionTimeout,
+    indent,
+    selectors: action.selectors,
+    selectorCandidates: action.selectorCandidates
+  });
 
   if (onFailure === "skip") {
     return `${indent}try {

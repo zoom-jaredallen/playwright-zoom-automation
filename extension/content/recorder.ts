@@ -1294,6 +1294,11 @@ async function executeAssertion(action: RecordedAction): Promise<void> {
         throw new Error(`Expected URL to contain "${expected}"`);
       }
       return;
+    case "urlMatches":
+      if (!new RegExp(expected).test(window.location.href)) {
+        throw new Error(`Expected URL to match "${expected}"`);
+      }
+      return;
     case "elementVisible":
       await waitFor(() => {
         const element = hasUsableSelector(action.selectors)
@@ -1305,12 +1310,24 @@ async function executeAssertion(action: RecordedAction): Promise<void> {
     case "fieldValue":
     case "hasValue":
       await waitFor(() => {
+        if (hasUsableSelector(action.selectors)) {
+          const element = findReplayElementSync(action);
+          return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+            ? element.value === expected
+            : false;
+        }
         const fields = Array.from(document.querySelectorAll("input, textarea")) as Array<HTMLInputElement | HTMLTextAreaElement>;
-        return fields.some((field) => field.value.includes(expected));
-      }, timeout, `Expected a field value to contain "${expected}"`);
+        return fields.some((field) => field.value === expected);
+      }, timeout, `Expected a field value to equal "${expected}"`);
       return;
     case "tableRowContains":
-      await waitFor(() => Array.from(document.querySelectorAll("tr")).some((row) => visibleText(row).includes(expected)), timeout, `Expected table row containing "${expected}"`);
+      await waitFor(() => Array.from(document.querySelectorAll("tr, [role='row']")).some((row) => visibleText(row).includes(expected)), timeout, `Expected table row containing "${expected}"`);
+      return;
+    case "addressStatusEquals":
+      await waitFor(() => Array.from(document.querySelectorAll("tr, [role='row']")).some((row) => visibleText(row).includes(expected)), timeout, `Expected address status "${expected}"`);
+      return;
+    case "toastVisible":
+      await waitFor(() => Array.from(document.querySelectorAll("[role='status'], [role='alert'], .toast, .zm-toast, .zmu-toast, [class*='toast'], [class*='Toast'], [class*='banner']")).some((toast) => isElementVisible(toast) && visibleText(toast).includes(expected)), timeout, `Expected toast or banner containing "${expected}"`);
       return;
     case "textVisible":
     case "hasText":

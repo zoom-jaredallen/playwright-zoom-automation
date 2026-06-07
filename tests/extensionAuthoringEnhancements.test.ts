@@ -3,6 +3,7 @@ import { createStepTestPlan } from "../extension/shared/testPlan.js";
 import { applySelectorCandidate, preferredSelectorCandidates } from "../extension/shared/selectorRepair.js";
 import { createPublishReview } from "../extension/shared/publishReview.js";
 import { buildConditionPreset, suggestParameterReplacements } from "../extension/shared/authoringAssistants.js";
+import { assertionCatalog, assertionOptionsForUi, defaultAssertionInput } from "../extension/shared/assertionCatalog.js";
 import type { RecordedAction } from "@zoom-automation/workflow-core";
 
 function action(id: string, overrides: Partial<RecordedAction> = {}): RecordedAction {
@@ -78,5 +79,31 @@ describe("authoring assistants", () => {
       type: "addressAlreadyExistsSkipAccount",
       text: "2 Central Blvd"
     });
+  });
+});
+
+describe("assertion catalog", () => {
+  it("exposes first-class validation types for the side panel", () => {
+    expect(assertionOptionsForUi().map((option) => option.value)).toEqual([
+      "textVisible",
+      "elementVisible",
+      "fieldValue",
+      "tableRowContains",
+      "addressStatusEquals",
+      "urlContains",
+      "urlMatches",
+      "toastVisible"
+    ]);
+    expect(assertionCatalog.addressStatusEquals.placeholder).toBe("Pending, Verified, or Rejected");
+  });
+
+  it("returns useful defaults for status and toast assertions", () => {
+    expect(defaultAssertionInput("addressStatusEquals")).toEqual({
+      assertionType: "addressStatusEquals",
+      expected: "Verified",
+      timeout: 10_000,
+      onFailure: "screenshot"
+    });
+    expect(defaultAssertionInput("toastVisible").expected).toBe("Saved");
   });
 });

@@ -440,6 +440,56 @@ describe("compileWorkflow", () => {
     expect(flow).toContain("await this.writeSelectorDiagnostics(artifactBase, error)");
   });
 
+  it("compiles first-class assertion types for reliable replay checks", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "assert-status",
+          timestamp: 1000,
+          type: "assert",
+          selectors: {},
+          assertionType: "addressStatusEquals",
+          expected: "Verified",
+          timeout: 10000,
+          onFailure: "screenshot",
+          pageUrl: "https://zoom.us/test",
+          pageTitle: "Test",
+          description: "Verify address status"
+        },
+        {
+          id: "assert-url",
+          timestamp: 1001,
+          type: "assert",
+          selectors: {},
+          assertionType: "urlMatches",
+          expected: "#/business-address$",
+          timeout: 10000,
+          onFailure: "fail",
+          pageUrl: "https://zoom.us/test",
+          pageTitle: "Test",
+          description: "Verify URL pattern"
+        }
+      ],
+      assertions: [
+        {
+          afterAction: "assert-url",
+          type: "toastVisible",
+          expected: "Saved",
+          timeout: 10000,
+          onFailure: "screenshot"
+        }
+      ]
+    });
+
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain('page.locator("tr, [role=\'row\']", { hasText: "Verified" })');
+    expect(flow).toContain("new RegExp(\"#/business-address$\")");
+    expect(flow).toContain("[role='status'], [role='alert'], .toast");
+    expect(flow).toContain("Auto verification (toastVisible)");
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

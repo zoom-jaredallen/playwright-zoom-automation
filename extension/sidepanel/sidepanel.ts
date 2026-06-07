@@ -2,6 +2,7 @@ import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-cor
 import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
 import { applySelectorCandidate } from "../shared/selectorRepair.js";
 import { buildStepInspectorSummary, fallbackCandidates } from "../shared/stepInspector.js";
+import { assertionCatalog, assertionOptionsForUi, defaultAssertionInput } from "../shared/assertionCatalog.js";
 import { createPublishReview } from "../shared/publishReview.js";
 import { suggestParameterReplacements } from "../shared/authoringAssistants.js";
 import {
@@ -265,12 +266,13 @@ async function clearActions(): Promise<void> {
 }
 
 async function addAssertionStep(): Promise<void> {
+  const defaults = defaultAssertionInput("textVisible");
   const response = await sendMessage({
     type: "ADD_ASSERTION_ACTION",
-    assertionType: "textVisible",
-    expected: "",
-    timeout: 10_000,
-    onFailure: "screenshot",
+    assertionType: defaults.assertionType,
+    expected: defaults.expected ?? "",
+    timeout: defaults.timeout,
+    onFailure: defaults.onFailure,
     insertAfterActionId
   });
   selectAndExpandAction(response?.actionId);
@@ -855,15 +857,22 @@ function renderUrlEditor(action: RecordedAction): HTMLElement {
 
 function renderAssertionEditor(action: RecordedAction): HTMLElement {
   const section = makeEditorSection("Assertion");
+  const selectedType = action.assertionType ?? "textVisible";
+  const selected = assertionCatalog[selectedType as keyof typeof assertionCatalog] ?? assertionCatalog.textVisible;
   section.append(
-    makeLabeledSelect("Assertion", action.assertionType ?? "textVisible", [
-      ["textVisible", "Text is visible"],
-      ["urlContains", "URL contains"],
-      ["elementVisible", "Element is visible"],
-      ["fieldValue", "Field has value"],
-      ["tableRowContains", "Table row contains"]
-    ], (value) => updateActionPatch(action.id, { assertionType: value as RecordedAction["assertionType"] })),
-    makeTextField("Expected value", action.expected ?? "", "Expected text, URL fragment, or selector", (value) => updateActionPatch(action.id, { expected: value }))
+    makeLabeledSelect(
+      "Assertion",
+      selectedType,
+      assertionOptionsForUi().map((option) => [option.value, option.label]),
+      (value) => {
+        const defaults = defaultAssertionInput(value as RecordedAction["assertionType"]);
+        return updateActionPatch(action.id, {
+          assertionType: defaults.assertionType,
+          expected: action.expected || defaults.expected
+        });
+      }
+    ),
+    makeTextField("Expected value", action.expected ?? selected.defaultExpected, selected.placeholder, (value) => updateActionPatch(action.id, { expected: value }))
   );
   const row = document.createElement("div");
   row.className = "two-column";
