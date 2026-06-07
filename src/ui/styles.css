@@ -3720,3 +3720,57 @@ tr:hover .copy-btn {
   color: var(--text-text-primary);
   font-weight: 600;
 }
+
+.readiness-panel {
+  align-self: start;
+}
+
+.readiness-list {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 9px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+
+.readiness-item small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-text-subtle-neutral);
+  line-height: 16px;
+}
+
+.readiness-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--fill-fill-subtle-neutral);
+  color: var(--text-text-neutral);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.readiness-item.pass .readiness-icon {
+  background: var(--fill-fill-subtler-success);
+  color: var(--text-text-success);
+}
+
+.readiness-item.warning .readiness-icon {
+  background: var(--fill-fill-subtler-warning);
+  color: var(--text-text-warning);
+}
+
+.readiness-item.blocking .readiness-icon {
+  background: var(--fill-fill-subtler-error);
+  color: var(--text-text-error);
+}

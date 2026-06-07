@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cancelJob,
+  checkRunReadiness,
   createJob,
   duplicateRecordedWorkflow,
   fetchAddressProfiles,
@@ -15,6 +16,7 @@ import {
   type AddressProfileView,
   type JobView,
   type RecordedWorkflowView,
+  type RunReadinessView,
   type SubAccountView,
   type WorkflowView
 } from "./api.js";
@@ -69,6 +71,9 @@ function AppContent() {
   const [concurrency, setConcurrency] = useState(1);
   const [retryAttempts, setRetryAttempts] = useState(2);
   const [accountValues, setAccountValues] = useState<Record<string, Record<string, string>> | undefined>();
+  const [readiness, setReadiness] = useState<RunReadinessView | undefined>();
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessError, setReadinessError] = useState<string | undefined>();
 
   // Job state
   const [job, setJob] = useState<JobView | undefined>();
@@ -90,6 +95,7 @@ function AppContent() {
   const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
   const workflowNames = useMemo(() => new Map(workflows.map((w) => [w.id, w.name])), [workflows]);
   const isRunning = Boolean(job && ["queued", "running"].includes(job.status));
+  const selectedAccounts = useMemo(() => accounts.filter((a) => selectedIds.has(a.id)), [accounts, selectedIds]);
 
   // Load initial data
   useEffect(() => {
@@ -126,6 +132,25 @@ function AppContent() {
     void fetchJobs().then((r) => setJobHistory(r.jobs)).catch(() => undefined);
   }, []);
   useEffect(() => { refreshHistory(); }, []);
+
+  useEffect(() => {
+    if (wizardStep !== "configure") return;
+    setReadinessLoading(true);
+    setReadinessError(undefined);
+    void checkRunReadiness({
+      accounts: selectedAccounts,
+      workflowIds: pipelineOrder,
+      addressProfile: selectedProfileId,
+      dryRun,
+      parameterValues: {}
+    })
+      .then((response) => setReadiness(response.readiness))
+      .catch((error) => {
+        setReadiness(undefined);
+        setReadinessError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setReadinessLoading(false));
+  }, [wizardStep, selectedAccounts, pipelineOrder, selectedProfileId, dryRun]);
 
   const refreshRecordedWorkflows = useCallback(() => {
     setRecordedLoading(true);
@@ -200,6 +225,10 @@ function AppContent() {
   };
 
   const handleStartRequest = () => {
+    if (readiness && !readiness.ready) {
+      addToast("error", `Run blocked: ${readiness.blocking[0]?.message ?? "readiness checks failed"}`);
+      return;
+    }
     if (!dryRun) { setConfirmOpen(true); return; }
     executeStartJob();
   };
@@ -207,7 +236,6 @@ function AppContent() {
   const executeStartJob = async () => {
     setConfirmOpen(false);
     setJobError(undefined);
-    const selectedAccounts = accounts.filter((a) => selectedIds.has(a.id));
     try {
       const response = await createJob({
         accounts: selectedAccounts,
@@ -470,6 +498,9 @@ function AppContent() {
                 concurrency={concurrency}
                 retryAttempts={retryAttempts}
                 accountCount={selectedIds.size}
+                readiness={readiness}
+                readinessLoading={readinessLoading}
+                readinessError={readinessError}
                 onToggleWorkflow={handleToggleWorkflow}
                 onReorderPipeline={setPipelineOrder}
                 onProfileChange={setSelectedProfileId}

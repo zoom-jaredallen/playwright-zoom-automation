@@ -73,6 +73,20 @@ export interface ArtifactView {
   downloadUrl: string;
 }
 
+export interface ReadinessCheckView {
+  id: string;
+  label: string;
+  severity: "pass" | "warning" | "blocking";
+  message: string;
+}
+
+export interface RunReadinessView {
+  ready: boolean;
+  checks: ReadinessCheckView[];
+  blocking: ReadinessCheckView[];
+  warnings: ReadinessCheckView[];
+}
+
 // ─── Recorded Workflow Types (for Editor) ────────────────────────────────────
 // These come from the shared `@zoom-automation/workflow-core` package so the Web
 // UI, server, compiler, and Chrome extension all share one schema. The `*View`
@@ -159,6 +173,19 @@ export async function createJob(input: {
   accountValues?: Record<string, Record<string, string>>;
 }): Promise<{ job: JobView }> {
   return requestJson("/api/jobs", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function checkRunReadiness(input: {
+  accounts: SubAccountView[];
+  workflowIds: string[];
+  addressProfile: string;
+  dryRun: boolean;
+  parameterValues?: Record<string, string>;
+}): Promise<{ readiness: RunReadinessView }> {
+  return requestJson("/api/readiness/check", {
     method: "POST",
     body: JSON.stringify(input)
   });

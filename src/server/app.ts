@@ -16,6 +16,7 @@ import { listJobArtifacts } from "./services/artifacts.js";
 import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./services/scheduler.js";
 import { isAllowedWebhookUrl, WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
+import { evaluateRunReadiness } from "./services/runReadinessService.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
 import { TokenManager } from "../zoom/oauth.js";
@@ -198,6 +199,36 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       adminEmail: config.zoom.adminEmail,
       profiles
     });
+  });
+
+  app.post("/api/readiness/check", (request, response, next) => {
+    try {
+      const body = request.body as {
+        accounts?: SubAccount[];
+        workflowIds?: string[];
+        addressProfile?: string;
+        dryRun?: boolean;
+        parameterValues?: Record<string, string>;
+      };
+      const config = loadConfig({ ...process.env, ADDRESS_PROFILE: body.addressProfile ?? process.env.ADDRESS_PROFILE });
+      const enabledWorkflowIds = new Set(workflowRegistry.list().filter((workflow) => workflow.enabled).map((workflow) => workflow.id));
+      const result = evaluateRunReadiness({
+        selectedAccounts: body.accounts ?? [],
+        workflowIds: body.workflowIds ?? [],
+        enabledWorkflowIds,
+        addressProfile: body.addressProfile,
+        dryRun: body.dryRun ?? true,
+        requiredDocuments: [
+          { label: "ID document", path: config.documents.idPath, required: config.documents.required },
+          { label: "Business verification", path: config.documents.businessVerificationPath, required: config.documents.required }
+        ],
+        parameters: [],
+        parameterValues: body.parameterValues ?? {}
+      });
+      response.json({ readiness: result });
+    } catch (error) {
+      next(error);
+    }
   });
 
   const serverTokenManager = new TokenManager(loadConfig(process.env).zoom);

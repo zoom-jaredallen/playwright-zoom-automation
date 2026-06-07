@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { AddressProfileView, WorkflowView } from "../api.js";
+import type { AddressProfileView, RunReadinessView, WorkflowView } from "../api.js";
 import { CheckIcon, ChevronRightIcon } from "./Icons.js";
+import { RunReadinessPanel } from "./RunReadinessPanel.js";
 
 interface ConfigureStepProps {
   workflows: WorkflowView[];
@@ -13,6 +14,9 @@ interface ConfigureStepProps {
   concurrency: number;
   retryAttempts: number;
   accountCount: number;
+  readiness?: RunReadinessView;
+  readinessLoading?: boolean;
+  readinessError?: string;
   onToggleWorkflow(id: string): void;
   onReorderPipeline(order: string[]): void;
   onProfileChange(id: string): void;
@@ -30,6 +34,7 @@ interface ConfigureStepProps {
 export function ConfigureStep({
   workflows, selectedWorkflowIds, pipelineOrder, profiles, selectedProfileId,
   dryRun, headless, concurrency, retryAttempts, accountCount,
+  readiness, readinessLoading, readinessError,
   onToggleWorkflow, onReorderPipeline, onProfileChange,
   onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange,
   onImportWorkflow, onBack, onNext, onAccountValuesChange
@@ -37,7 +42,7 @@ export function ConfigureStep({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [csvSummary, setCsvSummary] = useState<string | undefined>();
   const [csvError, setCsvError] = useState<string | undefined>();
-  const canProceed = pipelineOrder.length > 0 && selectedProfileId;
+  const canProceed = pipelineOrder.length > 0 && selectedProfileId && readiness?.ready !== false;
 
   const handleCsv = async (file: File) => {
     setCsvError(undefined);
@@ -218,6 +223,8 @@ export function ConfigureStep({
             {csvError ? <small className="import-error">{csvError}</small> : null}
           </div>
         </section>
+
+        <RunReadinessPanel readiness={readiness} loading={readinessLoading} error={readinessError} />
       </div>
 
       {/* Footer */}
