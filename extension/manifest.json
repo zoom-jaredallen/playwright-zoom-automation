@@ -5,7 +5,7 @@
   "description": "Record Zoom admin portal workflows for batch automation across sub-accounts.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "storage", "scripting", "sidePanel"],
-  "host_permissions": ["https://*.zoom.us/*"],
+  "host_permissions": ["https://*.zoom.us/*", "http://127.0.0.1/*", "http://localhost/*"],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

@@ -16,6 +16,7 @@ Current surfaces include:
 - CLI batch automation for configured Zoom Phone business-address flows.
 - Web UI for account query, account selection, workflow selection, run monitoring, job history, and recorded-workflow import/editing.
 - Chrome recorder extension for capturing Zoom UI workflows, testing selectors, adding manual steps, running browser preflight tests, and exporting/syncing workflow JSON.
+- Recorder debug bridge and CLI for inspecting recorded workflows, queued browser-preflight tests, events, and workflow exports without visual browser control.
 - Recorded-workflow compiler with selector healing, per-step retry/timeout policy, conditional guards, and generated quality reports.
 - Artifact browser links in the web run monitor for traces, screenshots, failure details, and logs.
 
@@ -51,6 +52,20 @@ cd extension
 npx tsc --noEmit
 npm run build
 ```
+
+For recorder debugging, prefer the structured bridge before browser/computer-control tools:
+
+```bash
+UI_PORT=4174 npm run dev
+npm run recorder:latest
+npm run recorder:workflow
+npm run recorder:actions
+npm run recorder:test
+npm run recorder:test -- --from step_id
+npm run recorder:export -- --out output/debug/workflow.json
+```
+
+Recorder snapshots are written under `output/recorder-sessions/`. They are diagnostics, may contain recorded field values, and should not be committed.
 
 Known verification caveat: untracked generated workflows under `src/workflows/recorded/` can make root `npm run typecheck` fail. Do not delete or commit those generated workflows unless the user explicitly asks.
 

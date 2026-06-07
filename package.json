@@ -28,6 +28,14 @@
     "prestart": "npm run build:core",
     "worker": "tsx src/worker/index.ts",
     "workflow:compile": "tsx src/compiler/cli.ts",
+    "recorder:debug": "tsx src/recorderDebug/cli.ts",
+    "recorder:latest": "tsx src/recorderDebug/cli.ts latest",
+    "recorder:workflow": "tsx src/recorderDebug/cli.ts workflow",
+    "recorder:actions": "tsx src/recorderDebug/cli.ts actions",
+    "recorder:sessions": "tsx src/recorderDebug/cli.ts sessions",
+    "recorder:events": "tsx src/recorderDebug/cli.ts events",
+    "recorder:test": "tsx src/recorderDebug/cli.ts test",
+    "recorder:export": "tsx src/recorderDebug/cli.ts export",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

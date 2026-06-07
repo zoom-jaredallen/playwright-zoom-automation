@@ -7,6 +7,13 @@ import { createStepTestPlan } from "../shared/testPlan.js";
 import { firstRecordableNavigationUrl, shouldAcceptRecordedAction, shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
 import { insertRecordedAction, prepareRecordedActionsForWorkflow } from "../shared/recordedActionPolicy.js";
 import {
+  fetchNextRecorderDebugCommand,
+  postRecorderDebugCommandResult,
+  postRecorderDebugSnapshot,
+  type RecorderDebugCommand,
+  type RecorderDebugCommandResult
+} from "../shared/debugBridge.js";
+import {
   applyStepUpdate,
   buildWorkflow as buildWorkflowCore,
   deleteStep,
@@ -52,6 +59,9 @@ let hydrationPromise: Promise<void> | undefined = hydrateDraftState();
 let testRunning = false;
 let testCurrentActionId: string | undefined;
 let testEvents: WorkflowTestEvent[] = [];
+let debugCommandPollRunning = false;
+
+startRecorderDebugCommandPolling();
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -235,21 +245,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { ok: true, actionId: lastInsertedActionId(message.insertAfterActionId) };
 
     case "CLEAR_ACTIONS":
-      if (activeRecordingTabId !== undefined) {
-        await chrome.tabs
-          .sendMessage(activeRecordingTabId, { type: "STOP_RECORDING" } satisfies ExtensionMessage)
-          .catch(() => undefined);
-      }
-      recording = false;
-      actions = [];
-      recordingStartUrl = "";
-      recordingStartTime = Date.now();
-      paused = false;
-      activeRecordingTabId = undefined;
-      updateBadge();
-      await chrome.storage.local.remove(["lastWorkflow", "lastActions"]);
-      await clearDraftState();
-      broadcastRecorderState();
+      await clearRecordedActions();
       return { ok: true };
 
     case "IMPORT_WORKFLOW":
@@ -353,6 +349,7 @@ async function stopRecording(message: Extract<ExtensionMessage, { type: "STOP_RE
   await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
   await clearDraftState();
   broadcastRecorderState();
+  void publishRecorderDebugSnapshot();
   return { ok: true, workflow };
 }
 
@@ -774,6 +771,7 @@ function broadcastTestState(): void {
     currentActionId: testCurrentActionId,
     events: testEvents
   } satisfies ExtensionMessage).catch(() => undefined);
+  void publishRecorderDebugSnapshot();
 }
 
 async function syncContentRecorder(tabId: number): Promise<void> {
@@ -816,6 +814,7 @@ async function hydrateDraftState(): Promise<void> {
 async function persistAndBroadcast(): Promise<void> {
   await persistDraftState();
   broadcastRecorderState();
+  void publishRecorderDebugSnapshot();
 }
 
 async function persistDraftState(): Promise<void> {
@@ -843,6 +842,143 @@ async function clearDraftState(): Promise<void> {
 
 function getDraftStorage(): chrome.storage.StorageArea {
   return chrome.storage.session ?? chrome.storage.local;
+}
+
+// ─── Recorder Debug Bridge ──────────────────────────────────────────────────
+
+function startRecorderDebugCommandPolling(): void {
+  setInterval(() => {
+    void pollRecorderDebugCommand();
+  }, 2_000);
+  void pollRecorderDebugCommand();
+}
+
+async function pollRecorderDebugCommand(): Promise<void> {
+  if (debugCommandPollRunning || !(await getExtensionEnabled())) return;
+  debugCommandPollRunning = true;
+  try {
+    const command = await fetchNextRecorderDebugCommand().catch(() => undefined);
+    if (!command) return;
+    const result = await executeRecorderDebugCommand(command);
+    await postRecorderDebugCommandResult(command.id, result).catch(() => undefined);
+    void publishRecorderDebugSnapshot();
+  } finally {
+    debugCommandPollRunning = false;
+  }
+}
+
+async function executeRecorderDebugCommand(command: RecorderDebugCommand): Promise<RecorderDebugCommandResult> {
+  try {
+    switch (command.type) {
+      case "BUILD_WORKFLOW": {
+        const available = await availableActions({ restore: true });
+        const workflow = available.length > 0 ? buildWorkflow() : await loadLastWorkflow();
+        if (!workflow) return { ok: false, error: "No recorder actions are available to build a workflow." };
+        actions = workflow.actions;
+        await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: workflow.actions });
+        return { ok: true, message: `Built workflow with ${workflow.actions.length} step(s).`, workflow };
+      }
+
+      case "GET_ACTIONS":
+        await availableActions({ restore: true });
+        return {
+          ok: true,
+          message: `${actions.length} recorder action(s) available.`,
+          actions,
+          workflow: actions.length > 0 ? buildWorkflow() : await loadLastWorkflow()
+        };
+
+      case "GET_TEST_WORKFLOW_STATE":
+        return { ok: true, testState: currentTestState(), events: testEvents };
+
+      case "RUN_TEST_WORKFLOW": {
+        const started = await startTestWorkflow({ mode: "full" });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Browser workflow test finished.", testState: currentTestState(), events: testEvents };
+      }
+
+      case "RUN_TEST_WORKFLOW_FROM": {
+        const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
+        if (!actionId) return { ok: false, error: "RUN_TEST_WORKFLOW_FROM requires payload.actionId" };
+        const started = await startTestWorkflow({ mode: "from", actionId });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Browser workflow test finished.", testState: currentTestState(), events: testEvents };
+      }
+
+      case "CLEAR_ACTIONS":
+        await clearRecordedActions();
+        return { ok: true, message: "Recorder actions cleared." };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error), testState: currentTestState(), events: testEvents };
+  }
+}
+
+async function publishRecorderDebugSnapshot(): Promise<void> {
+  const workflow = actions.length > 0 ? buildWorkflow() : await loadLastWorkflow();
+  const preparedActions = actions.length > 0 ? prepareRecordedActionsForWorkflow(actions) : workflow?.actions ?? [];
+  const tab = await getActiveTab().catch(() => undefined);
+  await postRecorderDebugSnapshot({
+    sessionId: currentRecorderDebugSessionId(workflow),
+    timestamp: new Date().toISOString(),
+    source: "extension",
+    status: { recording, paused, actionCount: actions.length },
+    rawActions: actions,
+    preparedActions,
+    workflow,
+    quality: workflow?.quality,
+    testState: currentTestState(),
+    page: tab?.url ? { url: tab.url, title: tab.title ?? "Chrome tab" } : undefined
+  }).catch(() => undefined);
+}
+
+function currentRecorderDebugSessionId(workflow?: RecordedWorkflow): string {
+  const recordedAt = workflow?.meta.recordedAt ? Date.parse(workflow.meta.recordedAt) : Number.NaN;
+  const basis = recordingStartTime || (Number.isNaN(recordedAt) ? Date.now() : recordedAt);
+  return `recorder-${new Date(basis).toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
+}
+
+function currentTestState(): { running: boolean; currentActionId?: string; events: WorkflowTestEvent[] } {
+  return {
+    running: testRunning,
+    currentActionId: testCurrentActionId,
+    events: [...testEvents]
+  };
+}
+
+function hasDebugTestError(): boolean {
+  return testEvents.some((event) => event.level === "error");
+}
+
+async function waitForDebugTestCompletion(): Promise<void> {
+  const started = Date.now();
+  while (testRunning && Date.now() - started < 5 * 60_000) {
+    await sleep(500);
+  }
+  if (testRunning) {
+    throw new Error("Timed out waiting for browser workflow test to finish.");
+  }
+}
+
+async function clearRecordedActions(): Promise<void> {
+  if (activeRecordingTabId !== undefined) {
+    await chrome.tabs
+      .sendMessage(activeRecordingTabId, { type: "STOP_RECORDING" } satisfies ExtensionMessage)
+      .catch(() => undefined);
+  }
+  recording = false;
+  actions = [];
+  recordingStartUrl = "";
+  recordingStartTime = Date.now();
+  paused = false;
+  activeRecordingTabId = undefined;
+  updateBadge();
+  await chrome.storage.local.remove(["lastWorkflow", "lastActions"]);
+  await clearDraftState();
+  broadcastRecorderState();
+  void publishRecorderDebugSnapshot();
 }
 
 // ─── Workflow Builder ────────────────────────────────────────────────────────

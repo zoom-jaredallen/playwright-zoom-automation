@@ -69,6 +69,8 @@ UI_DEV=false UI_PORT=4174 npm run serve:ui
 - `src/ui/components/`: UI panels and controls.
 - `src/compiler/`: Recorded-workflow schema compiler, selector healing, and generated-flow helpers.
 - `extension/`: Chrome workflow recorder with side panel, selector testing, preflight testing, and JSON export/sync.
+- `src/recorderDebug/`: Recorder debug CLI and shared debug contracts.
+- `src/server/services/recorderDebugStore.ts`: File-backed recorder session snapshots, command queue, results, and events.
 - `src/automation/`: Shared runner, retry, progress, and flow types.
 - `src/zoom/api.ts`: Zoom API client for sub-account retrieval.
 - `src/zoom/auth.ts`: Zoom native login and master storage-state capture.
@@ -132,6 +134,40 @@ npm run build
 ```
 
 The extension side panel currently includes recording pause/resume, manual step insertion, selector test/repair, browser preflight testing, per-step policy controls, conditional steps, detected parameters, and generated workflow quality reports.
+
+## Recorder Debug Bridge
+
+Prefer the recorder debug bridge before using visual browser or computer-control tools. It is much lower token and exposes structured recorder state from the Chrome extension through the local web server.
+
+Start the server first:
+
+```bash
+UI_PORT=4174 npm run dev
+```
+
+Reload the unpacked extension from `extension/dist/`. The extension posts snapshots to:
+
+```text
+output/recorder-sessions/
+```
+
+Useful commands:
+
+```bash
+npm run recorder:latest
+npm run recorder:workflow
+npm run recorder:actions
+npm run recorder:actions -- --raw
+npm run recorder:sessions
+npm run recorder:events
+npm run recorder:test
+npm run recorder:test -- --from step_id
+npm run recorder:export -- --out output/debug/workflow.json
+```
+
+The CLI uses `RECORDER_DEBUG_BASE_URL` when set, otherwise `http://127.0.0.1:4174`. The extension uses its configured `serverUrl` when set, otherwise the same default. Debug commands are queued through `/api/recorder/debug/commands`; the extension polls and executes safe recorder commands only.
+
+Do not put secrets in recorded steps or debug snapshots. Treat `output/recorder-sessions/` as local diagnostics and avoid committing it.
 
 ## Testing Expectations
 
