@@ -101,7 +101,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         }
         // Filter out meta-only actions (impersonation detection notices)
         if (!message.action.id.startsWith("meta_")) {
-          actions.push(message.action);
+          actions.push(await withVisibleTabThumbnail(message.action, sender.tab));
         }
         if (!recordingStartUrl && message.action.type === "navigate" && message.action.url) {
           recordingStartUrl = message.action.url;
@@ -157,7 +157,10 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         key: message.key,
         dialogAction: message.dialogAction,
         dialogPromptText: message.dialogPromptText,
-        elementScreenshot: message.elementScreenshot
+        elementScreenshot: message.elementScreenshot,
+        capture: message.capture,
+        selectorDiagnostics: message.selectorDiagnostics,
+        repairSuggestions: message.repairSuggestions
       });
       await persistAndBroadcast();
       return { ok: true };
@@ -266,6 +269,13 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { running: testRunning, currentActionId: testCurrentActionId, events: testEvents };
 
     case "TEST_SELECTOR": {
+      const tab = await getActiveTab();
+      if (!tab.id) return { error: "No active tab found" };
+      await ensureContentRecorder(tab.id);
+      return await chrome.tabs.sendMessage(tab.id, message);
+    }
+
+    case "HIGHLIGHT_ACTION_TARGET": {
       const tab = await getActiveTab();
       if (!tab.id) return { error: "No active tab found" };
       await ensureContentRecorder(tab.id);
@@ -388,6 +398,24 @@ function updateAction(actionId: string, update: StepUpdate): void {
     if (updated?.url && (!recordingStartUrl || recordingStartUrl === previousPageUrl)) {
       recordingStartUrl = updated.url;
     }
+  }
+}
+
+async function withVisibleTabThumbnail(action: RecordedAction, tab: chrome.tabs.Tab | undefined): Promise<RecordedAction> {
+  if (!action.capture || tab?.windowId === undefined) return action;
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 35 });
+    const width = Math.min(action.capture.viewport.width, 420);
+    const height = Math.round(width * (action.capture.viewport.height / Math.max(action.capture.viewport.width, 1)));
+    return {
+      ...action,
+      capture: {
+        ...action.capture,
+        thumbnail: { dataUrl, width, height }
+      }
+    };
+  } catch {
+    return action;
   }
 }
 
@@ -892,6 +920,7 @@ function requiresEnabled(type: ExtensionMessage["type"]): boolean {
     "WAIT_FOR_PAGE_READY",
     "EXECUTE_TEST_ACTION",
     "TEST_SELECTOR",
+    "HIGHLIGHT_ACTION_TARGET",
     "PICK_SELECTOR",
     "PICK_ANCHOR"
   ].includes(type);

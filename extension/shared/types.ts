@@ -112,6 +112,9 @@ export type ExtensionMessage =
       dialogAction?: RecordedAction["dialogAction"];
       dialogPromptText?: string;
       elementScreenshot?: boolean;
+      capture?: RecordedAction["capture"];
+      selectorDiagnostics?: RecordedAction["selectorDiagnostics"];
+      repairSuggestions?: RecordedAction["repairSuggestions"];
     }
   | { type: "MOVE_ACTION"; actionId: string; direction: "up" | "down" }
   | { type: "ADD_DIALOG_ACTION"; dialogAction: NonNullable<RecordedAction["dialogAction"]>; promptText?: string; insertAfterActionId?: string | null }
@@ -136,6 +139,7 @@ export type ExtensionMessage =
   | { type: "WAIT_FOR_PAGE_READY"; timeout?: number }
   | { type: "EXECUTE_TEST_ACTION"; action: RecordedAction }
   | { type: "TEST_SELECTOR"; action: RecordedAction }
+  | { type: "HIGHLIGHT_ACTION_TARGET"; action: RecordedAction }
   | { type: "PICK_SELECTOR"; action: RecordedAction }
   | { type: "PICK_ANCHOR"; action: RecordedAction }
   | { type: "ACTIONS_RESPONSE"; actions: RecordedAction[] };

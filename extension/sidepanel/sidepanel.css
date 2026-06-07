@@ -832,6 +832,74 @@ input:not([type="checkbox"]), select {
 
 .selector-candidates { display: grid; gap: 3px; }
 
+.step-inspector {
+  border-color: var(--border-border-primary);
+}
+
+.inspector-top {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.inspector-thumbnail {
+  display: grid;
+  width: 112px;
+  aspect-ratio: 16 / 10;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 6px;
+  background: var(--fill-fill-subtler-neutral);
+  color: var(--text-text-subtle-neutral);
+  font-size: 11px;
+}
+
+.inspector-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.inspector-facts {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.inspector-facts dt {
+  color: var(--text-text-subtle-neutral);
+}
+
+.inspector-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-text-neutral);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.confidence-high { color: var(--text-text-success); }
+.confidence-medium { color: var(--text-text-warning); }
+.confidence-low { color: var(--text-text-error); }
+
+.inspector-fallbacks {
+  display: grid;
+  gap: 6px;
+}
+
+.selector-candidates.compact .selector-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
 .quality-score {
   display: inline-grid;
   min-width: 36px;

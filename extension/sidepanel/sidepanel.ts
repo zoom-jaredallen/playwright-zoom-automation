@@ -1,6 +1,7 @@
 import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
 import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
 import { applySelectorCandidate } from "../shared/selectorRepair.js";
+import { buildStepInspectorSummary, fallbackCandidates } from "../shared/stepInspector.js";
 import { createPublishReview } from "../shared/publishReview.js";
 import { suggestParameterReplacements } from "../shared/authoringAssistants.js";
 import {
@@ -650,12 +651,97 @@ function renderInlineStepEditor(action: RecordedAction, confidence: SelectorConf
   const editor = document.createElement("div");
   editor.className = "inline-step-editor";
 
+  editor.appendChild(renderStepInspector(action));
+
   for (const group of visibleFieldGroups(action)) {
     const section = renderInlineFieldGroup(action, group, confidence);
     if (section) editor.appendChild(section);
   }
 
   return editor;
+}
+
+function renderStepInspector(action: RecordedAction): HTMLElement {
+  const summary = buildStepInspectorSummary(action);
+  const section = makeEditorSection("Inspector");
+  section.classList.add("step-inspector");
+
+  const top = document.createElement("div");
+  top.className = "inspector-top";
+
+  const thumb = document.createElement("div");
+  thumb.className = `inspector-thumbnail${summary.hasThumbnail ? "" : " empty"}`;
+  if (summary.thumbnail) {
+    const image = document.createElement("img");
+    image.src = summary.thumbnail.dataUrl;
+    image.width = summary.thumbnail.width;
+    image.height = summary.thumbnail.height;
+    image.alt = "Recorded step screenshot";
+    thumb.appendChild(image);
+  } else {
+    thumb.textContent = "No screenshot";
+  }
+
+  const facts = document.createElement("dl");
+  facts.className = "inspector-facts";
+  appendFact(facts, "Target", summary.targetPreview);
+  appendFact(facts, "Chosen", summary.chosenSelectorLabel);
+  appendFact(facts, "Anchor", summary.anchorLabel);
+  appendFact(facts, "Matches", summary.matchLabel);
+  appendFact(facts, "Confidence", summary.confidenceLabel, `confidence-${summary.confidenceLevel}`);
+  top.append(thumb, facts);
+
+  const actionsRow = document.createElement("div");
+  actionsRow.className = "inline-actions";
+  actionsRow.append(
+    makeActionButton("Highlight target", false, () => void highlightActionTarget(action)),
+    makeActionButton("Refresh matches", false, () => void testSelectorForAction(action))
+  );
+
+  section.append(top, actionsRow, renderInspectorFallbacks(action, summary.fallbackCount));
+  return section;
+}
+
+function appendFact(list: HTMLDListElement, label: string, value: string, valueClass?: string): void {
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  if (valueClass) detail.className = valueClass;
+  detail.textContent = value;
+  list.append(term, detail);
+}
+
+function renderInspectorFallbacks(action: RecordedAction, fallbackCount: number): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "inspector-fallbacks";
+  const title = document.createElement("span");
+  title.className = "field-label";
+  title.textContent = `Fallback selectors (${fallbackCount})`;
+  wrapper.appendChild(title);
+
+  const chosenId = action.selectorDiagnostics?.chosenCandidateId ?? action.selectedCandidateId;
+  const candidates = fallbackCandidates(action.selectorCandidates ?? [], chosenId);
+  if (candidates.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No fallback selectors captured.";
+    wrapper.appendChild(empty);
+    return wrapper;
+  }
+
+  const list = document.createElement("div");
+  list.className = "selector-candidates compact";
+  for (const candidate of candidates.slice(0, 4)) {
+    const item = document.createElement("div");
+    item.className = "selector-candidate";
+    const label = document.createElement("span");
+    label.textContent = candidate.label ?? `${candidate.kind} selector`;
+    const use = makeActionButton("Use", false, () => void useSelectorCandidate(action.id, candidate.selector));
+    item.append(label, use);
+    list.appendChild(item);
+  }
+  wrapper.appendChild(list);
+  return wrapper;
 }
 
 function renderInlineFieldGroup(action: RecordedAction, group: InlineFieldGroup, confidence: SelectorConfidence): HTMLElement | undefined {
@@ -1250,6 +1336,15 @@ async function testSelectorForAction(action: RecordedAction): Promise<void> {
   const result = await sendMessage({ type: "TEST_SELECTOR", action }) as SelectorTestResult;
   selectorTestResults = { ...selectorTestResults, [action.id]: result };
   render();
+}
+
+async function highlightActionTarget(action: RecordedAction): Promise<void> {
+  const response = await sendMessage({ type: "HIGHLIGHT_ACTION_TARGET", action });
+  if (!response?.ok) {
+    setMessage(response?.error ?? "Could not highlight this step on the current page.");
+    return;
+  }
+  setMessage("Target highlighted in the active tab.");
 }
 
 async function testSingleStep(action: RecordedAction): Promise<void> {

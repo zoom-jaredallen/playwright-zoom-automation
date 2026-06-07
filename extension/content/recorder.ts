@@ -96,6 +96,8 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     void executeTestAction(message.action).then(sendResponse);
   } else if (message.type === "TEST_SELECTOR") {
     void testSelector(message.action).then(sendResponse);
+  } else if (message.type === "HIGHLIGHT_ACTION_TARGET") {
+    void highlightActionTarget(message.action).then(sendResponse);
   } else if (message.type === "PICK_SELECTOR") {
     void pickSelector(message.action).then(sendResponse);
   } else if (message.type === "PICK_ANCHOR") {
@@ -359,7 +361,7 @@ function handleChange(event: Event): void {
     value: selectedText,
     parameterHints: params.length > 0 ? params : undefined,
     description: `Select "${selectedText}" in ${selectors.label ?? selectors.role?.name ?? "dropdown"}`
-  });
+  }, target);
 }
 
 // Keys captured as explicit "press" actions (feature 4). Enter on a button is
@@ -479,7 +481,7 @@ function flushPendingFill(): void {
     value: lastFillValue,
     parameterHints: params.length > 0 ? params : undefined,
     description: `Fill "${selectors.label ?? selectors.role?.name ?? "field"}" with "${lastFillValue.slice(0, 30)}${lastFillValue.length > 30 ? "…" : ""}"`
-  });
+  }, lastFillElement);
 
   lastFillElement = null;
   lastFillValue = "";
@@ -514,6 +516,15 @@ function recordAction(
     }
   }
 
+  if (targetElement) {
+    const rankedCandidates = testSelectorCandidatesInDocument(buildSelectorCandidatesForElement(targetElement), document, targetElement);
+    const recommended = rankedCandidates[0];
+    partial.selectorCandidates = stripRuntimeScores(rankedCandidates);
+    partial.selectedCandidateId = recommended?.id;
+    partial.selectorDiagnostics = selectorDiagnosticsForTarget(targetElement, recommended);
+    partial.capture = captureMetadataForTarget(targetElement);
+  }
+
   const action: RecordedAction = {
     id: generateId(),
     timestamp: Date.now(),
@@ -536,6 +547,47 @@ function recordAction(
   if (action.type === "click" && SUBMIT_LABEL_PATTERN.test(actionLabel(action))) {
     captureNetworkWaitFor(action);
   }
+}
+
+async function highlightActionTarget(action: RecordedAction): Promise<{ ok: boolean; error?: string }> {
+  const element = findReplayElementSync(action);
+  if (!element) {
+    return { ok: false, error: "No element matched this step on the current page." };
+  }
+  highlightElement(element);
+  return { ok: true };
+}
+
+function captureMetadataForTarget(element: Element): RecordedAction["capture"] {
+  const rect = element.getBoundingClientRect();
+  return {
+    capturedAt: new Date().toISOString(),
+    pageUrl: window.location.href,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    targetBox: {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height)
+    }
+  };
+}
+
+function selectorDiagnosticsForTarget(element: Element, candidate: RankedSelectorCandidate | undefined): RecordedAction["selectorDiagnostics"] {
+  const fallbackScore = { score: 0, level: "low" as const, reasons: ["No selector candidates captured"] };
+  return {
+    matchedCount: candidate?.diagnostics?.matchedCount ?? 0,
+    visibleCount: candidate?.diagnostics?.visibleCount ?? 0,
+    chosenCandidateId: candidate?.id,
+    confidence: candidate?.score ?? fallbackScore,
+    targetPreview: elementPreview(element),
+    anchor: {
+      text: candidate?.selector.anchor?.text,
+      scopeRole: candidate?.selector.anchor?.scopeRole,
+      relationship: candidate?.selector.anchor?.relationship,
+      resolved: Boolean(candidate?.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
+    }
+  };
 }
 
 function actionLabel(action: RecordedAction): string {

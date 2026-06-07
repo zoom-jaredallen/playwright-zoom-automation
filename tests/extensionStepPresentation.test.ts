@@ -8,6 +8,7 @@ import {
   visibleFieldGroups,
   type BulkPolicyTarget
 } from "../extension/shared/stepPresentation.js";
+import { buildStepInspectorSummary } from "../extension/shared/stepInspector.js";
 import type { RecordedAction } from "@zoom-automation/workflow-core";
 
 function action(id: string, overrides: Partial<RecordedAction> = {}): RecordedAction {
@@ -119,5 +120,42 @@ describe("extension step presentation", () => {
     ]);
     expect(miniMap[1].title).toContain("#2 Click element");
     expect(miniMap[1].title).toContain("Weak selector");
+  });
+
+  it("summarizes step inspector evidence, anchors, live matches, and fallback selectors", () => {
+    const summary = buildStepInspectorSummary(action("save", {
+      selectors: {
+        css: ".zoom-btn:nth-child(3)",
+        anchor: { text: "Business address", scopeRole: "row", relationship: "within" }
+      },
+      selectedCandidateId: "role-save",
+      capture: {
+        thumbnail: { dataUrl: "data:image/png;base64,abc", width: 320, height: 180 },
+        capturedAt: "2026-06-07T00:00:00.000Z",
+        pageUrl: "https://zoom.us/x",
+        viewport: { width: 1440, height: 900 },
+        targetBox: { x: 10, y: 20, width: 100, height: 32 }
+      },
+      selectorDiagnostics: {
+        matchedCount: 3,
+        visibleCount: 1,
+        chosenCandidateId: "role-save",
+        confidence: { score: 86, level: "high", reasons: ["Unique visible match"] },
+        targetPreview: "<button Save>",
+        anchor: { text: "Business address", scopeRole: "row", relationship: "within", resolved: true }
+      },
+      selectorCandidates: [
+        { id: "css-save", kind: "css", selector: { css: ".zoom-btn:nth-child(3)" }, label: "CSS fallback" },
+        { id: "role-save", kind: "role", selector: { role: { role: "button", name: "Save" } }, label: "Button Save" }
+      ]
+    }));
+
+    expect(summary.hasThumbnail).toBe(true);
+    expect(summary.thumbnail?.width).toBe(320);
+    expect(summary.anchorLabel).toBe('within row containing "Business address"');
+    expect(summary.matchLabel).toBe("3 matched, 1 visible");
+    expect(summary.confidenceLabel).toBe("86/100 high");
+    expect(summary.chosenSelectorLabel).toBe("Button Save");
+    expect(summary.fallbackCount).toBe(1);
   });
 });

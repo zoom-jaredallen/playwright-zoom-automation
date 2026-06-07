@@ -277,6 +277,9 @@ export interface StepUpdate {
   selectors?: RecordedAction["selectors"];
   selectorCandidates?: RecordedAction["selectorCandidates"];
   selectedCandidateId?: RecordedAction["selectedCandidateId"];
+  capture?: RecordedAction["capture"];
+  selectorDiagnostics?: RecordedAction["selectorDiagnostics"];
+  repairSuggestions?: RecordedAction["repairSuggestions"];
   cssSelector?: string;
   selectorNote?: string;
   frameSelector?: string;
@@ -323,6 +326,31 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   }
   if (update.selectedCandidateId !== undefined) {
     action.selectedCandidateId = update.selectedCandidateId || undefined;
+  }
+  if (update.capture !== undefined) {
+    action.capture = update.capture ? {
+      ...update.capture,
+      thumbnail: update.capture.thumbnail ? { ...update.capture.thumbnail } : undefined,
+      viewport: { ...update.capture.viewport },
+      targetBox: update.capture.targetBox ? { ...update.capture.targetBox } : undefined
+    } : undefined;
+  }
+  if (update.selectorDiagnostics !== undefined) {
+    action.selectorDiagnostics = update.selectorDiagnostics ? {
+      ...update.selectorDiagnostics,
+      confidence: {
+        ...update.selectorDiagnostics.confidence,
+        reasons: [...update.selectorDiagnostics.confidence.reasons]
+      },
+      anchor: update.selectorDiagnostics.anchor ? { ...update.selectorDiagnostics.anchor } : undefined
+    } : undefined;
+  }
+  if (update.repairSuggestions !== undefined) {
+    action.repairSuggestions = update.repairSuggestions?.map((suggestion) => ({
+      ...suggestion,
+      selector: { ...suggestion.selector },
+      score: { ...suggestion.score, reasons: [...suggestion.score.reasons] }
+    }));
   }
   if (update.cssSelector !== undefined) {
     const cssSelector = update.cssSelector.trim();
