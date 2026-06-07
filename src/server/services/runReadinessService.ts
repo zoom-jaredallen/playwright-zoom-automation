@@ -1,5 +1,6 @@
 import type { SubAccount } from "../../automation/types.js";
 import type { WorkflowParameter } from "@zoom-automation/workflow-core";
+import { isLifecycleLiveRunnable, type WorkflowLifecycleStatus } from "../governance/workflowLifecycle.js";
 
 export type ReadinessSeverity = "pass" | "warning" | "blocking";
 
@@ -20,6 +21,7 @@ export interface RunReadinessInput {
   selectedAccounts: SubAccount[];
   workflowIds: string[];
   enabledWorkflowIds: Set<string>;
+  workflows?: Array<{ id: string; name: string; lifecycleStatus?: WorkflowLifecycleStatus }>;
   addressProfile?: string;
   dryRun: boolean;
   requiredDocuments: RequiredDocumentCheck[];
@@ -64,6 +66,16 @@ export function evaluateRunReadiness(input: RunReadinessInput): RunReadinessResu
       severity: "warning",
       message: "This run will make changes in Zoom"
     });
+    const unsafeWorkflows = (input.workflows ?? [])
+      .filter((workflow) => input.workflowIds.includes(workflow.id))
+      .filter((workflow) => !isLifecycleLiveRunnable(workflow.lifecycleStatus));
+    checks.push(unsafeWorkflows.length === 0
+      ? pass("workflow-lifecycle", "Workflow lifecycle", "Selected workflows are approved for live runs")
+      : block(
+          "workflow-lifecycle",
+          "Workflow lifecycle",
+          `Live runs require approved or published workflows: ${unsafeWorkflows.map((workflow) => workflow.name).join(", ")}`
+        ));
   } else {
     checks.push(pass("dry-run", "Dry run", "Run is configured as a dry run"));
   }

@@ -27,6 +27,7 @@ export interface WorkflowView {
   enabled: boolean;
   category: WorkflowCategory;
   parameters?: WorkflowParameter[];
+  lifecycleStatus?: "draft" | "validated" | "approved" | "published" | "deprecated" | "archived";
 }
 
 export interface AccountCohortView {

@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import type { AutomationFlow, FlowInput, FlowResult } from "../../automation/types.js";
 import type { WorkflowContext, WorkflowDefinition } from "../../workflows/index.js";
 import type { WorkflowCategory, WorkflowParameter } from "@zoom-automation/workflow-core";
+import type { WorkflowLifecycleStore } from "../governance/workflowLifecycle.js";
 
 const RECORDED_BASE = path.resolve("src/workflows/recorded");
 
@@ -25,7 +26,7 @@ function resolveRecorded(id: string, ...segments: string[]): string {
 }
 
 /** List every compiled recorded workflow as a runnable WorkflowDefinition. */
-export function listRecordedDefinitions(): WorkflowDefinition[] {
+export function listRecordedDefinitions(lifecycleStore?: WorkflowLifecycleStore): WorkflowDefinition[] {
   let entries: string[];
   try {
     entries = readdirSync(RECORDED_BASE);
@@ -47,7 +48,8 @@ export function listRecordedDefinitions(): WorkflowDefinition[] {
         description: schema.meta?.description ?? "Recorded workflow",
         enabled: true,
         category: schema.meta?.category ?? "custom",
-        parameters: schema.parameters ?? []
+        parameters: schema.parameters ?? [],
+        lifecycleStatus: lifecycleStore?.getOrCreate(id, "recorded").status ?? "draft"
       });
     } catch {
       // Skip directories without a readable schema.json.
@@ -64,8 +66,8 @@ export function recordedWorkflowExists(id: string): boolean {
   }
 }
 
-export function getRecordedDefinition(id: string): WorkflowDefinition | undefined {
-  return listRecordedDefinitions().find((definition) => definition.id === id);
+export function getRecordedDefinition(id: string, lifecycleStore?: WorkflowLifecycleStore): WorkflowDefinition | undefined {
+  return listRecordedDefinitions(lifecycleStore).find((definition) => definition.id === id);
 }
 
 type RecordedFlowModule = { default: new (context: WorkflowContext) => AutomationFlow };

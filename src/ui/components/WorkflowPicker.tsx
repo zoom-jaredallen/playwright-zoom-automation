@@ -89,8 +89,8 @@ export function WorkflowPicker({ workflows, selectedWorkflowIds, pipelineOrder, 
                 <strong>{workflow.name}</strong>
                 <small>{workflow.description}</small>
               </span>
-              <span className={`status-badge ${workflow.enabled ? "success" : "neutral"}`}>
-                {workflow.enabled ? "Available" : "Future"}
+              <span className={`status-badge ${badgeClass(workflow)}`}>
+                {workflow.enabled ? badgeLabel(workflow) : "Future"}
               </span>
             </button>
           );
@@ -98,4 +98,16 @@ export function WorkflowPicker({ workflows, selectedWorkflowIds, pipelineOrder, 
       </div>
     </section>
   );
+}
+
+function badgeLabel(workflow: WorkflowView): string {
+  if (workflow.lifecycleStatus && workflow.lifecycleStatus !== "published") return workflow.lifecycleStatus;
+  return "Available";
+}
+
+function badgeClass(workflow: WorkflowView): string {
+  if (!workflow.enabled) return "neutral";
+  if (workflow.lifecycleStatus === "draft" || workflow.lifecycleStatus === "validated") return "warning";
+  if (workflow.lifecycleStatus === "deprecated" || workflow.lifecycleStatus === "archived") return "error";
+  return "success";
 }

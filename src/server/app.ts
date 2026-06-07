@@ -7,6 +7,11 @@ import { listAddressProfiles } from "../addressProfiles.js";
 import { compileWorkflow, slugify } from "../compiler/compiler.js";
 import type { RecordedWorkflow } from "../compiler/types.js";
 import { safeParseWorkflow } from "@zoom-automation/workflow-core";
+import {
+  createFileWorkflowLifecycleStore,
+  isLifecycleLiveRunnable,
+  type WorkflowLifecycleStatus
+} from "./governance/workflowLifecycle.js";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createFileWorkItemStore } from "./queues/fileWorkItemStore.js";
@@ -40,7 +45,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const jobEvents = createJobEventEmitter();
   const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
   const workItemStore = createFileWorkItemStore({ directory: path.resolve("output/work-items") });
-  const workflowRegistry = createWorkflowRegistry();
+  const lifecycleStore = createFileWorkflowLifecycleStore(path.resolve("output/workflow-lifecycle.json"));
+  const workflowRegistry = createWorkflowRegistry({ lifecycleStore });
   const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
   const cohortStore = createAccountCohortStore(path.resolve("output/cohorts"));
   const webhookService = new WebhookService();
@@ -74,8 +80,14 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       const workflows = entries.map((id) => {
         try {
           const schema = JSON.parse(readFileSync(path.join(recordedDir, id, "schema.json"), "utf8"));
-          return { id, name: schema.meta?.name ?? id, category: schema.meta?.category ?? "custom", actionCount: schema.actions?.length ?? 0 };
-        } catch { return { id, name: id, category: "custom", actionCount: 0 }; }
+          return {
+            id,
+            name: schema.meta?.name ?? id,
+            category: schema.meta?.category ?? "custom",
+            actionCount: schema.actions?.length ?? 0,
+            lifecycleStatus: lifecycleStore.getOrCreate(id, "recorded").status
+          };
+        } catch { return { id, name: id, category: "custom", actionCount: 0, lifecycleStatus: lifecycleStore.getOrCreate(id, "recorded").status }; }
       });
       response.json({ workflows });
     } catch {
@@ -109,8 +121,14 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         response.status(400).json({ error: validation.error });
         return;
       }
+      const lifecycle = lifecycleStore.getOrCreate(request.params.id, "recorded");
+      if (lifecycle.status === "published") {
+        response.status(409).json({ error: "Published workflows are immutable. Duplicate the workflow before editing." });
+        return;
+      }
       resolveRecordedWorkflowPath(request.params.id);
       const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"), request.params.id);
+      lifecycleStore.getOrCreate(result.id, "recorded");
       response.json({ ok: true, compiled: result.id });
     } catch (error) {
       if (error instanceof PathTraversalError) {
@@ -153,6 +171,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
 
       const uniqueId = uniqueRecordedId(name);
       const result = compileWorkflow(validation.workflow, path.resolve("src/workflows/recorded"), uniqueId);
+      lifecycleStore.getOrCreate(result.id, "recorded");
       response.status(201).json({ id: result.id, name });
     } catch (error) {
       next(error);
@@ -176,6 +195,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
 
       const outputBase = path.resolve("src/workflows/recorded");
       const result = compileWorkflow(workflow, outputBase);
+      lifecycleStore.getOrCreate(result.id, "recorded");
 
       response.status(201).json({
         id: result.id,
@@ -207,6 +227,28 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     });
   });
 
+  app.post("/api/workflows/:id/lifecycle", (request, response) => {
+    const status = request.body?.status as WorkflowLifecycleStatus | undefined;
+    if (!status) {
+      response.status(400).json({ error: "status is required" });
+      return;
+    }
+    try {
+      const current = lifecycleStore.getOrCreate(request.params.id, "recorded");
+      if (current.status === status) {
+        response.json({ lifecycle: current });
+        return;
+      }
+      const lifecycle = lifecycleStore.transition(request.params.id, status, {
+        actor: typeof request.body?.actor === "string" ? request.body.actor : "web-ui",
+        note: typeof request.body?.note === "string" ? request.body.note : undefined
+      });
+      response.json({ lifecycle });
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/readiness/check", (request, response, next) => {
     try {
       const body = request.body as {
@@ -218,13 +260,15 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       };
       const config = loadConfig({ ...process.env, ADDRESS_PROFILE: body.addressProfile ?? process.env.ADDRESS_PROFILE });
       const enabledWorkflowIds = new Set(workflowRegistry.list().filter((workflow) => workflow.enabled).map((workflow) => workflow.id));
+      const workflows = workflowRegistry.list();
       const selectedWorkflowParameters = collectWorkflowParameters(
-        workflowRegistry.list().filter((workflow) => (body.workflowIds ?? []).includes(workflow.id))
+        workflows.filter((workflow) => (body.workflowIds ?? []).includes(workflow.id))
       );
       const result = evaluateRunReadiness({
         selectedAccounts: body.accounts ?? [],
         workflowIds: body.workflowIds ?? [],
         enabledWorkflowIds,
+        workflows,
         addressProfile: body.addressProfile,
         dryRun: body.dryRun ?? true,
         requiredDocuments: [
@@ -260,10 +304,25 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     });
   }
 
+  function unsafeLiveWorkflows(workflowIds: string[], dryRun: boolean): Array<{ id: string; name: string }> {
+    if (dryRun) return [];
+    const byId = new Map(workflowRegistry.list().map((workflow) => [workflow.id, workflow]));
+    return workflowIds
+      .map((workflowId) => byId.get(workflowId))
+      .filter((workflow): workflow is NonNullable<typeof workflow> => Boolean(workflow))
+      .filter((workflow) => !isLifecycleLiveRunnable(workflow.lifecycleStatus))
+      .map((workflow) => ({ id: workflow.id, name: workflow.name }));
+  }
+
   /** Resolve accounts for a schedule, create + start a job, and record the run. */
   async function triggerScheduledRun(schedule: ScheduleDefinition): Promise<string | undefined> {
     const accounts = await resolveAccounts(schedule.jobConfig.accountFilters ?? {});
     if (accounts.length === 0) {
+      schedulerStore.markRun(schedule.id, "failed");
+      return undefined;
+    }
+    const unsafeWorkflows = unsafeLiveWorkflows(schedule.jobConfig.workflowIds, schedule.jobConfig.dryRun);
+    if (unsafeWorkflows.length > 0) {
       schedulerStore.markRun(schedule.id, "failed");
       return undefined;
     }
@@ -512,9 +571,16 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       }
 
       const retryInput = createRetryJobInput(sourceJob, accountIds);
+      const retryDryRun = request.body?.dryRun ?? retryInput.dryRun;
+      const retryWorkflowIds = retryInput.workflowIds;
+      const unsafeWorkflows = unsafeLiveWorkflows(retryWorkflowIds, retryDryRun);
+      if (unsafeWorkflows.length > 0) {
+        response.status(409).json({ error: `Live runs require approved or published workflows: ${unsafeWorkflows.map((workflow) => workflow.name).join(", ")}` });
+        return;
+      }
       const job = jobStore.createJob({
         ...retryInput,
-        dryRun: request.body?.dryRun ?? retryInput.dryRun,
+        dryRun: retryDryRun,
         addressProfile: request.body?.addressProfile ?? retryInput.addressProfile
       });
       startAutomationJob({
@@ -574,6 +640,12 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
           response.status(400).json({ error: `Unknown or disabled workflow: ${workflowId}` });
           return;
         }
+      }
+
+      const unsafeWorkflows = unsafeLiveWorkflows(workflowIds, body.dryRun ?? true);
+      if (unsafeWorkflows.length > 0) {
+        response.status(409).json({ error: `Live runs require approved or published workflows: ${unsafeWorkflows.map((workflow) => workflow.name).join(", ")}` });
+        return;
       }
 
       const job = jobStore.createJob({

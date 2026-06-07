@@ -1,5 +1,6 @@
 import type { AutomationFlow } from "../../automation/types.js";
 import { createPluginWorkflowRegistry, type WorkflowContext, type WorkflowDefinition, type WorkflowRegistry } from "../../workflows/index.js";
+import type { WorkflowLifecycleStore } from "../governance/workflowLifecycle.js";
 import {
   createRecordedFlowLazy,
   getRecordedDefinition,
@@ -9,19 +10,23 @@ import {
 
 export type { WorkflowDefinition, WorkflowRegistry } from "../../workflows/index.js";
 
+export interface WorkflowRegistryOptions {
+  lifecycleStore?: WorkflowLifecycleStore;
+}
+
 /**
  * Create the workflow registry. Built-in plugins come from the plugin directory;
  * recorded workflows (compiled under src/workflows/recorded/*) are discovered
  * dynamically so duplicated/edited workflows are runnable without a code change.
  * Built-ins take precedence on id collisions.
  */
-export function createWorkflowRegistry(): WorkflowRegistry {
+export function createWorkflowRegistry(options: WorkflowRegistryOptions = {}): WorkflowRegistry {
   const builtins = createPluginWorkflowRegistry();
   const builtinIds = new Set(builtins.list().map((definition) => definition.id));
 
   return {
     list(): WorkflowDefinition[] {
-      const recorded = listRecordedDefinitions().filter((definition) => !builtinIds.has(definition.id));
+      const recorded = listRecordedDefinitions(options.lifecycleStore).filter((definition) => !builtinIds.has(definition.id));
       return [...builtins.list(), ...recorded];
     },
 
@@ -29,7 +34,7 @@ export function createWorkflowRegistry(): WorkflowRegistry {
       if (builtinIds.has(id)) {
         return builtins.getEnabled(id);
       }
-      const recorded = getRecordedDefinition(id);
+      const recorded = getRecordedDefinition(id, options.lifecycleStore);
       if (!recorded) {
         throw new Error(`Workflow not found: ${id}`);
       }

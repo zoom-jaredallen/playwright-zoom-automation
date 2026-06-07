@@ -1,5 +1,6 @@
 import type { AutomationFlow } from "../automation/types.js";
 import type { WorkflowCategory, WorkflowParameter } from "@zoom-automation/workflow-core";
+import type { WorkflowLifecycleStatus } from "../server/governance/workflowLifecycle.js";
 import type { WorkflowContext, WorkflowPlugin } from "./types.js";
 
 // Static imports of all workflow plugins.
@@ -23,6 +24,7 @@ export interface WorkflowDefinition {
   enabled: boolean;
   category: WorkflowCategory;
   parameters?: WorkflowParameter[];
+  lifecycleStatus?: WorkflowLifecycleStatus;
 }
 
 export interface WorkflowRegistry {
@@ -54,7 +56,8 @@ export function createPluginWorkflowRegistry(): WorkflowRegistry {
         description,
         enabled,
         category,
-        parameters
+        parameters,
+        lifecycleStatus: "published"
       }));
     },
 
@@ -66,7 +69,7 @@ export function createPluginWorkflowRegistry(): WorkflowRegistry {
       if (!plugin.enabled) {
         throw new Error(`Workflow is not enabled for this release: ${id}`);
       }
-      return { id: plugin.id, name: plugin.name, description: plugin.description, enabled: plugin.enabled, category: plugin.category, parameters: plugin.parameters };
+      return { id: plugin.id, name: plugin.name, description: plugin.description, enabled: plugin.enabled, category: plugin.category, parameters: plugin.parameters, lifecycleStatus: "published" };
     },
 
     createFlow(id: string, context: WorkflowContext): AutomationFlow {
