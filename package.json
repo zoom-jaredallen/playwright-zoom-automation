@@ -26,6 +26,7 @@
     "preserve:ui": "npm run build:core",
     "start": "tsx src/main.ts",
     "prestart": "npm run build:core",
+    "worker": "tsx src/worker/index.ts",
     "workflow:compile": "tsx src/compiler/cli.ts",
     "playwright:install": "playwright install chromium"
   },
