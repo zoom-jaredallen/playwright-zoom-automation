@@ -8,6 +8,7 @@ import { createLogger, parseLogLevel } from "../../logger.js";
 import { validateDocumentFiles } from "../../preflight.js";
 import { loginAsMasterAdmin } from "../../zoom/auth.js";
 import { SessionHealthMonitor } from "../../zoom/sessionHealth.js";
+import type { WorkItemStore } from "../queues/types.js";
 import type { JobStore } from "./inMemoryJobStore.js";
 import type { WorkflowRegistry } from "./workflowRegistry.js";
 
@@ -25,6 +26,7 @@ export interface StartJobOptions {
   /** Per-account parameter values keyed by account id, then parameter name. */
   accountValues?: Record<string, Record<string, string>>;
   store: JobStore;
+  workItemStore?: WorkItemStore;
   registry: WorkflowRegistry;
   env?: NodeJS.ProcessEnv;
   cancellation?: { cancelled: boolean };
@@ -86,6 +88,12 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
   const logger = createStepTrackingLogger(baseLogger, options.store, options.jobId);
 
   const pipelineLabel = workflows.map((w) => w.name).join(" → ");
+  options.workItemStore?.createWorkItems({
+    jobId: options.jobId,
+    accountIds: options.accounts.map((account) => account.id),
+    workflowIds: options.workflowIds,
+    maxAttempts: Math.max(1, options.retryAttempts)
+  });
   options.store.markJob(options.jobId, "running", `Running: ${pipelineLabel}`);
 
   const browser = await chromium.launch({ headless: options.headless });
@@ -132,7 +140,7 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
           return logger.runWithAccount(input.account.id, () => createFlow().run(input));
         }
       };
-      const progressAdapter = createJobProgressAdapter(options.store, options.jobId, workflow.id);
+      const progressAdapter = createJobProgressAdapter(options.store, options.jobId, workflow.id, options.workItemStore);
       const trackingProgress: ProgressAdapter = {
         ...progressAdapter,
         markRunning: async (account) => logger.runWithAccount(account.id, () => progressAdapter.markRunning(account)),
@@ -171,7 +179,12 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
   }
 }
 
-export function createJobProgressAdapter(store: JobStore, jobId: string, workflowId: string): ProgressAdapter {
+export function createJobProgressAdapter(
+  store: JobStore,
+  jobId: string,
+  workflowId: string,
+  workItemStore?: WorkItemStore
+): ProgressAdapter {
   return {
     shouldSkip: async (account) => {
       const job = store.getJob(jobId);
@@ -184,6 +197,10 @@ export function createJobProgressAdapter(store: JobStore, jobId: string, workflo
       return true;
     },
     markRunning: async (account) => {
+      const item = workItemStore?.findByJobAccount(jobId, account.id);
+      if (item && !["running", "succeeded", "skipped", "failed", "cancelled", "abandoned"].includes(item.status)) {
+        workItemStore?.markRunning(item.id, "local-runner");
+      }
       store.markAccount(jobId, account.id, { status: "running", workflowId });
       store.logAccountStep(jobId, account.id, "Starting workflow", workflowId, {
         workflowId,
@@ -193,6 +210,10 @@ export function createJobProgressAdapter(store: JobStore, jobId: string, workflo
       });
     },
     markCompleted: async (account, message) => {
+      const item = workItemStore?.findByJobAccount(jobId, account.id);
+      if (item && item.status !== "succeeded") {
+        workItemStore?.markSucceeded(item.id, message);
+      }
       store.logAccountStep(jobId, account.id, "Completed", message, {
         workflowId,
         stepId: "workflow-complete",
@@ -202,6 +223,10 @@ export function createJobProgressAdapter(store: JobStore, jobId: string, workflo
       store.markAccount(jobId, account.id, { status: "completed", workflowId, message });
     },
     markSkipped: async (account, message) => {
+      const item = workItemStore?.findByJobAccount(jobId, account.id);
+      if (item && item.status !== "skipped") {
+        workItemStore?.markSkipped(item.id, message);
+      }
       store.logAccountStep(jobId, account.id, "Skipped", message, {
         workflowId,
         stepId: "workflow-skipped",
@@ -211,6 +236,14 @@ export function createJobProgressAdapter(store: JobStore, jobId: string, workflo
       store.markAccount(jobId, account.id, { status: "skipped", workflowId, message });
     },
     markFailed: async (account, error) => {
+      const item = workItemStore?.findByJobAccount(jobId, account.id);
+      if (item && item.status !== "failed") {
+        workItemStore?.markFailed(item.id, {
+          error: error.message,
+          retryable: false,
+          retryDelayMs: 0
+        });
+      }
       store.logAccountStep(jobId, account.id, "Failed", error.message, {
         workflowId,
         stepId: "workflow-failed",

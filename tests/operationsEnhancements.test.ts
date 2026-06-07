@@ -3,6 +3,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createAccountCohortStore } from "../src/server/services/accountCohortStore.js";
 import { createJobStore, type JobStore } from "../src/server/services/inMemoryJobStore.js";
+import { createJobProgressAdapter } from "../src/server/services/jobRunner.js";
+import { createFileWorkItemStore } from "../src/server/queues/fileWorkItemStore.js";
 import { createRetryJobInput, selectRetryAccounts } from "../src/server/services/jobRetryService.js";
 import { evaluateRunReadiness } from "../src/server/services/runReadinessService.js";
 import {
@@ -138,6 +140,39 @@ describe("run timeline service", () => {
     expect(timeline.currentStep?.stepName).toBe("Save");
     expect(timeline.lastSuccessfulStep?.stepName).toBe("Fill company");
     expect(timeline.failedStep?.artifactRefs?.[0].url).toBe("/artifacts/fail.png");
+  });
+});
+
+describe("queue-aware job progress adapter", () => {
+  it("mirrors account progress into durable work items", async () => {
+    const queueDir = path.resolve("output/test-work-items");
+    rmSync(queueDir, { recursive: true, force: true });
+    const jobStore = createJobStore();
+    const workItemStore = createFileWorkItemStore({ directory: queueDir });
+    const job = jobStore.createJob({
+      accountIds: ["a1"],
+      workflowIds: ["add-business-address"],
+      dryRun: true,
+      addressProfile: "australia_sydney"
+    });
+    workItemStore.createWorkItems({
+      jobId: job.id,
+      accountIds: ["a1"],
+      workflowIds: ["add-business-address"],
+      maxAttempts: 2,
+      now: "2026-06-07T00:00:00.000Z"
+    });
+
+    const progress = createJobProgressAdapter(jobStore, job.id, "add-business-address", workItemStore);
+    await progress.markRunning(account("a1"));
+    await progress.markCompleted(account("a1"), "done");
+
+    const item = workItemStore.findByJobAccount(job.id, "a1");
+    expect(item?.status).toBe("succeeded");
+    expect(item?.message).toBe("done");
+    expect(item?.history.map((entry) => entry.event)).toContain("succeeded");
+
+    rmSync(queueDir, { recursive: true, force: true });
   });
 });
 

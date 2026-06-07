@@ -9,6 +9,7 @@ import type { RecordedWorkflow } from "../compiler/types.js";
 import { safeParseWorkflow } from "@zoom-automation/workflow-core";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
+import { createFileWorkItemStore } from "./queues/fileWorkItemStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
 import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { createRetryJobInput, selectRetryAccounts } from "./services/jobRetryService.js";
@@ -38,6 +39,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const app = express();
   const jobEvents = createJobEventEmitter();
   const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
+  const workItemStore = createFileWorkItemStore({ directory: path.resolve("output/work-items") });
   const workflowRegistry = createWorkflowRegistry();
   const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
   const cohortStore = createAccountCohortStore(path.resolve("output/cohorts"));
@@ -291,6 +293,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       accountDelayMs: schedule.jobConfig.accountDelayMs,
       concurrency: Math.min(schedule.jobConfig.concurrency ?? 1, 10),
       store: jobStore,
+      workItemStore,
       registry: workflowRegistry
     });
     return job.id;
@@ -359,6 +362,15 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       return;
     }
     response.json({ job });
+  });
+
+  app.get("/api/jobs/:jobId/work-items", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+    response.json({ workItems: workItemStore.listWorkItems({ jobId: job.id }) });
   });
 
   app.get("/api/jobs/:jobId/export", (request, response) => {
@@ -467,6 +479,11 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     }
 
     const wasCancelled = cancelRunningJob(request.params.jobId);
+    for (const item of workItemStore.listWorkItems({ jobId: request.params.jobId })) {
+      if (!["succeeded", "skipped", "failed", "abandoned", "cancelled"].includes(item.status)) {
+        workItemStore.markCancelled(item.id, "Cancelled by user");
+      }
+    }
     const updatedJob = jobStore.markJob(request.params.jobId, "cancelled", "Cancelled by user");
     response.json({ job: updatedJob, message: wasCancelled ? "Cancellation signalled" : "Job marked cancelled" });
   });
@@ -512,6 +529,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         accountDelayMs: request.body?.accountDelayMs ?? 2_000,
         concurrency: Math.min(request.body?.concurrency ?? 1, 10),
         store: jobStore,
+        workItemStore,
         registry: workflowRegistry
       });
       watchJobForWebhooks(job.id);
@@ -578,6 +596,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         concurrency: Math.min(body.concurrency ?? 1, 10),
         accountValues: body.accountValues,
         store: jobStore,
+        workItemStore,
         registry: workflowRegistry
       });
       watchJobForWebhooks(job.id);
