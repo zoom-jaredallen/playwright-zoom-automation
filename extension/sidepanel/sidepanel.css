@@ -318,6 +318,37 @@ input:not([type="checkbox"]), select {
 }
 
 .action-list { display: grid; gap: 8px; }
+.step-list-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 108px repeat(3, auto);
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.step-list-tools .button {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.bulk-policy {
+  margin-bottom: 10px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+.bulk-policy summary {
+  padding: 9px 10px;
+  color: var(--text-text-neutral);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+.bulk-policy-grid {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
 
 .action-item {
   border: 1px solid var(--border-border-subtle-neutral);
@@ -332,6 +363,14 @@ input:not([type="checkbox"]), select {
 .action-item.testing {
   border-color: var(--border-border-supplementary1);
   box-shadow: 0 0 0 1px var(--border-border-supplementary1) inset;
+}
+.action-item.expanded {
+  background: var(--fill-fill-default);
+}
+.action-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  cursor: pointer;
 }
 
 .insert-row {
@@ -410,9 +449,28 @@ input:not([type="checkbox"]), select {
 
 .action-main {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 9px;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
   padding: 10px;
+}
+.action-expand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 26px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 6px;
+  background: var(--fill-fill-default);
+  color: var(--text-text-neutral);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+.action-expand:hover {
+  border-color: var(--border-border-primary);
+  color: var(--text-text-primary);
 }
 
 .action-index {
@@ -464,24 +522,46 @@ input:not([type="checkbox"]), select {
 }
 
 .action-description { min-height: 32px; }
+.action-list.compact { gap: 5px; }
+.action-list.compact .action-main { padding: 7px 8px; }
+.action-list.compact .action-actions { padding: 0 8px 8px 66px; }
+.action-list.compact .inline-step-editor { padding-left: 8px; padding-right: 8px; }
+
+.step-badges {
+  display: inline-flex;
+  min-width: 0;
+  gap: 4px;
+  overflow: hidden;
+}
+.step-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 999px;
+  background: var(--fill-fill-default);
+  color: var(--text-text-subtle-neutral);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.step-badge.condition {
+  border-color: var(--border-border-warning);
+  background: var(--fill-fill-subtler-warning);
+  color: var(--text-text-warning);
+}
+.step-badge.screenshot {
+  border-color: var(--border-border-success);
+  background: var(--fill-fill-subtler-success);
+  color: var(--text-text-success);
+}
 
 .action-actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 8px 10px 10px 45px;
-}
-
-.selector-repair {
-  display: grid;
-  gap: 6px;
-  padding: 0 10px 10px 45px;
-}
-.selector-repair summary {
-  color: var(--text-text-neutral);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .selector-grid { display: grid; gap: 6px; margin-top: 8px; }
@@ -506,6 +586,36 @@ input:not([type="checkbox"]), select {
   font-weight: 600;
 }
 .icon-button.delete { color: var(--text-text-error); }
+.icon-button.primary-action {
+  border-color: var(--border-border-primary);
+  background: var(--fill-fill-subtler-primary);
+  color: var(--text-text-primary);
+}
+
+.inline-step-editor {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px 45px;
+}
+.inline-editor-section {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--background-bg-default);
+}
+.inline-editor-section h3 {
+  margin: 0;
+  color: var(--text-text-neutral);
+  font-size: 12px;
+  font-weight: 700;
+}
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
 .empty-state {
   display: grid;
@@ -551,8 +661,6 @@ input:not([type="checkbox"]), select {
 
 .param-buttons { display: flex; gap: 5px; }
 
-.inspector-fields { display: grid; gap: 8px; }
-.property-field { display: grid; gap: 6px; }
 .two-column {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

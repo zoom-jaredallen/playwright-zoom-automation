@@ -1,5 +1,16 @@
 import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
 import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
+import {
+  buildBulkPolicyUpdate,
+  bulkPolicyTargets,
+  describeStep,
+  isSelectorBasedStep,
+  isSubmitLikeClickStep,
+  stepPolicyBadges,
+  visibleFieldGroups,
+  type BulkPolicyTarget,
+  type InlineFieldGroup
+} from "../shared/stepPresentation.js";
 import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow, AnchorPickResult, SelectorPickResult, SelectorTestResult, WorkflowQualityReport, WorkflowTestEvent } from "../shared/types.js";
 
 const recordingStateEl = mustGet("recording-state");
@@ -7,38 +18,28 @@ const statusPillEl = mustGet("status-pill");
 const actionListEl = mustGet("action-list");
 const emptyActionsEl = mustGet("empty-actions");
 const stepSummaryEl = mustGet("step-summary");
+const stepFilterInput = mustGet("step-filter") as HTMLInputElement;
+const btnCollapseSteps = mustGet("btn-collapse-steps") as HTMLButtonElement;
+const btnExpandRiskySteps = mustGet("btn-expand-risky-steps") as HTMLButtonElement;
+const btnJumpWeakStep = mustGet("btn-jump-weak-step") as HTMLButtonElement;
+const stepDensitySelect = mustGet("step-density") as HTMLSelectElement;
+const bulkTargetSelect = mustGet("bulk-target") as HTMLSelectElement;
+const bulkTimeoutInput = mustGet("bulk-timeout") as HTMLInputElement;
+const bulkRetryCountInput = mustGet("bulk-retry-count") as HTMLInputElement;
+const bulkRetryDelayInput = mustGet("bulk-retry-delay") as HTMLInputElement;
+const bulkContinueOnFailureInput = mustGet("bulk-continue-on-failure") as HTMLInputElement;
+const bulkScreenshotOnFailureInput = mustGet("bulk-screenshot-on-failure") as HTMLInputElement;
+const btnApplyBulkPolicy = mustGet("btn-apply-bulk-policy") as HTMLButtonElement;
 const parameterListEl = mustGet("parameter-list");
 const messageEl = mustGet("message");
 const testSummaryEl = mustGet("test-summary");
 const testEventsEl = mustGet("test-events");
-const inspectorSummaryEl = mustGet("inspector-summary");
-const inspectorEmptyEl = mustGet("inspector-empty");
-const inspectorFieldsEl = mustGet("inspector-fields");
-const selectorTestResultEl = mustGet("selector-test-result");
 const qualityReportEl = mustGet("quality-report");
 const qualityScoreEl = mustGet("quality-score");
 
 const btnTheme = mustGet("btn-theme") as HTMLButtonElement;
 const workflowNameInput = mustGet("workflow-name") as HTMLInputElement;
 const workflowCategorySelect = mustGet("workflow-category") as HTMLSelectElement;
-const inspectorDescriptionInput = mustGet("inspector-description") as HTMLInputElement;
-const stepTimeoutInput = mustGet("step-timeout") as HTMLInputElement;
-const stepRetryCountInput = mustGet("step-retry-count") as HTMLInputElement;
-const stepRetryDelayInput = mustGet("step-retry-delay") as HTMLInputElement;
-const stepContinueOnFailureInput = mustGet("step-continue-on-failure") as HTMLInputElement;
-const stepScreenshotOnFailureInput = mustGet("step-screenshot-on-failure") as HTMLInputElement;
-const stepConditionSelect = mustGet("step-condition") as HTMLSelectElement;
-const stepConditionTextInput = mustGet("step-condition-text") as HTMLInputElement;
-const manualUrlInput = mustGet("manual-url") as HTMLInputElement;
-const assertTypeSelect = mustGet("assert-type") as HTMLSelectElement;
-const assertExpectedInput = mustGet("assert-expected") as HTMLInputElement;
-const assertTimeoutInput = mustGet("assert-timeout") as HTMLInputElement;
-const assertOnFailureSelect = mustGet("assert-on-failure") as HTMLSelectElement;
-const screenshotLabelInput = mustGet("screenshot-label") as HTMLInputElement;
-const waitMsInput = mustGet("wait-ms") as HTMLInputElement;
-const actionValueInput = mustGet("action-value") as HTMLInputElement;
-const actionValueLabel = mustGet("action-value-label") as HTMLLabelElement;
-const pressKeySelect = mustGet("press-key") as HTMLSelectElement;
 
 const btnStart = mustGet("btn-start") as HTMLButtonElement;
 const btnPause = mustGet("btn-pause") as HTMLButtonElement;
@@ -59,18 +60,13 @@ const btnCopy = mustGet("btn-copy") as HTMLButtonElement;
 const btnDownload = mustGet("btn-download") as HTMLButtonElement;
 const btnSync = mustGet("btn-sync") as HTMLButtonElement;
 const btnTestWorkflow = mustGet("btn-test-workflow") as HTMLButtonElement;
-const btnTestStep = mustGet("btn-test-step") as HTMLButtonElement;
-const stepTestResultEl = mustGet("step-test-result");
-const btnPickSelector = mustGet("btn-pick-selector") as HTMLButtonElement;
-const btnPickAnchor = mustGet("btn-pick-anchor") as HTMLButtonElement;
-const btnTestSelector = mustGet("btn-test-selector") as HTMLButtonElement;
-const btnAddSuggestedValidation = mustGet("btn-add-suggested-validation") as HTMLButtonElement;
 
 let recording = false;
 let paused = false;
 let actions: RecordedAction[] = [];
 let currentWorkflow: RecordedWorkflow | undefined;
 let selectedActionId: string | undefined;
+let expandedActionIds = new Set<string>();
 let insertAfterActionId: string | null | undefined;
 let testRunning = false;
 let testCurrentActionId: string | undefined;
@@ -79,6 +75,8 @@ let selectorTestResults: Record<string, SelectorTestResult> = {};
 let stepTestResults: Record<string, { level: "success" | "error" | "info"; message: string }> = {};
 let themeMode: "light" | "dark" = "light";
 let workflowDetailsHydrated = false;
+let stepFilterText = "";
+let stepDensity: "comfortable" | "compact" = "comfortable";
 
 interface SelectorConfidence {
   level: "strong" | "medium" | "weak" | "manual";
@@ -110,7 +108,7 @@ function wireEvents(): void {
   btnAddWait.addEventListener("click", () => void addToolbarStep(addWaitStep));
   btnAddDismiss.addEventListener("click", () => void addToolbarStep(addDismissStep));
   btnTheme.addEventListener("click", () => void toggleTheme());
-  wireInspectorEvents();
+  wireStepListEvents();
 
   btnImport.addEventListener("click", () => workflowImportFileInput.click());
   workflowImportFileInput.addEventListener("change", () => void importWorkflowFromFile());
@@ -136,6 +134,31 @@ function wireEvents(): void {
   });
 }
 
+function wireStepListEvents(): void {
+  stepFilterInput.addEventListener("input", () => {
+    stepFilterText = stepFilterInput.value.trim().toLowerCase();
+    renderActions();
+  });
+  stepDensitySelect.addEventListener("change", () => {
+    stepDensity = stepDensitySelect.value === "compact" ? "compact" : "comfortable";
+    renderActions();
+  });
+  btnCollapseSteps.addEventListener("click", () => {
+    expandedActionIds = new Set();
+    renderActions();
+  });
+  btnExpandRiskySteps.addEventListener("click", () => {
+    const riskyIds = actions
+      .filter((action) => selectorConfidence(action).level === "weak" || isSubmitLikeClick(action))
+      .map((action) => action.id);
+    expandedActionIds = new Set(riskyIds);
+    selectedActionId = riskyIds[0] ?? selectedActionId;
+    renderActions();
+  });
+  btnJumpWeakStep.addEventListener("click", () => jumpToNextWeakStep());
+  btnApplyBulkPolicy.addEventListener("click", () => void applyBulkPolicy());
+}
+
 async function loadThemePreference(): Promise<void> {
   const stored = await chrome.storage.local.get("sidepanelTheme");
   const savedTheme = stored.sidepanelTheme === "light" || stored.sidepanelTheme === "dark"
@@ -156,62 +179,6 @@ function applyTheme(nextTheme: "light" | "dark"): void {
   const nextLabel = nextTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
   btnTheme.title = nextLabel;
   btnTheme.setAttribute("aria-label", nextLabel);
-}
-
-function wireInspectorEvents(): void {
-  inspectorDescriptionInput.addEventListener("blur", () => void updateSelectedAction({ description: inspectorDescriptionInput.value }));
-  manualUrlInput.addEventListener("blur", () => void updateSelectedAction({ url: manualUrlInput.value }));
-  manualUrlInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      manualUrlInput.blur();
-    }
-  });
-
-  assertTypeSelect.addEventListener("change", () => void updateSelectedAction({ assertionType: assertTypeSelect.value as RecordedAction["assertionType"] }));
-  assertExpectedInput.addEventListener("blur", () => void updateSelectedAction({ expected: assertExpectedInput.value }));
-  assertExpectedInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      assertExpectedInput.blur();
-    }
-  });
-  assertTimeoutInput.addEventListener("blur", () => void updateSelectedAction({ timeout: Number(assertTimeoutInput.value) || 10_000 }));
-  assertOnFailureSelect.addEventListener("change", () => void updateSelectedAction({ onFailure: assertOnFailureSelect.value as RecordedAction["onFailure"] }));
-
-  screenshotLabelInput.addEventListener("blur", () => void updateSelectedAction({ screenshotLabel: screenshotLabelInput.value }));
-  screenshotLabelInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      screenshotLabelInput.blur();
-    }
-  });
-
-  waitMsInput.addEventListener("blur", () => void updateSelectedAction({ waitMs: Number(waitMsInput.value) || 1_000 }));
-  actionValueInput.addEventListener("blur", () => void updateSelectedAction({ value: actionValueInput.value }));
-  actionValueInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      actionValueInput.blur();
-    }
-  });
-  pressKeySelect.addEventListener("change", () => void updateSelectedAction({ key: pressKeySelect.value }));
-
-  stepTimeoutInput.addEventListener("blur", () => void updateSelectedAction({ timeout: Number(stepTimeoutInput.value) || 10_000 }));
-  stepRetryCountInput.addEventListener("blur", () => void updateSelectedAction({ retryCount: Number(stepRetryCountInput.value) || 0 }));
-  stepRetryDelayInput.addEventListener("blur", () => void updateSelectedAction({ retryDelayMs: Number(stepRetryDelayInput.value) || 1_000 }));
-  stepContinueOnFailureInput.addEventListener("change", () => void updateSelectedAction({ continueOnFailure: stepContinueOnFailureInput.checked }));
-  stepScreenshotOnFailureInput.addEventListener("change", () => void updateSelectedAction({ screenshotOnFailure: stepScreenshotOnFailureInput.checked }));
-  stepConditionSelect.addEventListener("change", () => void updateCondition());
-  stepConditionTextInput.addEventListener("blur", () => void updateCondition());
-  btnTestStep.addEventListener("click", () => {
-    const action = selectedAction();
-    if (action) void testSingleStep(action);
-  });
-  btnPickSelector.addEventListener("click", () => void pickSelectedSelector());
-  btnPickAnchor.addEventListener("click", () => void pickSelectedAnchor());
-  btnTestSelector.addEventListener("click", () => void testSelectedSelector());
-  btnAddSuggestedValidation.addEventListener("click", () => void addSuggestedValidationStep());
 }
 
 async function refreshState(): Promise<void> {
@@ -300,15 +267,15 @@ async function addAssertionStep(): Promise<void> {
     onFailure: "screenshot",
     insertAfterActionId
   });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Validation step added. Configure it in Properties.");
+  setMessage("Validation step added. Configure it in the step.");
   await refreshState();
 }
 
 async function addClickStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_CLICK_ACTION", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
   setMessage("Click step added. Add a stable selector in Selector details.");
   await refreshState();
@@ -316,47 +283,47 @@ async function addClickStep(): Promise<void> {
 
 async function addFillStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_FILL_ACTION", value: "", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Text entry step added. Configure the value and selector in Properties.");
+  setMessage("Text entry step added. Configure the value and selector in the step.");
   await refreshState();
 }
 
 async function addSelectStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_SELECT_ACTION", value: "", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Select option step added. Configure the option and selector in Properties.");
+  setMessage("Select option step added. Configure the option and selector in the step.");
   await refreshState();
 }
 
 async function addPressStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_PRESS_ACTION", key: "Enter", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Key press step added. Configure the key in Properties.");
+  setMessage("Key press step added. Configure the key in the step.");
   await refreshState();
 }
 
 async function addScreenshotStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_SCREENSHOT_ACTION", label: "evidence", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Screenshot step added. Configure it in Properties.");
+  setMessage("Screenshot step added. Configure it in the step.");
   await refreshState();
 }
 
 async function addWaitStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_WAIT_ACTION", waitMs: 1_000, insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Wait step added. Configure it in Properties.");
+  setMessage("Wait step added. Configure it in the step.");
   await refreshState();
 }
 
 async function addDismissStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_DISMISS_ACTION", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
   setMessage("Dismiss popup step added.");
   await refreshState();
@@ -364,15 +331,20 @@ async function addDismissStep(): Promise<void> {
 
 async function addNavigationStep(): Promise<void> {
   const response = await sendMessage({ type: "ADD_NAVIGATION_ACTION", url: "/", insertAfterActionId });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
-  setMessage("Navigation step added. Configure it in Properties.");
+  setMessage("Navigation step added. Configure it in the step.");
   await refreshState();
 }
 
 async function addToolbarStep(addStep: () => Promise<void>): Promise<void> {
   insertAfterActionId = undefined;
   await addStep();
+}
+
+function selectAndExpandAction(actionId: string | undefined): void {
+  selectedActionId = actionId;
+  expandedActionIds = actionId ? new Set([actionId]) : new Set();
 }
 
 async function runTestWorkflow(): Promise<void> {
@@ -387,9 +359,9 @@ function render(): void {
   if (selectedActionId && !actions.some((action) => action.id === selectedActionId)) {
     selectedActionId = undefined;
   }
+  expandedActionIds = new Set([...expandedActionIds].filter((actionId) => actions.some((action) => action.id === actionId)));
   renderStatus();
   renderActions();
-  renderInspector();
   renderParameters();
   renderTestState();
   renderQualityReport();
@@ -414,22 +386,50 @@ function renderStatus(): void {
 function renderActions(): void {
   actionListEl.innerHTML = "";
   emptyActionsEl.style.display = actions.length === 0 ? "grid" : "none";
+  actionListEl.classList.toggle("compact", stepDensity === "compact");
+  renderBulkTargetOptions();
 
   if (actions.length === 0) {
     actionListEl.appendChild(renderInsertRow(null));
     return;
   }
 
-  actions.forEach((action, index) => {
+  const filteredActions = filteredStepEntries();
+  if (filteredActions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state compact";
+    empty.textContent = "No steps match the current filter.";
+    actionListEl.appendChild(empty);
+    return;
+  }
+
+  filteredActions.forEach(({ action, index }) => {
+    const expanded = expandedActionIds.has(action.id);
     const item = document.createElement("article");
-    item.className = `action-item${action.id === selectedActionId ? " selected" : ""}${action.id === testCurrentActionId ? " testing" : ""}`;
-    item.addEventListener("click", () => {
+    item.className = `action-item${action.id === selectedActionId ? " selected" : ""}${action.id === testCurrentActionId ? " testing" : ""}${expanded ? " expanded" : ""}`;
+    item.dataset.actionId = action.id;
+
+    const header = document.createElement("div");
+    header.className = "action-header";
+    header.addEventListener("click", () => {
       selectedActionId = action.id;
-      render();
+      renderActions();
     });
 
     const main = document.createElement("div");
     main.className = "action-main";
+
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "action-expand";
+    expand.title = expanded ? "Collapse step settings" : "Configure step";
+    expand.setAttribute("aria-label", expanded ? "Collapse step settings" : "Configure step");
+    expand.setAttribute("aria-expanded", String(expanded));
+    expand.textContent = expanded ? "⌄" : "›";
+    expand.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleActionExpanded(action.id);
+    });
 
     const indexEl = document.createElement("span");
     indexEl.className = "action-index";
@@ -457,20 +457,23 @@ function renderActions(): void {
     context.textContent = action.url ?? action.value ?? action.pageUrl;
 
     meta.append(type, confidenceBadge, context);
+    const badges = renderStepBadges(action);
+    if (badges) meta.appendChild(badges);
 
     const description = document.createElement("input");
     description.className = "action-description";
     description.type = "text";
-    description.value = action.description ?? describeAction(action);
+    description.value = action.description ?? describeStep(action);
     description.addEventListener("blur", () => void updateActionDescription(action.id, description.value));
     description.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         description.blur();
       }
     });
+    description.addEventListener("click", (event) => event.stopPropagation());
 
     body.append(meta, description);
-    main.append(indexEl, body);
+    main.append(expand, indexEl, body);
 
     const controls = document.createElement("div");
     controls.className = "action-actions";
@@ -480,12 +483,390 @@ function renderActions(): void {
       makeActionButton("Down", index === actions.length - 1, () => moveAction(action.id, "down")),
       makeActionButton("Delete", false, () => deleteAction(action.id), "delete")
     );
+    controls.addEventListener("click", (event) => event.stopPropagation());
 
-    item.append(main, controls);
-    item.appendChild(renderSelectorRepair(action, confidence));
+    header.append(main, controls);
+    item.appendChild(header);
+    if (expanded) {
+      item.appendChild(renderInlineStepEditor(action, confidence));
+    }
     actionListEl.appendChild(item);
-    actionListEl.appendChild(renderInsertRow(action.id, index === actions.length - 1));
+    if (!stepFilterText) {
+      actionListEl.appendChild(renderInsertRow(action.id, index === actions.length - 1));
+    }
   });
+}
+
+function filteredStepEntries(): Array<{ action: RecordedAction; index: number }> {
+  return actions
+    .map((action, index) => ({ action, index }))
+    .filter(({ action }) => {
+      if (!stepFilterText) return true;
+      const haystack = [
+        String(action.type),
+        action.description,
+        describeStep(action),
+        action.value,
+        action.expected,
+        action.url,
+        action.selectors.label,
+        action.selectors.text,
+        action.selectors.role?.name,
+        action.selectorNote
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(stepFilterText);
+    });
+}
+
+function toggleActionExpanded(actionId: string): void {
+  selectedActionId = actionId;
+  if (expandedActionIds.has(actionId)) {
+    expandedActionIds.delete(actionId);
+  } else {
+    expandedActionIds = new Set([actionId]);
+  }
+  renderActions();
+}
+
+function renderStepBadges(action: RecordedAction): HTMLElement | undefined {
+  const badges = stepPolicyBadges(action);
+  if (badges.length === 0) return undefined;
+  const wrapper = document.createElement("span");
+  wrapper.className = "step-badges";
+  for (const badge of badges) {
+    const item = document.createElement("span");
+    item.className = `step-badge ${badge.kind}`;
+    item.title = badge.title;
+    item.textContent = badge.label;
+    wrapper.appendChild(item);
+  }
+  return wrapper;
+}
+
+function renderBulkTargetOptions(): void {
+  const targets = currentBulkTargets();
+  const selectedValue = bulkTargetSelect.value || "allSteps";
+  bulkTargetSelect.innerHTML = "";
+  for (const [value, target] of Object.entries(targets)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = `${target.label} (${target.actionIds.length})`;
+    bulkTargetSelect.appendChild(option);
+  }
+  bulkTargetSelect.value = Object.hasOwn(targets, selectedValue) ? selectedValue : "allSteps";
+}
+
+function currentBulkTargets(): Record<keyof ReturnType<typeof bulkPolicyTargets>, BulkPolicyTarget> {
+  return bulkPolicyTargets(actions);
+}
+
+function jumpToNextWeakStep(): void {
+  const weakSteps = actions.filter((action) => selectorConfidence(action).level === "weak");
+  if (weakSteps.length === 0) {
+    setMessage("No weak selector steps found.");
+    return;
+  }
+  const currentIndex = selectedActionId ? weakSteps.findIndex((action) => action.id === selectedActionId) : -1;
+  const next = weakSteps[(currentIndex + 1 + weakSteps.length) % weakSteps.length];
+  selectedActionId = next.id;
+  expandedActionIds = new Set([next.id]);
+  stepFilterInput.value = "";
+  stepFilterText = "";
+  renderActions();
+  requestAnimationFrame(() => document.querySelector(`[data-action-id="${cssEscape(next.id)}"]`)?.scrollIntoView({ block: "center" }));
+}
+
+function cssEscape(value: string): string {
+  return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
+}
+
+async function applyBulkPolicy(): Promise<void> {
+  const targets = currentBulkTargets();
+  const selected = targets[bulkTargetSelect.value as keyof typeof targets] ?? targets.allSteps;
+  if (selected.actionIds.length === 0) {
+    setMessage("No steps match the selected bulk target.");
+    return;
+  }
+
+  const update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId"> = buildBulkPolicyUpdate({
+    timeout: bulkTimeoutInput.value,
+    retryCount: bulkRetryCountInput.value,
+    retryDelayMs: bulkRetryDelayInput.value,
+    enableContinueOnFailure: bulkContinueOnFailureInput.checked,
+    enableScreenshotOnFailure: bulkScreenshotOnFailureInput.checked
+  });
+
+  for (const actionId of selected.actionIds) {
+    await sendMessage({ type: "UPDATE_ACTION", actionId, ...update });
+  }
+  expandedActionIds = new Set(selected.actionIds.slice(0, 5));
+  setMessage(`Bulk policy applied to ${selected.actionIds.length} step${selected.actionIds.length === 1 ? "" : "s"}.`);
+  await refreshState();
+}
+
+function renderInlineStepEditor(action: RecordedAction, confidence: SelectorConfidence): HTMLElement {
+  const editor = document.createElement("div");
+  editor.className = "inline-step-editor";
+
+  for (const group of visibleFieldGroups(action)) {
+    const section = renderInlineFieldGroup(action, group, confidence);
+    if (section) editor.appendChild(section);
+  }
+
+  return editor;
+}
+
+function renderInlineFieldGroup(action: RecordedAction, group: InlineFieldGroup, confidence: SelectorConfidence): HTMLElement | undefined {
+  if (group === "policy") return renderPolicyEditor(action);
+  if (group === "test") return renderStepTestEditor(action);
+  if (group === "selector") return renderSelectorEditor(action, confidence);
+  if (group === "validationSuggestion") return renderValidationSuggestion(action);
+  if (group === "value") return renderValueEditor(action);
+  if (group === "key") return renderKeyEditor(action);
+  if (group === "screenshot") return renderScreenshotEditor(action);
+  if (group === "wait") return renderWaitEditor(action);
+  if (group === "url") return renderUrlEditor(action);
+  if (group === "assertion") return renderAssertionEditor(action);
+  return undefined;
+}
+
+function renderPolicyEditor(action: RecordedAction): HTMLElement {
+  const section = makeEditorSection("Step policy");
+
+  const firstRow = document.createElement("div");
+  firstRow.className = "two-column";
+  firstRow.append(
+    makeNumberField("Timeout", action.timeout ?? 10_000, { min: 500, max: 60_000, step: 500 }, (value) => updateActionPatch(action.id, { timeout: value || 10_000 })),
+    makeNumberField("Retries", action.retryCount ?? 0, { min: 0, max: 10, step: 1 }, (value) => updateActionPatch(action.id, { retryCount: value || 0 }))
+  );
+
+  const secondRow = document.createElement("div");
+  secondRow.className = "two-column";
+  secondRow.append(
+    makeNumberField("Retry delay", action.retryDelayMs ?? 1_000, { min: 0, max: 60_000, step: 250 }, (value) => updateActionPatch(action.id, { retryDelayMs: value || 1_000 })),
+    makeConditionSelect(action)
+  );
+
+  const conditionText = makeTextField("Condition text", action.condition?.text ?? "", "Address text or status to check", (value) => updateConditionForAction(action, action.condition?.type ?? "none", value));
+
+  const checkRow = document.createElement("div");
+  checkRow.className = "check-row";
+  checkRow.append(
+    makeCheckbox("Continue on failure", Boolean(action.continueOnFailure), (checked) => updateActionPatch(action.id, { continueOnFailure: checked })),
+    makeCheckbox("Screenshot on failure", Boolean(action.screenshotOnFailure), (checked) => updateActionPatch(action.id, { screenshotOnFailure: checked }))
+  );
+
+  section.append(firstRow, secondRow, conditionText, checkRow);
+  return section;
+}
+
+function renderStepTestEditor(action: RecordedAction): HTMLElement {
+  const section = makeEditorSection("Step test");
+  const row = document.createElement("div");
+  row.className = "inline-actions";
+  row.appendChild(makeActionButton("Test step", testRunning || recording, () => void testSingleStep(action)));
+  section.append(row, renderStepTestResult(action));
+  return section;
+}
+
+function renderSelectorEditor(action: RecordedAction, confidence: SelectorConfidence): HTMLElement {
+  const section = makeEditorSection(`Selector details: ${confidence.reason}`);
+  const controls = document.createElement("div");
+  controls.className = "selector-controls";
+  controls.append(
+    makeActionButton("Pick target", false, () => void pickSelectorForAction(action), "primary-action"),
+    makeActionButton("Pick anchor", false, () => void pickAnchorForAction(action)),
+    makeActionButton("Test selector", false, () => void testSelectorForAction(action))
+  );
+  section.append(controls, renderSelectorRepairFields(action, confidence), renderSelectorTestResult(action));
+  return section;
+}
+
+function renderValidationSuggestion(action: RecordedAction): HTMLElement {
+  const section = makeEditorSection("Validation");
+  section.appendChild(makeActionButton("Add validation after this step", false, () => void addSuggestedValidationStep(action)));
+  return section;
+}
+
+function renderValueEditor(action: RecordedAction): HTMLElement {
+  const label = action.type === "fill" ? "Text" : "Option value";
+  const placeholder = action.type === "fill" ? "Text to enter" : "Visible option text or value";
+  return makeEditorSection("Value", makeTextField(label, action.value ?? "", placeholder, (value) => updateActionPatch(action.id, { value })));
+}
+
+function renderKeyEditor(action: RecordedAction): HTMLElement {
+  const section = makeEditorSection("Key");
+  const select = makeSelect(action.key ?? "Enter", [
+    ["Enter", "Enter"],
+    ["Tab", "Tab"],
+    ["Escape", "Escape"],
+    ["ArrowDown", "ArrowDown"],
+    ["ArrowUp", "ArrowUp"],
+    ["ArrowLeft", "ArrowLeft"],
+    ["ArrowRight", "ArrowRight"],
+    ["Space", "Space"]
+  ], (value) => updateActionPatch(action.id, { key: value }));
+  section.appendChild(select);
+  return section;
+}
+
+function renderScreenshotEditor(action: RecordedAction): HTMLElement {
+  return makeEditorSection("Screenshot", makeTextField("Screenshot label", action.screenshotLabel ?? "evidence", "after-save", (value) => updateActionPatch(action.id, { screenshotLabel: value })));
+}
+
+function renderWaitEditor(action: RecordedAction): HTMLElement {
+  return makeEditorSection("Wait", makeNumberField("Milliseconds", action.waitMs ?? 1_000, { min: 250, max: 60_000, step: 250 }, (value) => updateActionPatch(action.id, { waitMs: value || 1_000 })));
+}
+
+function renderUrlEditor(action: RecordedAction): HTMLElement {
+  return makeEditorSection("Navigation", makeTextField("URL or Zoom path", action.url ?? "", "/cpw/page/phoneNumbers#/business-address", (value) => updateActionPatch(action.id, { url: value })));
+}
+
+function renderAssertionEditor(action: RecordedAction): HTMLElement {
+  const section = makeEditorSection("Assertion");
+  section.append(
+    makeLabeledSelect("Assertion", action.assertionType ?? "textVisible", [
+      ["textVisible", "Text is visible"],
+      ["urlContains", "URL contains"],
+      ["elementVisible", "Element is visible"],
+      ["fieldValue", "Field has value"],
+      ["tableRowContains", "Table row contains"]
+    ], (value) => updateActionPatch(action.id, { assertionType: value as RecordedAction["assertionType"] })),
+    makeTextField("Expected value", action.expected ?? "", "Expected text, URL fragment, or selector", (value) => updateActionPatch(action.id, { expected: value }))
+  );
+  const row = document.createElement("div");
+  row.className = "two-column";
+  row.append(
+    makeNumberField("Timeout", action.timeout ?? 10_000, { min: 500, max: 60_000, step: 500 }, (value) => updateActionPatch(action.id, { timeout: value || 10_000 })),
+    makeLabeledSelect("On failure", action.onFailure ?? "screenshot", [
+      ["screenshot", "Screenshot"],
+      ["fail", "Fail"],
+      ["retry", "Retry"],
+      ["skip", "Skip"]
+    ], (value) => updateActionPatch(action.id, { onFailure: value as RecordedAction["onFailure"] }))
+  );
+  section.appendChild(row);
+  return section;
+}
+
+function renderSelectorRepairFields(action: RecordedAction, confidence: SelectorConfidence): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "selector-grid";
+
+  const detail = document.createElement("div");
+  detail.className = "selector-detail";
+  detail.title = formatSelectors(action);
+  detail.textContent = formatSelectors(action);
+
+  const confidenceScore = scoreSelector(action.selectors);
+  const confidenceDetail = document.createElement("div");
+  confidenceDetail.className = "selector-confidence";
+  confidenceDetail.textContent = `Confidence ${confidenceScore.score}/100: ${confidenceScore.reasons.join("; ") || confidence.reason}`;
+
+  wrapper.append(
+    detail,
+    confidenceDetail,
+    makeTextField("CSS fallback override", action.selectors.css ?? "", "[data-testid='save-button']", (value) => updateActionSelector(action.id, value, undefined)),
+    makeTextField("Selector note", action.selectorNote ?? "", "Why this selector is stable or how to repair it", (value) => updateActionSelector(action.id, undefined, value))
+  );
+  return wrapper;
+}
+
+function makeEditorSection(title: string, child?: HTMLElement): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "inline-editor-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.appendChild(heading);
+  if (child) section.appendChild(child);
+  return section;
+}
+
+function makeConditionSelect(action: RecordedAction): HTMLElement {
+  return makeLabeledSelect("Condition", action.condition?.type ?? "none", [
+    ["none", "None"],
+    ["textExistsSkip", "If text exists, skip"],
+    ["elementVisibleClick", "If element visible, click"],
+    ["fieldEmptyFill", "If field empty, fill"],
+    ["addressAlreadyExistsSkipAccount", "If address exists, skip account"]
+  ], (value) => updateConditionForAction(action, value as NonNullable<RecordedAction["condition"]>["type"], action.condition?.text ?? ""));
+}
+
+function makeTextField(labelText: string, value: string, placeholder: string, onCommit: (value: string) => Promise<void>): HTMLElement {
+  const label = document.createElement("label");
+  label.className = "field-label";
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.placeholder = placeholder;
+  input.addEventListener("blur", () => void onCommit(input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    }
+  });
+  const wrapper = document.createElement("div");
+  wrapper.append(label, input);
+  return wrapper;
+}
+
+function makeNumberField(labelText: string, value: number, range: { min: number; max: number; step: number }, onCommit: (value: number) => Promise<void>): HTMLElement {
+  const label = document.createElement("label");
+  label.className = "field-label";
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = String(range.min);
+  input.max = String(range.max);
+  input.step = String(range.step);
+  input.value = String(value);
+  input.addEventListener("blur", () => void onCommit(Number(input.value) || 0));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    }
+  });
+  const wrapper = document.createElement("div");
+  wrapper.append(label, input);
+  return wrapper;
+}
+
+function makeCheckbox(labelText: string, checked: boolean, onCommit: (checked: boolean) => Promise<void>): HTMLElement {
+  const label = document.createElement("label");
+  label.className = "checkbox-control";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.addEventListener("change", () => void onCommit(input.checked));
+  const text = document.createElement("span");
+  text.textContent = labelText;
+  label.append(input, text);
+  return label;
+}
+
+function makeLabeledSelect(labelText: string, value: string, options: Array<[string, string]>, onCommit: (value: string) => Promise<void>): HTMLElement {
+  const wrapper = document.createElement("div");
+  const label = document.createElement("label");
+  label.className = "field-label";
+  label.textContent = labelText;
+  wrapper.append(label, makeSelect(value, options, onCommit));
+  return wrapper;
+}
+
+function makeSelect(value: string, options: Array<[string, string]>, onCommit: (value: string) => Promise<void>): HTMLSelectElement {
+  const select = document.createElement("select");
+  for (const [optionValue, optionLabel] of options) {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = optionLabel;
+    select.appendChild(option);
+  }
+  select.value = value;
+  select.addEventListener("change", () => void onCommit(select.value));
+  return select;
 }
 
 function renderInsertRow(afterActionId: string | null, isLast = false): HTMLElement {
@@ -536,118 +917,6 @@ function makeInsertTool(icon: StepToolbarIcon, label: string, onClick: () => voi
   button.append(iconEl);
   button.addEventListener("click", onClick);
   return button;
-}
-
-function renderInspector(): void {
-  const action = selectedAction();
-  inspectorEmptyEl.classList.toggle("hidden", Boolean(action));
-  inspectorFieldsEl.classList.toggle("hidden", !action);
-
-  if (!action) {
-    inspectorSummaryEl.textContent = "Select a step to configure it.";
-    return;
-  }
-
-  inspectorSummaryEl.textContent = `${action.type} step`;
-  inspectorDescriptionInput.value = action.description ?? describeAction(action);
-  btnTestStep.disabled = testRunning || recording;
-  stepTimeoutInput.value = String(action.timeout ?? 10_000);
-  stepRetryCountInput.value = String(action.retryCount ?? 0);
-  stepRetryDelayInput.value = String(action.retryDelayMs ?? 1_000);
-  stepContinueOnFailureInput.checked = Boolean(action.continueOnFailure);
-  stepScreenshotOnFailureInput.checked = Boolean(action.screenshotOnFailure);
-  stepConditionSelect.value = action.condition?.type ?? "none";
-  stepConditionTextInput.value = action.condition?.text ?? "";
-
-  const selectorBased = isSelectorBased(action);
-  togglePropertyField("field-selector-test", selectorBased);
-  togglePropertyField("field-url", action.type === "navigate");
-  togglePropertyField("field-assertion", action.type === "assert");
-  togglePropertyField("field-validation-suggestion", isSubmitLikeClick(action));
-  togglePropertyField("field-action-value", action.type === "fill" || action.type === "select");
-  togglePropertyField("field-key", action.type === "press");
-  togglePropertyField("field-screenshot", action.type === "screenshot");
-  togglePropertyField("field-wait", action.type === "wait");
-
-  if (action.type === "navigate") {
-    manualUrlInput.value = action.url ?? "";
-  }
-  if (action.type === "assert") {
-    assertTypeSelect.value = action.assertionType ?? "textVisible";
-    assertExpectedInput.value = action.expected ?? "";
-    assertTimeoutInput.value = String(action.timeout ?? 10_000);
-    assertOnFailureSelect.value = action.onFailure ?? "screenshot";
-  }
-  if (action.type === "fill" || action.type === "select") {
-    actionValueLabel.textContent = action.type === "fill" ? "Text" : "Option value";
-    actionValueInput.placeholder = action.type === "fill" ? "Text to enter" : "Visible option text or value";
-    actionValueInput.value = action.value ?? "";
-  }
-  if (action.type === "press") {
-    pressKeySelect.value = action.key ?? "Enter";
-  }
-  if (action.type === "screenshot") {
-    screenshotLabelInput.value = action.screenshotLabel ?? "evidence";
-  }
-  if (action.type === "wait") {
-    waitMsInput.value = String(action.waitMs ?? 1_000);
-  }
-  renderStepTestResult(action);
-  renderSelectorTestResult(action);
-}
-
-function togglePropertyField(id: string, visible: boolean): void {
-  mustGet(id).classList.toggle("hidden", !visible);
-}
-
-function renderSelectorRepair(action: RecordedAction, confidence: SelectorConfidence): HTMLElement {
-  const wrapper = document.createElement("details");
-  wrapper.className = "selector-repair";
-
-  const summary = document.createElement("summary");
-  summary.textContent = `Selector details: ${confidence.reason}`;
-  wrapper.appendChild(summary);
-
-  const grid = document.createElement("div");
-  grid.className = "selector-grid";
-
-  const detail = document.createElement("div");
-  detail.className = "selector-detail";
-  detail.title = formatSelectors(action);
-  detail.textContent = formatSelectors(action);
-
-  const confidenceScore = scoreSelector(action.selectors);
-  const confidenceDetail = document.createElement("div");
-  confidenceDetail.className = "selector-confidence";
-  confidenceDetail.textContent = `Confidence ${confidenceScore.score}/100: ${confidenceScore.reasons.join("; ") || confidence.reason}`;
-
-  const cssLabel = document.createElement("label");
-  cssLabel.className = "field-label";
-  cssLabel.textContent = "CSS fallback override";
-  const cssInput = document.createElement("input");
-  cssInput.type = "text";
-  cssInput.value = action.selectors.css ?? "";
-  cssInput.placeholder = "[data-testid='save-button']";
-  cssInput.addEventListener("blur", () => void updateActionSelector(action.id, cssInput.value, undefined));
-  cssInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") cssInput.blur();
-  });
-
-  const noteLabel = document.createElement("label");
-  noteLabel.className = "field-label";
-  noteLabel.textContent = "Selector note";
-  const noteInput = document.createElement("input");
-  noteInput.type = "text";
-  noteInput.value = action.selectorNote ?? "";
-  noteInput.placeholder = "Why this selector is stable or how to repair it";
-  noteInput.addEventListener("blur", () => void updateActionSelector(action.id, undefined, noteInput.value));
-  noteInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") noteInput.blur();
-  });
-
-  grid.append(detail, confidenceDetail, cssLabel, cssInput, noteLabel, noteInput);
-  wrapper.appendChild(grid);
-  return wrapper;
 }
 
 function renderParameters(): void {
@@ -737,8 +1006,9 @@ function renderRepairActions(action: RecordedAction): HTMLElement {
   if (isSubmitLikeClick(action)) {
     wrapper.appendChild(makeRepairButton("Add validation", () => {
       selectedActionId = action.id;
+      expandedActionIds = new Set([action.id]);
       render();
-      void addSuggestedValidationStep();
+      void addSuggestedValidationStep(action);
     }));
   }
 
@@ -801,30 +1071,30 @@ function renderQualityReport(): void {
   }
 }
 
-function renderSelectorTestResult(action: RecordedAction): void {
+function renderSelectorTestResult(action: RecordedAction): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "selector-test-result";
   const result = selectorTestResults[action.id];
-  selectorTestResultEl.innerHTML = "";
   if (!result) {
-    selectorTestResultEl.textContent = hasUsableSelector(action)
+    wrapper.textContent = hasUsableSelector(action)
       ? "Test this selector against the current page."
       : "Pick the real page target to populate this step.";
-    return;
+    return wrapper;
   }
   if (result.error) {
-    selectorTestResultEl.textContent = `Selector test failed: ${result.error}`;
-    selectorTestResultEl.className = "selector-test-result error";
-    return;
+    wrapper.textContent = `Selector test failed: ${result.error}`;
+    wrapper.className = "selector-test-result error";
+    return wrapper;
   }
-  selectorTestResultEl.className = "selector-test-result";
   const summary = document.createElement("div");
   summary.className = "selector-test-summary";
   summary.innerHTML = `<strong>${result.visibleCount}/${result.matchedCount}</strong><span>visible / matched</span>`;
-  selectorTestResultEl.appendChild(summary);
+  wrapper.appendChild(summary);
   if (result.chosenPreview) {
     const preview = document.createElement("div");
     preview.className = "selector-preview";
     preview.textContent = `${result.chosenSelector ?? "Chosen"}: ${result.chosenPreview}`;
-    selectorTestResultEl.appendChild(preview);
+    wrapper.appendChild(preview);
   }
   if (result.fallbackCandidates.length > 0) {
     const list = document.createElement("div");
@@ -846,19 +1116,22 @@ function renderSelectorTestResult(action: RecordedAction): void {
       item.append(label, score, use);
       list.appendChild(item);
     }
-    selectorTestResultEl.appendChild(list);
+    wrapper.appendChild(list);
   }
+  return wrapper;
 }
 
-function renderStepTestResult(action: RecordedAction): void {
+function renderStepTestResult(action: RecordedAction): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "selector-test-result";
   const result = stepTestResults[action.id];
-  stepTestResultEl.className = "selector-test-result";
   if (!result) {
-    stepTestResultEl.textContent = "Test only this step against the current page.";
-    return;
+    wrapper.textContent = "Test only this step against the current page.";
+    return wrapper;
   }
-  stepTestResultEl.classList.toggle("error", result.level === "error");
-  stepTestResultEl.textContent = result.message;
+  wrapper.classList.toggle("error", result.level === "error");
+  wrapper.textContent = result.message;
+  return wrapper;
 }
 
 function makeActionButton(label: string, disabled: boolean, onClick: () => void, className?: string): HTMLButtonElement {
@@ -885,11 +1158,6 @@ async function updateActionDescription(actionId: string, description: string): P
   await refreshState();
 }
 
-async function updateSelectedAction(update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId">): Promise<void> {
-  if (!selectedActionId) return;
-  await updateActionPatch(selectedActionId, update);
-}
-
 async function updateActionPatch(actionId: string, update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId">): Promise<void> {
   await sendMessage({ type: "UPDATE_ACTION", actionId, ...update });
   await refreshState();
@@ -900,26 +1168,23 @@ async function updateActionSelector(actionId: string, cssSelector: string | unde
   await refreshState();
 }
 
-async function updateCondition(): Promise<void> {
-  if (!selectedActionId) return;
-  const action = selectedAction();
-  const type = stepConditionSelect.value as NonNullable<RecordedAction["condition"]>["type"];
-  await updateSelectedAction({
+async function updateConditionForAction(action: RecordedAction, type: NonNullable<RecordedAction["condition"]>["type"], text: string): Promise<void> {
+  await updateActionPatch(action.id, {
     condition: {
       type,
-      text: stepConditionTextInput.value.trim() || undefined,
-      selector: action?.selectors
+      text: text.trim() || undefined,
+      selector: action.selectors
     }
   });
 }
 
-async function testSelectedSelector(): Promise<void> {
-  const action = selectedAction();
-  if (!action) return;
-  selectorTestResultEl.textContent = "Testing selector in the active page...";
+async function testSelectorForAction(action: RecordedAction): Promise<void> {
+  selectedActionId = action.id;
+  expandedActionIds = new Set([action.id]);
+  setMessage("Testing selector in the active page...");
   const result = await sendMessage({ type: "TEST_SELECTOR", action }) as SelectorTestResult;
   selectorTestResults = { ...selectorTestResults, [action.id]: result };
-  renderSelectorTestResult(action);
+  render();
 }
 
 async function testSingleStep(action: RecordedAction): Promise<void> {
@@ -944,27 +1209,23 @@ async function testSingleStep(action: RecordedAction): Promise<void> {
   await refreshState();
 }
 
-async function pickSelectedSelector(): Promise<void> {
-  const action = selectedAction();
-  if (!action) return;
-  await pickSelectorForAction(action);
-}
-
 async function pickSelectorForAction(action: RecordedAction): Promise<void> {
   if (!["click", "fill", "select", "press", "assert"].includes(action.type)) {
     setMessage("This step does not need a page target.");
     return;
   }
 
-  selectorTestResultEl.textContent = "Click the target element in the active Zoom tab. Press Esc to cancel.";
+  selectedActionId = action.id;
+  expandedActionIds = new Set([action.id]);
+  setMessage("Click the target element in the active Zoom tab. Press Esc to cancel.");
   const result = await sendMessage({ type: "PICK_SELECTOR", action }) as SelectorPickResult;
   if (result.error) {
     selectorTestResults = {
       ...selectorTestResults,
       [action.id]: { actionId: action.id, matchedCount: 0, visibleCount: 0, fallbackCandidates: [], error: result.error }
     };
-    renderSelectorTestResult(action);
     setMessage(result.error);
+    render();
     return;
   }
 
@@ -998,12 +1259,6 @@ async function pickSelectorForAction(action: RecordedAction): Promise<void> {
   await refreshState();
 }
 
-async function pickSelectedAnchor(): Promise<void> {
-  const action = selectedAction();
-  if (!action) return;
-  await pickAnchorForAction(action);
-}
-
 async function pickAnchorForAction(action: RecordedAction): Promise<void> {
   if (!["click", "fill", "select", "press"].includes(action.type)) {
     setMessage("This step does not need an anchor.");
@@ -1014,15 +1269,17 @@ async function pickAnchorForAction(action: RecordedAction): Promise<void> {
     return;
   }
 
-  selectorTestResultEl.textContent = "Click stable row or list text in the active Zoom tab. Press Esc to cancel.";
+  selectedActionId = action.id;
+  expandedActionIds = new Set([action.id]);
+  setMessage("Click stable row or list text in the active Zoom tab. Press Esc to cancel.");
   const result = await sendMessage({ type: "PICK_ANCHOR", action }) as AnchorPickResult;
   if (result.error || !result.anchor) {
     selectorTestResults = {
       ...selectorTestResults,
       [action.id]: { actionId: action.id, matchedCount: 0, visibleCount: 0, fallbackCandidates: [], error: result.error ?? "No anchor was selected." }
     };
-    renderSelectorTestResult(action);
     setMessage(result.error ?? "No anchor was selected.");
+    render();
     return;
   }
 
@@ -1052,8 +1309,8 @@ async function useSelectorCandidate(actionId: string, selector: RecordedAction["
   setMessage("Selector candidate applied.");
 }
 
-async function addSuggestedValidationStep(): Promise<void> {
-  const action = selectedAction();
+async function addSuggestedValidationStep(actionOverride?: RecordedAction): Promise<void> {
+  const action = actionOverride ?? selectedAction();
   if (!action || !isSubmitLikeClick(action)) return;
 
   const response = await sendMessage({
@@ -1064,7 +1321,7 @@ async function addSuggestedValidationStep(): Promise<void> {
     onFailure: "screenshot",
     insertAfterActionId: action.id
   });
-  selectedActionId = response?.actionId;
+  selectAndExpandAction(response?.actionId);
   insertAfterActionId = undefined;
   setMessage("Validation step added after the submit action.");
   await refreshState();
@@ -1218,19 +1475,6 @@ function collectAllParameters(inputActions: RecordedAction[]): Array<{ actionId:
   return results;
 }
 
-function describeAction(action: RecordedAction): string {
-  if (action.type === "navigate") return `Navigate to ${action.url ?? action.pageUrl}`;
-  if (action.type === "fill") return `Fill ${action.selectors.label ?? "field"}`;
-  if (action.type === "click") return `Click ${action.selectors.role?.name ?? action.selectors.text ?? "element"}`;
-  if (action.type === "select") return `Select ${action.value ?? "option"}`;
-  if (action.type === "press") return `Press ${action.key ?? "Enter"}`;
-  if (action.type === "dismiss") return "Dismiss blocking popup";
-  if (action.type === "screenshot") return `Take screenshot${action.screenshotLabel ? `: ${action.screenshotLabel}` : ""}`;
-  if (action.type === "wait") return `Wait ${action.waitMs ?? 1_000}ms`;
-  if (action.type === "upload") return "Upload file";
-  return action.type;
-}
-
 function selectedAction(): RecordedAction | undefined {
   return actions.find((action) => action.id === selectedActionId);
 }
@@ -1257,13 +1501,11 @@ function hasUsableSelector(action: RecordedAction): boolean {
 }
 
 function isSelectorBased(action: RecordedAction): boolean {
-  return !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type);
+  return isSelectorBasedStep(action);
 }
 
 function isSubmitLikeClick(action: RecordedAction): boolean {
-  if (action.type !== "click") return false;
-  const label = action.selectors.role?.name ?? action.selectors.text ?? action.selectors.label ?? action.description ?? "";
-  return isCommitClickLabel(label);
+  return isSubmitLikeClickStep(action);
 }
 
 function formatSelectors(action: RecordedAction): string {

@@ -50,7 +50,7 @@
       <div class="section-heading">
         <div>
           <h2>Step Toolbar</h2>
-          <p class="subtle">Add a step, then configure it in Properties.</p>
+          <p class="subtle">Add a step, then expand it to configure details inline.</p>
         </div>
       </div>
       <div class="tool-grid">
@@ -109,150 +109,50 @@
           <p id="step-summary" class="subtle">0 steps captured</p>
         </div>
       </div>
+      <div class="step-list-tools">
+        <input id="step-filter" type="search" placeholder="Filter steps">
+        <select id="step-density" aria-label="Step density">
+          <option value="comfortable">Comfortable</option>
+          <option value="compact">Compact</option>
+        </select>
+        <button id="btn-collapse-steps" class="button secondary" type="button">Collapse</button>
+        <button id="btn-expand-risky-steps" class="button secondary" type="button">Risky</button>
+        <button id="btn-jump-weak-step" class="button secondary" type="button">Weak</button>
+      </div>
+      <details class="bulk-policy">
+        <summary>Bulk policy</summary>
+        <div class="bulk-policy-grid">
+          <label class="field-label" for="bulk-target">Apply to</label>
+          <select id="bulk-target"></select>
+          <div class="two-column">
+            <div>
+              <label class="field-label" for="bulk-timeout">Timeout</label>
+              <input id="bulk-timeout" type="number" min="500" max="60000" step="500" placeholder="Leave unchanged">
+            </div>
+            <div>
+              <label class="field-label" for="bulk-retry-count">Retries</label>
+              <input id="bulk-retry-count" type="number" min="0" max="10" step="1" placeholder="Leave unchanged">
+            </div>
+          </div>
+          <label class="field-label" for="bulk-retry-delay">Retry delay</label>
+          <input id="bulk-retry-delay" type="number" min="0" max="60000" step="250" placeholder="Leave unchanged">
+          <div class="check-row">
+            <label class="checkbox-control">
+              <input id="bulk-continue-on-failure" type="checkbox">
+              <span>Enable continue on failure</span>
+            </label>
+            <label class="checkbox-control">
+              <input id="bulk-screenshot-on-failure" type="checkbox">
+              <span>Enable screenshot on failure</span>
+            </label>
+          </div>
+          <button id="btn-apply-bulk-policy" class="button primary" type="button">Apply policy</button>
+        </div>
+      </details>
       <div id="action-list" class="action-list"></div>
       <div id="empty-actions" class="empty-state">
         <strong>No steps captured yet.</strong>
         <span>Start recording, then click through the Zoom workflow.</span>
-      </div>
-    </section>
-
-    <section class="panel-section">
-      <div class="section-heading">
-        <div>
-          <h2>Properties</h2>
-          <p id="inspector-summary" class="subtle">Select a step to configure it.</p>
-        </div>
-      </div>
-      <div id="inspector-empty" class="empty-state compact">
-        <strong>No step selected.</strong>
-        <span>Click a captured step or add one from the toolbar.</span>
-      </div>
-      <div id="inspector-fields" class="inspector-fields hidden">
-        <label class="field-label" for="inspector-description">Description</label>
-        <input id="inspector-description" type="text">
-
-        <div id="field-step-policy" class="property-field">
-          <div class="two-column">
-            <div>
-              <label class="field-label" for="step-timeout">Timeout</label>
-              <input id="step-timeout" type="number" min="500" max="60000" step="500" value="10000">
-            </div>
-            <div>
-              <label class="field-label" for="step-retry-count">Retries</label>
-              <input id="step-retry-count" type="number" min="0" max="10" step="1" value="0">
-            </div>
-          </div>
-          <div class="two-column">
-            <div>
-              <label class="field-label" for="step-retry-delay">Retry delay</label>
-              <input id="step-retry-delay" type="number" min="0" max="60000" step="250" value="1000">
-            </div>
-            <div>
-              <label class="field-label" for="step-condition">Condition</label>
-              <select id="step-condition">
-                <option value="none">None</option>
-                <option value="textExistsSkip">If text exists, skip</option>
-                <option value="elementVisibleClick">If element visible, click</option>
-                <option value="fieldEmptyFill">If field empty, fill</option>
-                <option value="addressAlreadyExistsSkipAccount">If address exists, skip account</option>
-              </select>
-            </div>
-          </div>
-          <label class="field-label" for="step-condition-text">Condition text</label>
-          <input id="step-condition-text" type="text" placeholder="Address text or status to check">
-          <div class="check-row">
-            <label class="checkbox-control">
-              <input id="step-continue-on-failure" type="checkbox">
-              <span>Continue on failure</span>
-            </label>
-            <label class="checkbox-control">
-              <input id="step-screenshot-on-failure" type="checkbox">
-              <span>Screenshot on failure</span>
-            </label>
-          </div>
-        </div>
-
-        <div id="field-step-test" class="property-field">
-          <button id="btn-test-step" class="button secondary" type="button">Test step</button>
-          <div id="step-test-result" class="selector-test-result"></div>
-        </div>
-
-        <div id="field-selector-test" class="property-field hidden">
-          <div class="selector-controls">
-            <button id="btn-pick-selector" class="button primary" type="button">Pick target on page</button>
-            <button id="btn-pick-anchor" class="button secondary" type="button">Pick anchor</button>
-            <button id="btn-test-selector" class="button secondary" type="button">Test selector</button>
-          </div>
-          <div id="selector-test-result" class="selector-test-result"></div>
-        </div>
-
-        <div id="field-validation-suggestion" class="property-field hidden">
-          <button id="btn-add-suggested-validation" class="button secondary" type="button">Add validation after this step</button>
-        </div>
-
-        <div id="field-action-value" class="property-field hidden">
-          <label id="action-value-label" class="field-label" for="action-value">Value</label>
-          <input id="action-value" type="text" placeholder="Text or option value">
-        </div>
-
-        <div id="field-key" class="property-field hidden">
-          <label class="field-label" for="press-key">Key</label>
-          <select id="press-key">
-            <option value="Enter">Enter</option>
-            <option value="Tab">Tab</option>
-            <option value="Escape">Escape</option>
-            <option value="ArrowDown">ArrowDown</option>
-            <option value="ArrowUp">ArrowUp</option>
-            <option value="ArrowLeft">ArrowLeft</option>
-            <option value="ArrowRight">ArrowRight</option>
-            <option value="Space">Space</option>
-          </select>
-        </div>
-
-        <div id="field-url" class="property-field hidden">
-          <label class="field-label" for="manual-url">URL or Zoom path</label>
-          <input id="manual-url" type="text" placeholder="/cpw/page/phoneNumbers#/business-address">
-        </div>
-
-        <div id="field-assertion" class="property-field hidden">
-          <label class="field-label" for="assert-type">Assertion</label>
-          <select id="assert-type">
-            <option value="textVisible">Text is visible</option>
-            <option value="urlContains">URL contains</option>
-            <option value="elementVisible">Element is visible</option>
-            <option value="fieldValue">Field has value</option>
-            <option value="tableRowContains">Table row contains</option>
-          </select>
-
-          <label class="field-label" for="assert-expected">Expected value</label>
-          <input id="assert-expected" type="text" placeholder="Expected text, URL fragment, or selector">
-
-          <div class="two-column">
-            <div>
-              <label class="field-label" for="assert-timeout">Timeout</label>
-              <input id="assert-timeout" type="number" min="500" max="60000" step="500" value="10000">
-            </div>
-            <div>
-              <label class="field-label" for="assert-on-failure">On failure</label>
-              <select id="assert-on-failure">
-                <option value="screenshot">Screenshot</option>
-                <option value="fail">Fail</option>
-                <option value="retry">Retry</option>
-                <option value="skip">Skip</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div id="field-screenshot" class="property-field hidden">
-          <label class="field-label" for="screenshot-label">Screenshot label</label>
-          <input id="screenshot-label" type="text" placeholder="after-save">
-        </div>
-
-        <div id="field-wait" class="property-field hidden">
-          <label class="field-label" for="wait-ms">Milliseconds</label>
-          <input id="wait-ms" type="number" min="250" max="60000" step="250" value="1000">
-        </div>
       </div>
     </section>
 
