@@ -5,6 +5,7 @@ import { createPublishReview } from "../shared/publishReview.js";
 import { suggestParameterReplacements } from "../shared/authoringAssistants.js";
 import {
   buildBulkPolicyUpdate,
+  buildStepMiniMap,
   bulkPolicyTargets,
   describeStep,
   isSelectorBasedStep,
@@ -21,6 +22,7 @@ const statusPillEl = mustGet("status-pill");
 const actionListEl = mustGet("action-list");
 const emptyActionsEl = mustGet("empty-actions");
 const stepSummaryEl = mustGet("step-summary");
+const stepMiniMapEl = mustGet("step-mini-map");
 const stepFilterInput = mustGet("step-filter") as HTMLInputElement;
 const btnCollapseSteps = mustGet("btn-collapse-steps") as HTMLButtonElement;
 const btnExpandRiskySteps = mustGet("btn-expand-risky-steps") as HTMLButtonElement;
@@ -401,6 +403,7 @@ function renderActions(): void {
   emptyActionsEl.style.display = actions.length === 0 ? "grid" : "none";
   actionListEl.classList.toggle("compact", stepDensity === "compact");
   renderBulkTargetOptions();
+  renderStepMiniMap();
 
   if (actions.length === 0) {
     actionListEl.appendChild(renderInsertRow(null));
@@ -508,6 +511,32 @@ function renderActions(): void {
       actionListEl.appendChild(renderInsertRow(action.id, index === actions.length - 1));
     }
   });
+}
+
+function renderStepMiniMap(): void {
+  stepMiniMapEl.innerHTML = "";
+  stepMiniMapEl.classList.toggle("hidden", actions.length === 0);
+  if (actions.length === 0) return;
+
+  for (const entry of buildStepMiniMap(actions, selectedActionId)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `mini-map-step ${entry.level}${entry.active ? " active" : ""}${entry.actionId === testCurrentActionId ? " testing" : ""}`;
+    button.textContent = String(entry.index);
+    button.title = entry.title;
+    button.setAttribute("aria-label", entry.title);
+    button.addEventListener("click", () => jumpToStep(entry.actionId));
+    stepMiniMapEl.appendChild(button);
+  }
+}
+
+function jumpToStep(actionId: string): void {
+  selectedActionId = actionId;
+  expandedActionIds = new Set([actionId]);
+  stepFilterInput.value = "";
+  stepFilterText = "";
+  renderActions();
+  requestAnimationFrame(() => document.querySelector(`[data-action-id="${cssEscape(actionId)}"]`)?.scrollIntoView({ block: "center" }));
 }
 
 function filteredStepEntries(): Array<{ action: RecordedAction; index: number }> {

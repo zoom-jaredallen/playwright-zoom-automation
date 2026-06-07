@@ -32,6 +32,16 @@ export interface BulkPolicyTargets {
   weakSelectorSteps: BulkPolicyTarget;
 }
 
+export type StepMiniMapLevel = "ok" | "warning" | "danger" | "manual";
+
+export interface StepMiniMapEntry {
+  actionId: string;
+  index: number;
+  level: StepMiniMapLevel;
+  title: string;
+  active: boolean;
+}
+
 export interface BulkPolicyFormInput {
   timeout: string;
   retryCount: string;
@@ -128,6 +138,19 @@ export function buildBulkPolicyUpdate(input: BulkPolicyFormInput): Partial<BulkP
   return update;
 }
 
+export function buildStepMiniMap(actions: RecordedAction[], activeActionId?: string): StepMiniMapEntry[] {
+  return actions.map((action, index) => {
+    const risk = miniMapRisk(action);
+    return {
+      actionId: action.id,
+      index: index + 1,
+      level: risk.level,
+      title: `#${index + 1} ${describeStep(action)} - ${risk.reason}`,
+      active: action.id === activeActionId
+    };
+  });
+}
+
 export function isSelectorBasedStep(action: RecordedAction): boolean {
   return !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type);
 }
@@ -140,6 +163,18 @@ export function isSubmitLikeClickStep(action: RecordedAction): boolean {
 
 function isMutatingStep(action: RecordedAction): boolean {
   return ["click", "fill", "select", "press", "upload", "dialog"].includes(action.type);
+}
+
+function miniMapRisk(action: RecordedAction): { level: StepMiniMapLevel; reason: string } {
+  if (!isSelectorBasedStep(action)) return { level: "manual", reason: "Manual or page-level step" };
+  if (!hasSelectorSignal(action)) return { level: "danger", reason: "Missing selector" };
+
+  const confidence = scoreSelector(action.selectors);
+  if (confidence.level === "low") return { level: "danger", reason: "Weak selector" };
+  if (isSubmitLikeClickStep(action)) return { level: "warning", reason: "Commit action; verify after save" };
+  if (action.continueOnFailure) return { level: "warning", reason: "Continues after failure" };
+  if (action.condition && action.condition.type !== "none") return { level: "warning", reason: "Conditional step" };
+  return { level: "ok", reason: confidence.reasons[0] ?? "Stable selector" };
 }
 
 function hasSelectorSignal(action: RecordedAction): boolean {

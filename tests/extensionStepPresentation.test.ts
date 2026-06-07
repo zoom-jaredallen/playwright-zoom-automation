@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildStepMiniMap,
   buildBulkPolicyUpdate,
   bulkPolicyTargets,
   describeStep,
@@ -93,5 +94,30 @@ describe("extension step presentation", () => {
       continueOnFailure: true,
       screenshotOnFailure: true
     });
+  });
+
+  it("builds a compact step mini map with risk levels and active state", () => {
+    const steps = [
+      action("nav", { type: "navigate", url: "https://zoom.us/account" }),
+      action("weak-click", { type: "click", selectors: { css: ".save" } }),
+      action("save", { type: "click", selectors: { role: { role: "button", name: "Save" } } }),
+      action("company", { type: "fill", selectors: { label: "Company" } })
+    ];
+
+    const miniMap = buildStepMiniMap(steps, "save");
+
+    expect(miniMap.map((entry) => ({
+      actionId: entry.actionId,
+      index: entry.index,
+      level: entry.level,
+      active: entry.active
+    }))).toEqual([
+      { actionId: "nav", index: 1, level: "manual", active: false },
+      { actionId: "weak-click", index: 2, level: "danger", active: false },
+      { actionId: "save", index: 3, level: "warning", active: true },
+      { actionId: "company", index: 4, level: "ok", active: false }
+    ]);
+    expect(miniMap[1].title).toContain("#2 Click element");
+    expect(miniMap[1].title).toContain("Weak selector");
   });
 });
