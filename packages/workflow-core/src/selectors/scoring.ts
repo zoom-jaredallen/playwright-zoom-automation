@@ -55,7 +55,7 @@ export function scoreSelectorCandidate(candidate: SelectorCandidate): SelectorCa
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
-  return { score, level: score >= 75 ? "high" : score >= 50 ? "medium" : "low", reasons };
+  return { score, level: score >= 70 ? "high" : score >= 50 ? "medium" : "low", reasons };
 }
 
 function baseKindScore(candidate: SelectorCandidate, reasons: string[]): number {

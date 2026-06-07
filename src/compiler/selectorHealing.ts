@@ -309,6 +309,27 @@ export function generateHealingCode(): string {
       return anchoredCheckbox;
     }
 
+    try {
+      const resolved = await resolveSelector(root as any, selectors as any, selectorCandidates as any, timeout);
+      const selectorDiagnostics = resolved.diagnostics;
+      if (selectorDiagnostics.fallbackUsed) {
+        this.healingReport.push({
+          actionDescription: "",
+          originalStrategy: selectorDiagnostics.requestedStrategies[0] ?? "unknown",
+          healedStrategy: selectorDiagnostics.selectedStrategy ?? "unknown",
+          confidence: selectorDiagnostics.confidence === "high" ? 0.95 : selectorDiagnostics.confidence === "medium" ? 0.7 : 0.4
+        });
+        this.options.logger.warn("Selector healed", { selectorDiagnostics });
+      } else {
+        this.options.logger.info("Selector resolved", { selectorDiagnostics });
+      }
+      return resolved.locator;
+    } catch (runtimeError) {
+      this.options.logger.warn("Ranked selector resolver failed; using legacy selector healing", {
+        error: runtimeError instanceof Error ? runtimeError.message : String(runtimeError)
+      });
+    }
+
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const remaining = Math.max(250, deadline - Date.now());

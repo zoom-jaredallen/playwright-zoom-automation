@@ -356,9 +356,10 @@ describe("compileWorkflow", () => {
     const result = compileWorkflow(workflow, testOutputDir);
     const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
 
+    expect(flow).toContain('from "../../../runtime/selectors/selectorResolver.js"');
     expect(flow).toContain('await this.clickElement(page, {"css":".weak"}, [{"id":"role-save"');
-    expect(flow).toContain("private buildSelectorStrategies");
-    expect(flow).toContain("xpath=");
+    expect(flow).toContain("await resolveSelector");
+    expect(flow).toContain("selectorDiagnostics");
   });
 
   it("generates dedicated select replay with select metadata", () => {
