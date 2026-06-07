@@ -51,6 +51,10 @@ export interface SelectorStrategy {
     text?: string;
     /** Container role to scope to. Defaults to "row". */
     scopeRole?: string;
+    /** Optional CSS selector for non-ARIA containers such as dialogs, forms, or sections. */
+    scopeSelector?: string;
+    /** Human-readable anchor category used by repair UIs and diagnostics. */
+    kind?: "row" | "listitem" | "dialog" | "form" | "section" | "heading" | "custom";
     relationship?: AnchorRelationship;
   };
 }

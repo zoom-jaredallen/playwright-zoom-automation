@@ -967,9 +967,9 @@ async function pickAnchor(action: RecordedAction): Promise<AnchorPickResult> {
         return;
       }
 
-      const anchor = anchorFromPickedElement(target);
+      const anchor = computeAnchor(target) ?? anchorFromPickedElement(target);
       if (!anchor) {
-        cancel("Pick stable text inside a repeated row or list item.");
+        cancel("Pick stable text inside a row, dialog, form, or section.");
         return;
       }
 
@@ -1280,9 +1280,12 @@ async function findReplayElement(action: RecordedAction): Promise<Element> {
 function resolveAnchorRoot(selectors: SelectorStrategy): Element | undefined {
   const anchor = selectors.anchor;
   if (!anchor?.text) return undefined;
-  const rowSelector = anchor.scopeRole === "listitem" ? "li, [role='listitem']" : "tr, [role='row']";
-  return Array.from(document.querySelectorAll(rowSelector)).find(
-    (row) => isElementVisible(row) && visibleText(row).toLowerCase().includes(anchor.text!.toLowerCase())
+  const scopeSelector = anchor.scopeSelector
+    ?? (anchor.scopeRole === "dialog" ? "[role='dialog'], dialog"
+      : anchor.scopeRole === "listitem" ? "li, [role='listitem']"
+      : "tr, [role='row']");
+  return Array.from(document.querySelectorAll(scopeSelector)).find(
+    (container) => isElementVisible(container) && visibleText(container).toLowerCase().includes(anchor.text!.toLowerCase())
   );
 }
 

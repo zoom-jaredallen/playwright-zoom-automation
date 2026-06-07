@@ -253,21 +253,39 @@ export function generateHealingCode(): string {
     return undefined;
   }
 
+  private resolveAnchorScope(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, esc: (value: string) => string): any {
+    const anchor = selectors.anchor;
+    if (!anchor || (!anchor.text && !anchor.scopeRole && !anchor.scopeSelector)) return root;
+
+    const anchorText = anchor.text ? new RegExp(esc(anchor.text), "i") : undefined;
+    let container: any;
+    if (anchor.scopeSelector) {
+      container = root.locator(anchor.scopeSelector);
+    } else if (anchor.scopeRole) {
+      container = root.getByRole(anchor.scopeRole);
+    } else {
+      container = root.getByRole("row");
+    }
+    if (anchorText) {
+      container = container.filter({ hasText: anchorText });
+    }
+    const scoped = container.first();
+
+    // "near"/directional anchors still resolve inside the nearest stable container
+    // for now; preserving the relationship lets future layout-aware locators refine it.
+    if (anchor.relationship && anchor.relationship !== "within") {
+      this.options.logger.info("Using relationship anchor scope", { relationship: anchor.relationship, anchor: anchor.text });
+    }
+    return scoped;
+  }
+
   private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number): Promise<import("playwright").Locator> {
     const esc = (value: string) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
 
     // Anchors: scope to a container (e.g. the row whose Name contains "michael.chen")
     // before resolving the normal strategies. "within" is the primary path; other
     // relationships approximate by scoping to the same container.
-    let scope: any = root;
-    if (selectors.anchor && (selectors.anchor.text || selectors.anchor.scopeRole)) {
-      const anchor = selectors.anchor;
-      let container: any = root.getByRole(anchor.scopeRole || "row");
-      if (anchor.text) {
-        container = container.filter({ hasText: new RegExp(esc(anchor.text), "i") });
-      }
-      scope = container.first();
-    }
+    let scope: any = this.resolveAnchorScope(root, selectors, esc);
 
     // When an ordinal was recorded, target that match; otherwise the first.
     const pick = (base: import("playwright").Locator): import("playwright").Locator =>

@@ -484,9 +484,11 @@ export function getFieldContext(element: Element): {
  * ambiguity (single row) or no distinctive text.
  */
 export function computeAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
-  const container = element.closest('tr, [role="row"], li, [role="listitem"]');
-  if (!container) return undefined;
+  const dialogAnchor = computeDialogAnchor(element);
+  if (dialogAnchor) return dialogAnchor;
 
+  const container = element.closest('tr, [role="row"], li, [role="listitem"]');
+  if (!container) return computeSectionAnchor(element);
   // Only anchor when there are sibling rows — otherwise there's nothing to disambiguate.
   const siblings = container.parentElement
     ? Array.from(container.parentElement.children).filter((c) => c.matches('tr, [role="row"], li, [role="listitem"]'))
@@ -496,7 +498,49 @@ export function computeAnchor(element: Element): NonNullable<SelectorStrategy["a
   const scopeRole = container.tagName === "TR" || container.getAttribute("role") === "row" ? "row" : "listitem";
   const text = pickAnchorText(container, element);
   if (!text) return undefined;
-  return { scopeRole, text, relationship: "within" };
+  return { scopeRole, text, relationship: "within", kind: scopeRole === "row" ? "row" : "listitem" };
+}
+
+function computeDialogAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const dialog = element.closest("[role='dialog'], dialog");
+  if (!dialog) return undefined;
+  const text = dialog.getAttribute("aria-label")?.trim()
+    ?? labelledByText(dialog)
+    ?? dialog.querySelector("h1, h2, h3, [class*='title'], [class*='header']")?.textContent?.replace(/\s+/g, " ").trim();
+  if (!text || text.length > 80) return undefined;
+  return {
+    text,
+    scopeRole: "dialog",
+    scopeSelector: "[role='dialog'], dialog",
+    relationship: "within",
+    kind: "dialog"
+  };
+}
+
+function computeSectionAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const section = element.closest("form, [role='form'], section, [class*='form'], [class*='section']");
+  if (!section) return undefined;
+  const heading = section.querySelector("legend, h1, h2, h3, [class*='title'], [class*='header']");
+  const text = heading?.textContent?.replace(/\s+/g, " ").trim();
+  if (!text || text.length > 80) return undefined;
+  return {
+    text,
+    scopeSelector: "form, [role='form'], section, [class*='form'], [class*='section']",
+    relationship: "within",
+    kind: section.tagName.toLowerCase() === "form" || section.getAttribute("role") === "form" ? "form" : "section"
+  };
+}
+
+function labelledByText(element: Element): string | undefined {
+  const labelledBy = element.getAttribute("aria-labelledby");
+  if (!labelledBy) return undefined;
+  const text = labelledBy
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent?.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return text || undefined;
 }
 
 function pickAnchorText(container: Element, target: Element): string | undefined {

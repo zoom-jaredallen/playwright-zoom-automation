@@ -42,6 +42,26 @@ describe("extension selector candidates", () => {
     }));
     expect(ranked.find((candidate) => candidate.kind === "css")?.score.level).toBe("low");
   });
+
+  it("captures dialog anchors for controls inside repeated modal surfaces", () => {
+    const dom = new JSDOM(`
+      <div role="dialog" aria-label="Add user">
+        <label for="role">Role</label>
+        <select id="role"><option>Admin</option></select>
+      </div>
+    `);
+    installDomGlobals(dom);
+    const select = dom.window.document.querySelector("select")!;
+
+    const candidates = buildSelectorCandidatesForElement(select);
+
+    expect(candidates[0].selector.anchor).toEqual(expect.objectContaining({
+      text: "Add user",
+      scopeRole: "dialog",
+      scopeSelector: "[role='dialog'], dialog",
+      relationship: "within"
+    }));
+  });
 });
 
 function installDomGlobals(dom: JSDOM): void {

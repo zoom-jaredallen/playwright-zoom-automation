@@ -397,6 +397,37 @@ describe("compileWorkflow", () => {
     expect(flow).toContain("selectOption({ label: value }");
   });
 
+  it("generates relationship-aware anchor scope resolution", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "anchored",
+          timestamp: 1000,
+          type: "click",
+          selectors: {
+            role: { role: "button", name: "Save" },
+            anchor: {
+              text: "Add user",
+              scopeRole: "dialog",
+              scopeSelector: "[role='dialog'], dialog",
+              relationship: "near"
+            }
+          },
+          pageUrl: "https://zoom.us/test",
+          pageTitle: "Test",
+          description: "Click dialog save"
+        }
+      ],
+      assertions: []
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("private resolveAnchorScope");
+    expect(flow).toContain("anchor.scopeSelector");
+    expect(flow).toContain('"relationship":"near"');
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

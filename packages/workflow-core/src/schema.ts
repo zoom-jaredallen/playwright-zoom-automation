@@ -30,6 +30,8 @@ const selectorSchema = z
       .object({
         text: z.string().optional(),
         scopeRole: z.string().optional(),
+        scopeSelector: z.string().optional(),
+        kind: z.enum(["row", "listitem", "dialog", "form", "section", "heading", "custom"]).optional(),
         relationship: z.enum(["within", "near", "rightOf", "leftOf", "above", "below"]).optional()
       })
       .loose()

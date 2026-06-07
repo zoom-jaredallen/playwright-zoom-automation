@@ -5,12 +5,14 @@ import {
   type SelectorCandidate,
   type SelectorStrategy
 } from "@zoom-automation/workflow-core";
-import { extractSelectors } from "./selectors.js";
+import { computeAnchor, extractSelectors } from "./selectors.js";
 
 export function buildSelectorCandidatesForElement(element: Element): SelectorCandidate[] {
   const selectors = extractSelectors(element);
+  const anchor = computeAnchor(element);
   const withXPath: SelectorStrategy = {
     ...selectors,
+    ...(anchor ? { anchor } : {}),
     xpath: buildShortXPath(element)
   };
   return selectorCandidatesFromStrategy(withXPath, "recorded");
@@ -59,8 +61,9 @@ export function resolveSelectorCandidate(selector: SelectorStrategy, root: Docum
 function resolveAnchorRoot(selector: SelectorStrategy, root: Document | Element): Element | undefined {
   const anchor = selector.anchor;
   if (!anchor?.text) return undefined;
-  const role = anchor.scopeRole ?? "row";
-  const candidates = findByRole(root, role, undefined, false);
+  const candidates = anchor.scopeSelector
+    ? safeQueryAll(root, anchor.scopeSelector)
+    : findByRole(root, anchor.scopeRole ?? "row", undefined, false);
   const text = anchor.text.toLowerCase();
   return candidates.find((candidate) => visibleText(candidate).toLowerCase().includes(text));
 }
