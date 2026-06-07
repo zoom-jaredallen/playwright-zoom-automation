@@ -19,7 +19,12 @@ async function main(): Promise<void> {
   const logger = createLogger({
     level: parseLogLevel(process.env.LOG_LEVEL),
     filePath: `${config.runtime.artifactsDir}/logs/${runId}.jsonl`,
-    baseMeta: { runId }
+    baseMeta: { runId },
+    redactValues: [
+      config.zoom.adminPassword,
+      config.zoom.apiAccessToken,
+      config.zoom.serverToServer?.clientSecret
+    ]
   });
 
   if (!config.runtime.dryRun) {

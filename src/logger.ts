@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { redactSecrets } from "./server/credentials/secretRedactor.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -27,6 +28,8 @@ export interface LoggerOptions {
   baseMeta?: Record<string, unknown>;
   /** Whether to suppress console output (useful for tests). */
   silent?: boolean;
+  /** Literal secret values to redact from log messages and metadata. */
+  redactValues?: Array<string | undefined>;
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
@@ -35,6 +38,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   const filePath = options.filePath;
   const baseMeta = options.baseMeta ?? {};
   const silent = options.silent ?? false;
+  const redactValues = options.redactValues ?? [];
 
   if (filePath) {
     mkdirSync(path.dirname(filePath), { recursive: true });
@@ -45,13 +49,13 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       return;
     }
 
-    const entry = {
+    const entry = redactSecrets({
       timestamp: new Date().toISOString(),
       level,
       message,
       ...baseMeta,
       ...meta
-    };
+    }, redactValues);
     const line = JSON.stringify(entry);
 
     if (!silent) {
@@ -78,7 +82,8 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       level: minLevel,
       filePath,
       baseMeta: { ...baseMeta, ...childMeta },
-      silent
+      silent,
+      redactValues
     });
   }
 

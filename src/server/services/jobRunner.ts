@@ -83,7 +83,12 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
   const baseLogger = createLogger({
     level: parseLogLevel(process.env.LOG_LEVEL),
     filePath: `${config.runtime.artifactsDir}/logs/job-${options.jobId}.jsonl`,
-    baseMeta: { jobId: options.jobId, workflows: options.workflowIds }
+    baseMeta: { jobId: options.jobId, workflows: options.workflowIds },
+    redactValues: [
+      config.zoom.adminPassword,
+      config.zoom.apiAccessToken,
+      config.zoom.serverToServer?.clientSecret
+    ]
   });
   const logger = createStepTrackingLogger(baseLogger, options.store, options.jobId);
 

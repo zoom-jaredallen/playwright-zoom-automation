@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 import { loadAddressProfile, type AddressProfile } from "./addressProfiles.js";
 import { parseEnvWithSchema, type ParsedEnv } from "./configSchema.js";
+import type { SecretProvider } from "./server/credentials/types.js";
+import { CONFIG_SECRET_KEYS, resolveSecretReferences } from "./server/credentials/credentialResolver.js";
 
 export interface AppConfig {
   zoom: {
@@ -98,6 +100,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 export function loadConfigFromEnvFile(envPath = ".env"): AppConfig {
   dotenv.config({ path: envPath });
   return loadConfig(process.env);
+}
+
+export async function loadConfigWithSecrets(
+  env: NodeJS.ProcessEnv,
+  provider: Pick<SecretProvider, "getSecret">
+): Promise<AppConfig> {
+  const resolved = await resolveSecretReferences(env, provider, [...CONFIG_SECRET_KEYS]);
+  return loadConfig(resolved);
 }
 
 // --- Internal builders ---
