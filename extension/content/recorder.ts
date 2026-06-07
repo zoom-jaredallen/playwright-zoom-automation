@@ -7,15 +7,19 @@ import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, comp
 import { buildSelectorCandidatesForElement, testSelectorCandidatesInDocument } from "../shared/selectorCandidates.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import { shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
+import { insertRecordedAction } from "../shared/recordedActionPolicy.js";
+import { buildZoomComboboxSelection, normalizeZoomOptionText } from "../shared/zoomCombobox.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
 import { createSelectorRepairPlan, type RankedSelectorCandidate, type SelectorCandidate } from "@zoom-automation/workflow-core";
 
 let recording = false;
 let paused = false;
+let listenersAttached = false;
 let actionQueue: RecordedAction[] = [];
 let lastFillTimeout: ReturnType<typeof setTimeout> | undefined;
 let lastFillElement: Element | null = null;
 let lastFillValue = "";
+let lastRecordedFill: { element: Element; value: string; recordedAt: number } | undefined;
 let impersonationDetected = false;
 let activeSelectorPick: { cancel: (message: string) => void } | undefined;
 
@@ -110,6 +114,13 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
 // ─── Recording Control ───────────────────────────────────────────────────────
 
 function startRecording(): void {
+  if (recording) {
+    paused = false;
+    attachListeners();
+    showRecordingIndicator();
+    return;
+  }
+
   recording = true;
   paused = false;
   actionQueue = [];
@@ -155,6 +166,7 @@ function stopRecording(): void {
 // ─── Event Listeners ─────────────────────────────────────────────────────────
 
 function attachListeners(): void {
+  if (listenersAttached) return;
   document.addEventListener("click", handleClick, true);
   document.addEventListener("input", handleInput, true);
   document.addEventListener("change", handleChange, true);
@@ -164,9 +176,11 @@ function attachListeners(): void {
   }
   window.addEventListener("hashchange", handleNavigation);
   window.addEventListener("popstate", handleNavigation);
+  listenersAttached = true;
 }
 
 function detachListeners(): void {
+  if (!listenersAttached) return;
   document.removeEventListener("click", handleClick, true);
   document.removeEventListener("input", handleInput, true);
   document.removeEventListener("change", handleChange, true);
@@ -176,6 +190,7 @@ function detachListeners(): void {
   }
   window.removeEventListener("hashchange", handleNavigation);
   window.removeEventListener("popstate", handleNavigation);
+  listenersAttached = false;
 }
 
 // ─── Event Handlers ──────────────────────────────────────────────────────────
@@ -197,9 +212,6 @@ function handleClick(event: MouseEvent): void {
   lastClickTime = now;
 
   flushPendingFill();
-
-  // Skip clicks on input fields (they'll be captured as fill actions)
-  if (isInputElement(target)) return;
 
   const selectors = extractSelectors(target);
   const text = selectors.text ?? selectors.role?.name ?? target.textContent?.trim().slice(0, 60);
@@ -232,20 +244,23 @@ function handleClick(event: MouseEvent): void {
   // ─── Combobox/Dropdown Detection ─────────────────────────────────────
   // If clicking opens a Zoom combobox dropdown, track it so the next click
   // (selecting an option) gets recorded as a "select" action instead of "click"
-  const comboboxWrapper = target.closest(
-    '[class*="cpzui-select"]:not([class*="option"]), ' +
-    '[class*="cpzui-virtual-filter-select"]:not([class*="option"]), ' +
-    '[role="combobox"]'
-  );
+  const comboboxWrapper = closestZoomComboboxTrigger(target);
   if (comboboxWrapper && !isInsideDropdownList(target)) {
+    const triggerSelectors = extractSelectors(comboboxWrapper);
+    const fieldCtx = getFieldContext(comboboxWrapper);
     activeCombobox = {
       element: comboboxWrapper,
-      label: selectors.label ?? selectors.role?.name,
+      label: fieldCtx.label ?? triggerSelectors.label ?? triggerSelectors.role?.name ?? selectors.label ?? selectors.role?.name,
       openedAt: now
     };
     // Don't record the "open combobox" click — we'll record the selection instead
     return;
   }
+
+  // Skip clicks on input fields (they'll be captured as fill actions). This must
+  // run after combobox detection because Zoom searchable selects place an input
+  // inside the trigger.
+  if (isInputElement(target)) return;
 
   // ─── Option Selection Detection ──────────────────────────────────────
   // If we have an active combobox and the user clicks an option, record as "select"
@@ -254,18 +269,26 @@ function handleClick(event: MouseEvent): void {
     if (optionText) {
       const fieldCtx = getFieldContext(activeCombobox.element);
       const params = detectParameters(optionText, fieldCtx);
+      const optionElement = normalizedOptionElement(target);
+      const selection = buildZoomComboboxSelection({
+        triggerElement: activeCombobox.element,
+        optionElement,
+        optionText,
+        label: activeCombobox.label
+      });
 
       recordAction({
         type: "select",
-        selectors: {
-          role: { role: "combobox", name: activeCombobox.label },
-          label: activeCombobox.label,
-          text: optionText
-        },
+        selectors: selection.selectors,
+        selectorCandidates: selection.selectorCandidates,
+        selectedCandidateId: selection.selectedCandidateId,
+        selectorDiagnostics: selectorDiagnosticsForTarget(activeCombobox.element, selection.rankedTriggerCandidates[0]),
+        capture: captureMetadataForTarget(activeCombobox.element),
+        selectMetadata: selection.selectMetadata,
         value: optionText,
         parameterHints: params.length > 0 ? params : undefined,
         description: `Select "${optionText}" in ${activeCombobox.label ?? "dropdown"}`
-      }, target);
+      });
       activeCombobox = null;
       return;
     }
@@ -329,31 +352,30 @@ function handleInput(event: Event): void {
   if (!target || !isInputElement(target)) return;
   if (isRecorderUI(target)) return;
 
-  // Debounce rapid typing into a single "fill" action
-  if (lastFillElement === target) {
-    lastFillValue = target.value;
-    clearTimeout(lastFillTimeout);
-    lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
-  } else {
-    flushPendingFill();
-    lastFillElement = target;
-    lastFillValue = target.value;
-    lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
-  }
+  queuePendingFill(target);
 }
 
 function handleChange(event: Event): void {
   if (activeSelectorPick) return;
   if (!recording || paused) return;
-  const target = event.target as HTMLSelectElement;
-  if (!target || target.tagName.toLowerCase() !== "select") return;
+  const target = event.target as HTMLSelectElement | HTMLInputElement | HTMLTextAreaElement;
+  if (!target) return;
   if (isRecorderUI(target)) return;
+
+  if (isInputElement(target)) {
+    queuePendingFill(target);
+    flushPendingFill();
+    return;
+  }
+
+  if (target.tagName.toLowerCase() !== "select") return;
 
   flushPendingFill();
 
-  const selectors = extractSelectors(target);
-  const selectedText = target.options[target.selectedIndex]?.text ?? target.value;
-  const fieldCtx = getFieldContext(target);
+  const select = target as HTMLSelectElement;
+  const selectors = extractSelectors(select);
+  const selectedText = select.options[select.selectedIndex]?.text ?? select.value;
+  const fieldCtx = getFieldContext(select);
   const params = detectParameters(selectedText, fieldCtx);
 
   recordAction({
@@ -362,7 +384,7 @@ function handleChange(event: Event): void {
     value: selectedText,
     parameterHints: params.length > 0 ? params : undefined,
     description: `Select "${selectedText}" in ${selectors.label ?? selectors.role?.name ?? "dropdown"}`
-  }, target);
+  }, select);
 }
 
 // Keys captured as explicit "press" actions (feature 4). Enter on a button is
@@ -469,10 +491,37 @@ function handleNavigation(): void {
 
 // ─── Fill Debouncing ─────────────────────────────────────────────────────────
 
+function queuePendingFill(target: Element): void {
+  const value = inputElementValue(target);
+  if (lastFillElement === target) {
+    lastFillValue = value;
+    clearTimeout(lastFillTimeout);
+    lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
+    return;
+  }
+
+  flushPendingFill();
+  lastFillElement = target;
+  lastFillValue = value;
+  lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
+}
+
 function flushPendingFill(): void {
   if (!lastFillElement || !lastFillValue) {
     lastFillElement = null;
     lastFillValue = "";
+    return;
+  }
+
+  if (
+    lastRecordedFill &&
+    lastRecordedFill.element === lastFillElement &&
+    lastRecordedFill.value === lastFillValue &&
+    Date.now() - lastRecordedFill.recordedAt < 1_500
+  ) {
+    lastFillElement = null;
+    lastFillValue = "";
+    clearTimeout(lastFillTimeout);
     return;
   }
 
@@ -488,6 +537,11 @@ function flushPendingFill(): void {
     description: `Fill "${selectors.label ?? selectors.role?.name ?? "field"}" with "${lastFillValue.slice(0, 30)}${lastFillValue.length > 30 ? "…" : ""}"`
   }, lastFillElement);
 
+  lastRecordedFill = {
+    element: lastFillElement,
+    value: lastFillValue,
+    recordedAt: Date.now()
+  };
   lastFillElement = null;
   lastFillValue = "";
   clearTimeout(lastFillTimeout);
@@ -542,7 +596,11 @@ function recordAction(
     ...partial
   };
 
-  actionQueue.push(action);
+  const nextQueue = insertRecordedAction(actionQueue, action);
+  if (nextQueue === actionQueue) {
+    return;
+  }
+  actionQueue = nextQueue;
 
   // Send to background service worker
   chrome.runtime.sendMessage({
@@ -707,7 +765,7 @@ async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean;
           return { ok: true };
         }
         (element as HTMLElement).click();
-        const option = await findByText(wanted, 5_000);
+        const option = await findReplayOption(action, action.selectMetadata?.optionLabel ?? wanted);
         (option as HTMLElement).click();
         return { ok: true };
       }
@@ -1420,6 +1478,14 @@ async function findReplayElement(action: RecordedAction): Promise<Element> {
   throw new Error(`Could not find element for ${action.description ?? action.type}`);
 }
 
+async function findReplayOption(action: RecordedAction, optionText: string): Promise<Element> {
+  for (const candidate of action.selectMetadata?.optionCandidates ?? []) {
+    const option = findReplayElementSync({ ...action, type: "click", selectors: candidate.selector });
+    if (option) return option;
+  }
+  return await findByText(optionText, 5_000);
+}
+
 function resolveAnchorRoot(selectors: SelectorStrategy): Element | undefined {
   const anchor = selectors.anchor;
   if (!anchor?.text) return undefined;
@@ -1710,6 +1776,13 @@ function isInputElement(el: Element): boolean {
   return tag === "input" || tag === "textarea" || el.getAttribute("contenteditable") === "true";
 }
 
+function inputElementValue(el: Element): string {
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    return el.value;
+  }
+  return el.textContent ?? "";
+}
+
 /**
  * Check if target is the same element or a child of the reference element.
  * Used for click deduplication — clicking an SVG inside a button counts as
@@ -1729,20 +1802,32 @@ function isInsideDropdownList(element: Element): boolean {
   ));
 }
 
+function closestZoomComboboxTrigger(element: Element): Element | null {
+  if (isInsideDropdownList(element)) return null;
+
+  const candidate = element.closest(
+    '[role="combobox"], [class*="cpzui-virtual-filter-select"], [class*="cpzui-select"]'
+  );
+  if (!candidate || isDropdownContainer(candidate)) return null;
+
+  return candidate;
+}
+
+function isDropdownContainer(element: Element): boolean {
+  const className = element.getAttribute("class") ?? "";
+  return element.getAttribute("role") === "listbox" ||
+    /\bcpzui-select-option\b|\bcpzui-virtual-filter-select-option\b|select-option|select-dropdown|popper/i.test(className);
+}
+
+function normalizedOptionElement(element: Element): Element {
+  return element.closest('[role="option"], [class*="cpzui-select-option"], [class*="cpzui-virtual-filter-select-option"], [class*="select-option"]') ?? element;
+}
+
 /**
  * Extract the visible text of a dropdown option, handling Zoom's nested structure.
  */
 function getOptionText(element: Element): string | undefined {
-  // Look for the content/tooltip wrapper first
-  const optionWrapper = element.closest('[class*="select-option"], [role="option"]');
-  if (!optionWrapper) return element.textContent?.trim().slice(0, 80) || undefined;
-
-  // Try specific content elements
-  const contentEl = optionWrapper.querySelector(
-    '[class*="option__content"], [class*="tooltip__trigger"], [class*="cp-w-full"]'
-  );
-  const text = (contentEl ?? optionWrapper).textContent?.trim();
-  return text && text.length > 0 && text.length < 100 ? text : undefined;
+  return normalizeZoomOptionText(element);
 }
 
 function isRecorderUI(el: Element): boolean {

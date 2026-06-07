@@ -219,23 +219,22 @@ function detectZoomOption(element: Element): { text: string } | undefined {
 
 /**
  * Find the label for a Zoom combobox by looking at:
- * 1. aria-label on the wrapper or input
+ * 1. The form field group label
  * 2. A preceding label/heading element
- * 3. The form field group label
+ * 3. aria-label on the wrapper or input
  */
 function findComboboxLabel(wrapper: Element): string | undefined {
-  // Check aria-label on the wrapper or its input
-  const ariaLabel = wrapper.getAttribute("aria-label") ??
-    wrapper.querySelector("input")?.getAttribute("aria-label") ??
-    wrapper.querySelector("[aria-label]")?.getAttribute("aria-label");
-  if (ariaLabel) return ariaLabel.trim();
-
-  // Check for a label element in the same form group
-  const formGroup = wrapper.closest('[class*="form-group"], [class*="field"], [class*="cp-mb"]');
+  // Check for a label element in the same form group. Zoom searchable selects
+  // often put generic text such as "Select or Enter" on the inner input.
+  const formGroup = wrapper.closest(
+    ".cpzui-form-item__row, [class*='form-item__row'], [class*=\"form-group\"], [class*=\"field\"], [class*=\"cp-mb\"]"
+  );
   if (formGroup) {
-    const label = formGroup.querySelector("label, [class*='label'], [class*='title']");
+    const label = formGroup.querySelector(
+      ".cpzui-form-item__label, [class*='form-item__label']:not([class*='wrapper']):not([class*='content']), label, [class*='title']"
+    );
     if (label) {
-      const text = label.textContent?.trim();
+      const text = label.textContent?.replace(/\s+/g, " ").trim();
       if (text && text.length < 50) return text;
     }
   }
@@ -259,6 +258,13 @@ function findComboboxLabel(wrapper: Element): string | undefined {
     parent = parent.parentElement;
     depth++;
   }
+
+  // Use ARIA as a fallback after structural labels. For Zoom searchable selects,
+  // the inner input's aria-label is usually an instruction, not the field name.
+  const ariaLabel = wrapper.getAttribute("aria-label") ??
+    wrapper.querySelector("input")?.getAttribute("aria-label") ??
+    wrapper.querySelector("[aria-label]")?.getAttribute("aria-label");
+  if (ariaLabel) return ariaLabel.trim();
 
   return undefined;
 }

@@ -5,6 +5,7 @@
 import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowTestEvent } from "../shared/types.js";
 import { createStepTestPlan } from "../shared/testPlan.js";
 import { firstRecordableNavigationUrl, shouldAcceptRecordedAction, shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
+import { insertRecordedAction, prepareRecordedActionsForWorkflow } from "../shared/recordedActionPolicy.js";
 import {
   applyStepUpdate,
   buildWorkflow as buildWorkflowCore,
@@ -103,7 +104,7 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
         // Filter out meta-only actions (impersonation detection notices)
         const accepted = !message.action.id.startsWith("meta_") && shouldAcceptRecordedAction(message.action, { frameId: sender.frameId });
         if (accepted) {
-          actions.push(await withVisibleTabThumbnail(message.action, sender.tab));
+          actions = insertRecordedAction(actions, await withVisibleTabThumbnail(message.action, sender.tab));
         }
         const startUrlCandidate = message.action.type === "navigate" ? message.action.url : message.action.pageUrl;
         if (accepted && !recordingStartUrl && startUrlCandidate && shouldRecordNavigationUrl(startUrlCandidate, { frameId: sender.frameId })) {
@@ -348,6 +349,7 @@ async function stopRecording(message: Extract<ExtensionMessage, { type: "STOP_RE
   }
 
   const workflow = buildWorkflow();
+  actions = workflow.actions;
   await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
   await clearDraftState();
   broadcastRecorderState();
@@ -900,7 +902,7 @@ function parseRecordedAt(value: string | undefined): number | undefined {
 
 function buildWorkflow(): RecordedWorkflow {
   return buildWorkflowCore({
-    actions,
+    actions: prepareRecordedActionsForWorkflow(actions),
     recordingStartUrl,
     recordingStartTime,
     impersonationDetected
