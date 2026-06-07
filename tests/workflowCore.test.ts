@@ -129,6 +129,43 @@ describe("analysis — quality report (regression-locked)", () => {
     expect(report.warnings).toContain("Add validations after important submit/save actions.");
     expect(report.warnings).toContain("Add screenshots for evidence and failure diagnosis.");
   });
+
+  it("uses live selector diagnostics and recorded captures when scoring workflow quality", () => {
+    const steps = [
+      action("a", {
+        type: "click",
+        selectors: { css: ".zoom-btn:nth-child(3)" },
+        capture: {
+          thumbnail: { dataUrl: "data:image/png;base64,abc", width: 320, height: 180 },
+          capturedAt: "2026-06-07T00:00:00.000Z",
+          pageUrl: "https://zoom.us/x",
+          viewport: { width: 1440, height: 900 },
+          targetBox: { x: 10, y: 20, width: 100, height: 32 }
+        },
+        selectorDiagnostics: {
+          matchedCount: 1,
+          visibleCount: 1,
+          chosenCandidateId: "healed-role",
+          confidence: { score: 92, level: "high", reasons: ["Unique visible match"] },
+          targetPreview: "<button Save>",
+          anchor: { text: "Business address", relationship: "within", resolved: true }
+        }
+      })
+    ];
+
+    const report = calculateQualityReport(steps, [{
+      afterAction: "a",
+      type: "toastVisible",
+      expected: "Saved",
+      timeout: 10_000,
+      onFailure: "screenshot"
+    }]);
+
+    expect(report.selectorStability).toBe(100);
+    expect(report.evidenceCoverage).toBe(100);
+    expect(report.assertionCoverage).toBe(100);
+    expect(report.warnings).not.toContain("Several steps rely on weak selectors.");
+  });
 });
 
 describe("analysis — assertion generation", () => {
@@ -341,6 +378,64 @@ describe("schema — validation", () => {
       elseActions: []
     };
     expect(safeParseWorkflow({ ...valid, actions: [ifAction] }).success).toBe(true);
+  });
+
+  it("accepts authoring metadata, repair suggestions, rich parameters, and expanded assertions", () => {
+    const workflow = {
+      ...valid,
+      parameters: [{
+        name: "companyName",
+        type: "string",
+        required: true,
+        description: "Company name",
+        source: "prompt",
+        ui: {
+          group: "Business identity",
+          label: "Company name",
+          helpText: "Used on the business address form",
+          placeholder: "Zoom Communications Ltd",
+          accountOverrideAllowed: true
+        }
+      }],
+      actions: [{
+        ...valid.actions[0],
+        assertionType: "toastVisible",
+        capture: {
+          thumbnail: { dataUrl: "data:image/png;base64,abc", width: 320, height: 180 },
+          screenshotArtifactId: "capture-a",
+          capturedAt: "2026-06-07T00:00:00.000Z",
+          pageUrl: "https://zoom.us/x",
+          viewport: { width: 1440, height: 900 },
+          targetBox: { x: 10, y: 20, width: 100, height: 32 }
+        },
+        selectorDiagnostics: {
+          matchedCount: 0,
+          visibleCount: 0,
+          chosenCandidateId: "css-a",
+          confidence: { score: 25, level: "low", reasons: ["CSS-only selector"] },
+          targetPreview: "<button Save>",
+          anchor: { text: "Business address", scopeRole: "row", relationship: "within", resolved: false }
+        },
+        repairSuggestions: [{
+          candidateId: "role-save",
+          selector: { role: { role: "button", name: "Save" } },
+          source: "healed",
+          score: { score: 88, level: "high", reasons: ["ARIA role + accessible name"] },
+          matchedCount: 1,
+          visibleCount: 1,
+          risk: "low"
+        }]
+      }],
+      assertions: [{
+        afterAction: "a",
+        type: "addressStatusEquals",
+        expected: "Verified",
+        timeout: 10_000,
+        onFailure: "screenshot"
+      }]
+    };
+
+    expect(safeParseWorkflow(workflow).success).toBe(true);
   });
 
   it("rejects a malformed predicate", () => {

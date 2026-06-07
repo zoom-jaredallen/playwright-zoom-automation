@@ -61,6 +61,76 @@ const selectorCandidateSchema = z
   })
   .loose();
 
+const selectorCandidateScoreSchema = z
+  .object({
+    score: z.number(),
+    level: z.enum(["high", "medium", "low"]),
+    reasons: z.array(z.string())
+  })
+  .loose();
+
+const stepCaptureSchema = z
+  .object({
+    thumbnail: z
+      .object({
+        dataUrl: z.string(),
+        width: z.number(),
+        height: z.number()
+      })
+      .loose()
+      .optional(),
+    screenshotArtifactId: z.string().optional(),
+    capturedAt: z.string(),
+    pageUrl: z.string(),
+    viewport: z
+      .object({
+        width: z.number(),
+        height: z.number()
+      })
+      .loose(),
+    targetBox: z
+      .object({
+        x: z.number(),
+        y: z.number(),
+        width: z.number(),
+        height: z.number()
+      })
+      .loose()
+      .optional()
+  })
+  .loose();
+
+const selectorDiagnosticsSummarySchema = z
+  .object({
+    matchedCount: z.number(),
+    visibleCount: z.number(),
+    chosenCandidateId: z.string().optional(),
+    confidence: selectorCandidateScoreSchema,
+    targetPreview: z.string().optional(),
+    anchor: z
+      .object({
+        text: z.string().optional(),
+        scopeRole: z.string().optional(),
+        relationship: z.enum(["within", "near", "rightOf", "leftOf", "above", "below"]).optional(),
+        resolved: z.boolean()
+      })
+      .loose()
+      .optional()
+  })
+  .loose();
+
+const selectorRepairSuggestionSchema = z
+  .object({
+    candidateId: z.string(),
+    selector: selectorSchema,
+    source: z.enum(["recorded", "legacy", "manual", "healed", "generated"]),
+    score: selectorCandidateScoreSchema,
+    matchedCount: z.number(),
+    visibleCount: z.number(),
+    risk: z.enum(["low", "medium", "high"])
+  })
+  .loose();
+
 const selectMetadataSchema = z
   .object({
     targetCandidates: z.array(selectorCandidateSchema).optional(),
@@ -115,11 +185,14 @@ const actionSchema: z.ZodType = z.lazy(() => z
     selectorCandidates: z.array(selectorCandidateSchema).optional(),
     selectedCandidateId: z.string().optional(),
     selectMetadata: selectMetadataSchema.optional(),
+    capture: stepCaptureSchema.optional(),
+    selectorDiagnostics: selectorDiagnosticsSummarySchema.optional(),
+    repairSuggestions: z.array(selectorRepairSuggestionSchema).optional(),
     value: z.string().optional(),
     url: z.string().optional(),
     filePath: z.string().optional(),
     assertionType: z
-      .enum(["textVisible", "elementVisible", "urlContains", "fieldValue", "tableRowContains", "hasText", "hasValue"])
+      .enum(["textVisible", "elementVisible", "urlContains", "urlMatches", "fieldValue", "tableRowContains", "addressStatusEquals", "toastVisible", "hasText", "hasValue"])
       .optional(),
     expected: z.string().optional(),
     timeout: z.number().optional(),
@@ -163,14 +236,27 @@ const parameterSchema = z
     description: z.string(),
     defaultValue: z.string().optional(),
     options: z.array(z.string()).optional(),
-    source: z.enum(["addressProfile", "config", "env", "account", "prompt"])
+    source: z.enum(["addressProfile", "config", "env", "account", "prompt"]),
+    ui: z
+      .object({
+        group: z.string().optional(),
+        label: z.string().optional(),
+        helpText: z.string().optional(),
+        placeholder: z.string().optional(),
+        secret: z.boolean().optional(),
+        multiline: z.boolean().optional(),
+        fileAccept: z.string().optional(),
+        accountOverrideAllowed: z.boolean().optional()
+      })
+      .loose()
+      .optional()
   })
   .loose();
 
 const assertionSchema = z
   .object({
     afterAction: z.string(),
-    type: z.enum(["urlContains", "textVisible", "elementVisible", "responseOk", "fieldValue"]),
+    type: z.enum(["urlContains", "urlMatches", "textVisible", "elementVisible", "responseOk", "fieldValue", "tableRowContains", "addressStatusEquals", "toastVisible"]),
     expected: z.string(),
     timeout: z.number(),
     onFailure: z.enum(["fail", "retry", "skip", "screenshot"])

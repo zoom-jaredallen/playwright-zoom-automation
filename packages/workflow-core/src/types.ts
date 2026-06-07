@@ -80,6 +80,51 @@ export interface SelectorDiagnostics {
   brittleReason?: string;
 }
 
+export interface StepCapture {
+  thumbnail?: {
+    dataUrl: string;
+    width: number;
+    height: number;
+  };
+  screenshotArtifactId?: string;
+  capturedAt: string;
+  pageUrl: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  targetBox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface SelectorDiagnosticsSummary {
+  matchedCount: number;
+  visibleCount: number;
+  chosenCandidateId?: string;
+  confidence: SelectorCandidateScore;
+  targetPreview?: string;
+  anchor?: {
+    text?: string;
+    scopeRole?: string;
+    relationship?: AnchorRelationship;
+    resolved: boolean;
+  };
+}
+
+export interface SelectorRepairSuggestion {
+  candidateId: string;
+  selector: SelectorStrategy;
+  source: SelectorCandidateSource;
+  score: SelectorCandidateScore;
+  matchedCount: number;
+  visibleCount: number;
+  risk: "low" | "medium" | "high";
+}
+
 export interface SelectorCandidate {
   id: string;
   kind: SelectorCandidateKind;
@@ -128,8 +173,11 @@ export type AssertionType =
   | "textVisible"
   | "elementVisible"
   | "urlContains"
+  | "urlMatches"
   | "fieldValue"
   | "tableRowContains"
+  | "addressStatusEquals"
+  | "toastVisible"
   | "hasText"
   | "hasValue";
 
@@ -156,6 +204,9 @@ export interface RecordedAction {
   selectorCandidates?: SelectorCandidate[];
   selectedCandidateId?: string;
   selectMetadata?: SelectMetadata;
+  capture?: StepCapture;
+  selectorDiagnostics?: SelectorDiagnosticsSummary;
+  repairSuggestions?: SelectorRepairSuggestion[];
   value?: string;
   url?: string;
   filePath?: string;
@@ -218,11 +269,32 @@ export interface WorkflowParameter {
   defaultValue?: string;
   options?: string[];
   source: "addressProfile" | "config" | "env" | "account" | "prompt";
+  ui?: WorkflowParameterUiHint;
+}
+
+export interface WorkflowParameterUiHint {
+  group?: string;
+  label?: string;
+  helpText?: string;
+  placeholder?: string;
+  secret?: boolean;
+  multiline?: boolean;
+  fileAccept?: string;
+  accountOverrideAllowed?: boolean;
 }
 
 export interface WorkflowAssertion {
   afterAction: string;
-  type: "urlContains" | "textVisible" | "elementVisible" | "responseOk" | "fieldValue";
+  type:
+    | "urlContains"
+    | "urlMatches"
+    | "textVisible"
+    | "elementVisible"
+    | "responseOk"
+    | "fieldValue"
+    | "tableRowContains"
+    | "addressStatusEquals"
+    | "toastVisible";
   expected: string;
   timeout: number;
   onFailure: OnFailure;

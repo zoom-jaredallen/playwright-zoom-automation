@@ -132,11 +132,10 @@ export function isCommitClickLabel(label: string): boolean {
 /** Map a recorded assertion type to the narrower WorkflowAssertion.type union. */
 export function mapAssertionType(type: AssertionType): WorkflowAssertion["type"] {
   switch (type) {
-    case "tableRowContains":
-    case "hasText":
-      return "textVisible";
     case "hasValue":
       return "fieldValue";
+    case "hasText":
+      return "textVisible";
     default:
       return type;
   }
@@ -170,11 +169,11 @@ export function calculateQualityReport(
 ): WorkflowQualityReport {
   const workflowActions = flatten(workflowActionTree);
   const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type));
-  const stableSelectors = actionable.filter((action) => action.selectors.role?.name || action.selectors.label || action.selectors.testId).length;
+  const stableSelectors = actionable.filter(hasStableSelector).length;
   const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
   const submitActions = workflowActions.filter((action) => action.type === "click" && isCommitClickLabel(action.selectors.role?.name ?? action.selectors.text ?? ""));
   const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertions.length, submitActions.length) / submitActions.length) * 100);
-  const evidenceCount = workflowActions.filter((action) => action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
+  const evidenceCount = workflowActions.filter((action) => action.capture || action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
   const evidenceCoverage = workflowActions.length === 0 ? 100 : Math.round((evidenceCount / workflowActions.length) * 100);
   const riskySteps = workflowActions.filter((action) => action.type === "click" && !action.selectors.role?.name && !action.selectors.testId).length;
   const hardcodedValues = workflowActions.filter((action) => (action.value || action.expected || "").length > 0 && !(action.value || action.expected || "").includes("{{")).length;
@@ -190,6 +189,13 @@ export function calculateQualityReport(
   ].filter(Boolean) as string[];
 
   return { score, selectorStability, assertionCoverage, evidenceCoverage, riskySteps, hardcodedValues, unsupportedBrowserPreflightSteps, warnings };
+}
+
+function hasStableSelector(action: RecordedAction): boolean {
+  if (action.selectorDiagnostics?.confidence.level === "high" && action.selectorDiagnostics.visibleCount === 1) {
+    return true;
+  }
+  return Boolean(action.selectors.role?.name || action.selectors.label || action.selectors.testId);
 }
 
 // ─── Parameter detection (value heuristics) ─────────────────────────────────────
