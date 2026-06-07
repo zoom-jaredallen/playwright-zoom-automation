@@ -252,6 +252,38 @@ describe("compileWorkflow", () => {
     expect(flow).not.toContain("this.activeAccountId");
   });
 
+  it("keeps assertions for dry-run-skipped steps inside the executed branch", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+    const saveStep = flow.slice(flow.indexOf("// Step 4: Click Save"), flow.indexOf("await context.tracing.stop"));
+
+    expect(saveStep).toContain("Dry run: skipping mutating step");
+    expect(saveStep).not.toContain("}\n      // Auto verification");
+  });
+
+  it("does not treat opener add-user clicks as dry-run mutations", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "act_1",
+          timestamp: 1000,
+          type: "click",
+          selectors: { role: { role: "button", name: "Add user" }, text: "Add user" },
+          pageUrl: "https://zoom.us/cci/index/admin#/admin-agents",
+          pageTitle: "Admin users",
+          description: "Click Add user"
+        }
+      ],
+      assertions: []
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("Click Add user");
+    expect(flow).not.toContain("Dry run: skipping mutating step");
+  });
+
   it("compiles after-action assertions so a failed submit is detected", () => {
     // createTestWorkflow has an assertion afterAction act_4 (the Save click).
     const workflow = createTestWorkflow();

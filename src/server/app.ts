@@ -47,7 +47,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   if (process.env.PRISM_TOKENS_PATH) {
     app.use("/prism", express.static(process.env.PRISM_TOKENS_PATH));
   }
-  app.use("/artifacts", express.static(path.resolve("output")));
+  const artifactsStaticDir = path.resolve(process.env.ARTIFACTS_DIR ?? "output/artifacts");
+  app.use("/artifacts", express.static(artifactsStaticDir));
 
   app.get("/api/health", (_request, response) => {
     response.json({ ok: true });
@@ -328,7 +329,6 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     const config = loadConfig(process.env);
     const accountId = typeof request.query.accountId === "string" ? request.query.accountId : undefined;
     const artifacts = listJobArtifacts({
-      outputRoot: path.resolve("output"),
       artifactsDir: path.resolve(config.runtime.artifactsDir),
       job,
       accountId

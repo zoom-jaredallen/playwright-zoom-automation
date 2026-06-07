@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { fetchJobArtifacts, type ArtifactView, type JobView, type SubAccountView } from "../api.js";
 
+type RunAccountState = JobView["accounts"][number];
+
 interface RunStepProps {
   job?: JobView;
   accountsById: Map<string, SubAccountView>;
@@ -113,12 +115,13 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
 
           const isExpanded = expandedAccountId === accountState.accountId;
           const hasLogs = accountState.logs && accountState.logs.length > 0;
+          const canExpand = canExpandRunAccount(accountState);
 
           return (
             <div key={accountState.accountId} className="run-account-block">
               <div
-                className={`run-account-row ${accountState.status} ${hasLogs ? "clickable" : ""}`}
-                onClick={() => hasLogs && setExpandedAccountId(isExpanded ? undefined : accountState.accountId)}
+                className={`run-account-row ${accountState.status} ${canExpand ? "clickable" : ""}`}
+                onClick={() => canExpand && setExpandedAccountId(isExpanded ? undefined : accountState.accountId)}
               >
                 <span className="run-account-name">
                   <strong>{account?.name ?? accountState.accountId}</strong>
@@ -146,7 +149,7 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
                   ) : (
                     <span className="run-account-queued">Waiting...</span>
                   )}
-                  {hasLogs ? (
+                  {canExpand ? (
                     <span className="run-account-expand">{isExpanded ? "▾" : "▸"}</span>
                   ) : null}
                 </span>
@@ -196,6 +199,10 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
       ) : null}
     </div>
   );
+}
+
+export function canExpandRunAccount(accountState: Pick<RunAccountState, "status" | "logs">): boolean {
+  return Boolean(accountState.logs?.length) || ["running", "completed", "skipped", "failed"].includes(accountState.status);
 }
 
 function ArtifactActions({ artifacts, error }: { artifacts: ArtifactView[]; error?: string }) {

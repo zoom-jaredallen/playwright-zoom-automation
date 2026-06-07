@@ -354,7 +354,7 @@ ${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
       break;
 
     case "assert":
-      return appendAfterAssertions(wrapGeneratedAction(action, stepComment, generateAssertionActionCode(action, coreIndent, timeout), workflow), action, workflow);
+      return wrapGeneratedAction(action, stepComment, generateAssertionActionCode(action, coreIndent, timeout), workflow, generateAfterActionAssertions(action, workflow));
 
     case "screenshot": {
       const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
@@ -387,19 +387,16 @@ ${indent}}${elseBlock}`;
       break;
   }
 
-  return appendAfterAssertions(wrapGeneratedAction(action, stepComment, core, workflow), action, workflow);
+  return wrapGeneratedAction(action, stepComment, core, workflow, generateAfterActionAssertions(action, workflow));
 }
 
 /**
- * Append any workflow.assertions[] whose afterAction matches this step, so a
- * failed submit (e.g. a validation error on "add user") is detected instead of
- * being reported as success.
+ * Generate workflow.assertions[] whose afterAction matches this step, so a
+ * failed submit is detected instead of being reported as success.
  */
-function appendAfterAssertions(code: string, action: RecordedAction, workflow: RecordedWorkflow): string {
+function generateAfterActionAssertions(action: RecordedAction, workflow: RecordedWorkflow): string {
   const matching = workflow.assertions.filter((assertion) => assertion.afterAction === action.id);
-  if (matching.length === 0) return code;
-  const blocks = matching.map((assertion) => generateWorkflowAssertionCode(assertion)).join("\n");
-  return `${code}\n${blocks}`;
+  return matching.map((assertion) => generateWorkflowAssertionCode(assertion)).join("\n");
 }
 
 function generateWorkflowAssertionCode(assertion: RecordedWorkflow["assertions"][number]): string {
@@ -454,7 +451,7 @@ ${call}
 ${indent}await __networkWait;`;
 }
 
-function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: string, workflow: RecordedWorkflow): string {
+function wrapGeneratedAction(action: RecordedAction, stepComment: string, core: string, workflow: RecordedWorkflow, afterAssertions = ""): string {
   const indent = "      ";
   const condition = JSON.stringify(action.condition);
   const selectors = JSON.stringify(action.selectors);
@@ -488,14 +485,16 @@ ${indent}  const guardOk = await this.evalPredicate(page, ${JSON.stringify(actio
   const executeCall = `await this.executeRecordedStep(page, artifactBase, ${description}, ${policy}, async () => {
 ${core}
 ${indent}    });`;
+  const executeAndAssert = afterAssertions ? `${executeCall}
+${afterAssertions}` : executeCall;
   const body = dryRunSkip
     ? `if (this.options.config.runtime.dryRun) {
 ${indent}      dryRunSkipped = true;
 ${indent}      this.options.logger.info("Dry run: skipping mutating step", { step: ${description} });
 ${indent}    } else {
-${indent}      ${executeCall}
+${indent}      ${executeAndAssert}
 ${indent}    }`
-    : executeCall;
+    : executeAndAssert;
 
   return `${stepComment}
 ${indent}{
@@ -514,7 +513,7 @@ ${indent}}`;
 function isMutatingForDryRun(action: RecordedAction): boolean {
   if (action.type !== "click" && action.type !== "upload") return false;
   const name = action.selectors.role?.name ?? action.selectors.text ?? action.description ?? "";
-  return /\b(save|submit|create|confirm|apply|delete|remove|add user|invite|provision)\b/i.test(name);
+  return /\b(save|submit|create|confirm|apply|delete|remove|invite|provision)\b/i.test(name);
 }
 
 function hasUsableSelector(selectors: SelectorStrategy): boolean {

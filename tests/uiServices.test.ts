@@ -3,6 +3,7 @@ import { filterSelectableAccounts } from "../src/server/services/accountSelectio
 import { createJobStore } from "../src/server/services/inMemoryJobStore.js";
 import { createJobProgressAdapter } from "../src/server/services/jobRunner.js";
 import { createWorkflowRegistry } from "../src/server/services/workflowRegistry.js";
+import { canExpandRunAccount } from "../src/ui/components/RunStep.js";
 import type { SubAccount } from "../src/automation/types.js";
 
 describe("workflowRegistry", () => {
@@ -131,6 +132,19 @@ describe("inMemoryJobStore", () => {
         detail: "Previous workflow failed"
       })
     );
+  });
+});
+
+describe("canExpandRunAccount", () => {
+  it("allows finished account rows to expand even when no step logs exist yet", () => {
+    expect(canExpandRunAccount({ status: "failed" })).toBe(true);
+    expect(canExpandRunAccount({ status: "completed" })).toBe(true);
+    expect(canExpandRunAccount({ status: "skipped" })).toBe(true);
+  });
+
+  it("keeps queued rows collapsed unless logs exist", () => {
+    expect(canExpandRunAccount({ status: "queued" })).toBe(false);
+    expect(canExpandRunAccount({ status: "queued", logs: [{ timestamp: new Date().toISOString(), step: "Queued" }] })).toBe(true);
   });
 });
 

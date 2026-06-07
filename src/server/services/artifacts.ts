@@ -12,12 +12,10 @@ export interface ArtifactView {
 }
 
 export function listJobArtifacts(options: {
-  outputRoot: string;
   artifactsDir: string;
   job: AutomationJob;
   accountId?: string;
 }): ArtifactView[] {
-  const outputRoot = path.resolve(options.outputRoot);
   const artifactsDir = path.resolve(options.artifactsDir);
   const accountPrefixes = options.accountId
     ? [sanitizeArtifactToken(options.accountId)]
@@ -27,7 +25,7 @@ export function listJobArtifacts(options: {
   const updatedAtMs = new Date(options.job.updatedAt).getTime() + 5 * 60_000;
 
   const artifacts = [
-    ...scanDirectory(outputRoot, artifactsDir, (_filePath, name, stat) => {
+    ...scanDirectory(artifactsDir, artifactsDir, (_filePath, name, stat) => {
       if (name === jobLogName) return true;
       if (!accountPrefixes.some((prefix) => name.startsWith(prefix))) return false;
       const modifiedAtMs = stat.mtime.getTime();
@@ -40,7 +38,7 @@ export function listJobArtifacts(options: {
 }
 
 function scanDirectory(
-  outputRoot: string,
+  artifactsRoot: string,
   directory: string,
   include: (filePath: string, name: string, stat: Stats) => boolean
 ): ArtifactView[] {
@@ -62,7 +60,7 @@ function scanDirectory(
     }
 
     if (stat.isDirectory()) {
-      artifacts.push(...scanDirectory(outputRoot, filePath, include));
+      artifacts.push(...scanDirectory(artifactsRoot, filePath, include));
       continue;
     }
 
@@ -70,7 +68,7 @@ function scanDirectory(
       continue;
     }
 
-    const relativePath = path.relative(outputRoot, filePath).split(path.sep).map(encodeURIComponent).join("/");
+    const relativePath = path.relative(artifactsRoot, filePath).split(path.sep).map(encodeURIComponent).join("/");
     artifacts.push({
       name: entry,
       type: classifyArtifact(entry),
