@@ -31,8 +31,8 @@ const selectorSchema = z
         text: z.string().optional(),
         scopeRole: z.string().optional(),
         scopeSelector: z.string().optional(),
-        kind: z.enum(["row", "listitem", "dialog", "form", "section", "heading", "custom"]).optional(),
-        relationship: z.enum(["within", "near", "rightOf", "leftOf", "above", "below"]).optional()
+        kind: z.enum(["row", "listitem", "dialog", "form", "section", "formField", "heading", "custom"]).optional(),
+        relationship: z.enum(["within", "near", "nearControl", "rightOf", "leftOf", "above", "below"]).optional()
       })
       .loose()
       .optional()
@@ -46,7 +46,19 @@ const selectorDiagnosticsSchema = z
     chosenPreview: z.string().optional(),
     uniquelyIdentifiesTarget: z.boolean().optional(),
     anchorReducedMatches: z.boolean().optional(),
-    brittleReason: z.string().optional()
+    brittleReason: z.string().optional(),
+    context: z
+      .object({
+        appliedAutomatically: z.boolean(),
+        mode: z.enum(["primary", "fallback", "diagnostic"]),
+        reason: z.string(),
+        directMatchedCount: z.number(),
+        directVisibleCount: z.number(),
+        contextMatchedCount: z.number(),
+        contextVisibleCount: z.number()
+      })
+      .loose()
+      .optional()
   })
   .loose();
 
@@ -111,8 +123,22 @@ const selectorDiagnosticsSummarySchema = z
       .object({
         text: z.string().optional(),
         scopeRole: z.string().optional(),
-        relationship: z.enum(["within", "near", "rightOf", "leftOf", "above", "below"]).optional(),
+        scopeSelector: z.string().optional(),
+        kind: z.enum(["row", "listitem", "dialog", "form", "section", "formField", "heading", "custom"]).optional(),
+        relationship: z.enum(["within", "near", "nearControl", "rightOf", "leftOf", "above", "below"]).optional(),
         resolved: z.boolean()
+      })
+      .loose()
+      .optional(),
+    context: z
+      .object({
+        appliedAutomatically: z.boolean(),
+        mode: z.enum(["primary", "fallback", "diagnostic"]),
+        reason: z.string(),
+        directMatchedCount: z.number(),
+        directVisibleCount: z.number(),
+        contextMatchedCount: z.number(),
+        contextVisibleCount: z.number()
       })
       .loose()
       .optional()

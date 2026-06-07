@@ -689,6 +689,7 @@ function renderStepInspector(action: RecordedAction): HTMLElement {
   appendFact(facts, "Target", summary.targetPreview);
   appendFact(facts, "Chosen", summary.chosenSelectorLabel);
   appendFact(facts, "Anchor", summary.anchorLabel);
+  appendFact(facts, "Context", summary.contextLabel);
   appendFact(facts, "Matches", summary.matchLabel);
   appendFact(facts, "Confidence", summary.confidenceLabel, `confidence-${summary.confidenceLevel}`);
   top.append(thumb, facts);
@@ -1480,7 +1481,7 @@ async function pickAnchorForAction(action: RecordedAction): Promise<void> {
 
   selectedActionId = action.id;
   expandedActionIds = new Set([action.id]);
-  setMessage("Click stable row or list text in the active Zoom tab. Press Esc to cancel.");
+  setMessage("Click stable label, row, dialog, or section text in the active Zoom tab. Press Esc to cancel.");
   const result = await sendMessage({ type: "PICK_ANCHOR", action }) as AnchorPickResult;
   if (result.error || !result.anchor) {
     selectorTestResults = {

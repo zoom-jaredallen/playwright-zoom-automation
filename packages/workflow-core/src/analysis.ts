@@ -178,10 +178,12 @@ export function calculateQualityReport(
   const riskySteps = workflowActions.filter((action) => action.type === "click" && !action.selectors.role?.name && !action.selectors.testId).length;
   const hardcodedValues = workflowActions.filter((action) => (action.value || action.expected || "").length > 0 && !(action.value || action.expected || "").includes("{{")).length;
   const unsupportedBrowserPreflightSteps = workflowActions.filter((action) => action.type === "upload").length;
+  const ambiguousWithoutContext = actionable.filter(needsContext).length;
   const penalties = riskySteps * 7 + hardcodedValues * 3 + unsupportedBrowserPreflightSteps * 8;
   const score = Math.max(0, Math.min(100, Math.round((selectorStability * 0.35) + (assertionCoverage * 0.3) + (evidenceCoverage * 0.2) + 15 - penalties)));
   const warnings = [
     selectorStability < 70 ? "Several steps rely on weak selectors." : undefined,
+    ambiguousWithoutContext > 0 ? "Add context to selectors that match multiple visible elements." : undefined,
     assertionCoverage < 80 ? "Add validations after important submit/save actions." : undefined,
     evidenceCoverage < 25 ? "Add screenshots for evidence and failure diagnosis." : undefined,
     unsupportedBrowserPreflightSteps > 0 ? "Upload steps cannot be tested by the extension preflight runner." : undefined,
@@ -192,10 +194,25 @@ export function calculateQualityReport(
 }
 
 function hasStableSelector(action: RecordedAction): boolean {
+  if (contextNarrowsToOne(action)) {
+    return true;
+  }
   if (action.selectorDiagnostics?.confidence.level === "high" && action.selectorDiagnostics.visibleCount === 1) {
     return true;
   }
   return Boolean(action.selectors.role?.name || action.selectors.label || action.selectors.testId);
+}
+
+function contextNarrowsToOne(action: RecordedAction): boolean {
+  const context = action.selectorDiagnostics?.context;
+  return Boolean(context && context.directVisibleCount > 1 && context.contextVisibleCount === 1);
+}
+
+function needsContext(action: RecordedAction): boolean {
+  const diagnostics = action.selectorDiagnostics;
+  if (!diagnostics) return false;
+  if (contextNarrowsToOne(action)) return false;
+  return (diagnostics.visibleCount ?? 0) > 1 && !action.selectors.anchor?.text;
 }
 
 // ─── Parameter detection (value heuristics) ─────────────────────────────────────

@@ -601,9 +601,12 @@ function selectorDiagnosticsForTarget(element: Element, candidate: RankedSelecto
     anchor: {
       text: candidate?.selector.anchor?.text,
       scopeRole: candidate?.selector.anchor?.scopeRole,
+      scopeSelector: candidate?.selector.anchor?.scopeSelector,
+      kind: candidate?.selector.anchor?.kind,
       relationship: candidate?.selector.anchor?.relationship,
       resolved: Boolean(candidate?.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
-    }
+    },
+    context: candidate?.diagnostics?.context
   };
 }
 
@@ -948,9 +951,12 @@ function selectorDiagnosticsFromRanked(candidate: RankedSelectorCandidate, targe
     anchor: {
       text: candidate.selector.anchor?.text,
       scopeRole: candidate.selector.anchor?.scopeRole,
+      scopeSelector: candidate.selector.anchor?.scopeSelector,
+      kind: candidate.selector.anchor?.kind,
       relationship: candidate.selector.anchor?.relationship,
       resolved: Boolean(candidate.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
-    }
+    },
+    context: candidate.diagnostics?.context
   };
 }
 
@@ -1193,7 +1199,8 @@ function semanticPickTarget(element: Element): Element {
   while (current && depth < 6) {
     if (
       current.matches("button, a, input, textarea, select, [role], [aria-label], [data-testid]") ||
-      /cpzui-(button|select|virtual-filter-select|checkbox|tab)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(current.className ?? ""))
+      /cpzui-(button|select|virtual-filter-select|checkbox|tab)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(current.className ?? "")) ||
+      current.classList.contains("cpzui-form-item__label")
     ) {
       return current;
     }
@@ -1204,6 +1211,9 @@ function semanticPickTarget(element: Element): Element {
 }
 
 function anchorFromPickedElement(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const formFieldAnchor = formFieldAnchorFromPickedElement(element);
+  if (formFieldAnchor) return formFieldAnchor;
+
   const container = element.closest('tr, [role="row"], li, [role="listitem"]');
   if (!container) return undefined;
 
@@ -1211,6 +1221,29 @@ function anchorFromPickedElement(element: Element): NonNullable<SelectorStrategy
   const text = manualAnchorText(element, container);
   if (!text) return undefined;
   return { scopeRole, text, relationship: "within" };
+}
+
+function formFieldAnchorFromPickedElement(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const row = element.closest(".cpzui-form-item__row, [class*='form-item__row']");
+  if (!row) return undefined;
+
+  const text = formFieldLabelText(row);
+  if (!text || text.length > 80) return undefined;
+
+  return {
+    text,
+    scopeSelector: row.classList.contains("cpzui-form-item__row") ? ".cpzui-form-item__row" : "[class*='form-item__row']",
+    relationship: "nearControl",
+    kind: "formField"
+  };
+}
+
+function formFieldLabelText(row: Element): string | undefined {
+  const label = row.querySelector(".cpzui-form-item__label")
+    ?? row.querySelector("[class*='form-item__label']:not([class*='wrapper']):not([class*='content'])")
+    ?? row.querySelector("label")
+    ?? row.querySelector("[aria-label]");
+  return label?.textContent?.replace(/\s+/g, " ").trim();
 }
 
 function manualAnchorText(element: Element, container: Element): string | undefined {
@@ -1266,7 +1299,7 @@ function showPickerInstruction(action: RecordedAction, mode: "target" | "anchor"
   const instruction = document.createElement("div");
   instruction.id = "__zoom_recorder_picker_instruction";
   instruction.textContent = mode === "anchor"
-    ? "Click stable row/list text to anchor this step. Press Esc to cancel."
+    ? "Click stable label, row, dialog, or section text to add context. Press Esc to cancel."
     : `Click the ${pickerNoun(action.type)} to use for this step. Press Esc to cancel.`;
   instruction.style.cssText = [
     "position: fixed",

@@ -21,7 +21,7 @@ export type ActionType =
   | "if";
 
 /** How an anchor relates the scope to the target element. "within" is the common case. */
-export type AnchorRelationship = "within" | "near" | "rightOf" | "leftOf" | "above" | "below";
+export type AnchorRelationship = "within" | "near" | "nearControl" | "rightOf" | "leftOf" | "above" | "below";
 
 export interface SelectorStrategy {
   role?: {
@@ -54,7 +54,7 @@ export interface SelectorStrategy {
     /** Optional CSS selector for non-ARIA containers such as dialogs, forms, or sections. */
     scopeSelector?: string;
     /** Human-readable anchor category used by repair UIs and diagnostics. */
-    kind?: "row" | "listitem" | "dialog" | "form" | "section" | "heading" | "custom";
+    kind?: "row" | "listitem" | "dialog" | "form" | "section" | "formField" | "heading" | "custom";
     relationship?: AnchorRelationship;
   };
 }
@@ -78,6 +78,7 @@ export interface SelectorDiagnostics {
   uniquelyIdentifiesTarget?: boolean;
   anchorReducedMatches?: boolean;
   brittleReason?: string;
+  context?: SelectorContextDiagnostics;
 }
 
 export interface StepCapture {
@@ -110,9 +111,22 @@ export interface SelectorDiagnosticsSummary {
   anchor?: {
     text?: string;
     scopeRole?: string;
+    scopeSelector?: string;
+    kind?: "row" | "listitem" | "dialog" | "form" | "section" | "formField" | "heading" | "custom";
     relationship?: AnchorRelationship;
     resolved: boolean;
   };
+  context?: SelectorContextDiagnostics;
+}
+
+export interface SelectorContextDiagnostics {
+  appliedAutomatically: boolean;
+  mode: "primary" | "fallback" | "diagnostic";
+  reason: string;
+  directMatchedCount: number;
+  directVisibleCount: number;
+  contextMatchedCount: number;
+  contextVisibleCount: number;
 }
 
 export interface SelectorRepairSuggestion {

@@ -167,6 +167,59 @@ describe("analysis — quality report (regression-locked)", () => {
     expect(report.assertionCoverage).toBe(100);
     expect(report.warnings).not.toContain("Several steps rely on weak selectors.");
   });
+
+  it("warns when live diagnostics show ambiguous selectors without context", () => {
+    const report = calculateQualityReport([
+      action("ambiguous", {
+        type: "click",
+        selectors: { css: ".cpzui-button" },
+        selectorDiagnostics: {
+          matchedCount: 4,
+          visibleCount: 4,
+          chosenCandidateId: "css-button",
+          confidence: { score: 35, level: "low", reasons: ["Ambiguous: 4 visible matches"] },
+          targetPreview: "<button Save>"
+        }
+      })
+    ], []);
+
+    expect(report.warnings).toContain("Add context to selectors that match multiple visible elements.");
+  });
+
+  it("does not warn when automatic context narrows an ambiguous selector", () => {
+    const report = calculateQualityReport([
+      action("contextual", {
+        type: "click",
+        selectors: {
+          css: ".cpzui-button",
+          anchor: {
+            text: "State/Province/Territory",
+            scopeSelector: ".cpzui-form-item__row",
+            relationship: "nearControl",
+            kind: "formField"
+          }
+        },
+        selectorDiagnostics: {
+          matchedCount: 1,
+          visibleCount: 1,
+          chosenCandidateId: "css-button",
+          confidence: { score: 82, level: "high", reasons: ["Context narrowed matches"] },
+          targetPreview: "<button Save>",
+          context: {
+            appliedAutomatically: true,
+            mode: "primary",
+            reason: "Context narrowed 4 visible matches to 1",
+            directMatchedCount: 4,
+            directVisibleCount: 4,
+            contextMatchedCount: 1,
+            contextVisibleCount: 1
+          }
+        }
+      })
+    ], []);
+
+    expect(report.warnings).not.toContain("Add context to selectors that match multiple visible elements.");
+  });
 });
 
 describe("analysis — assertion generation", () => {
@@ -291,6 +344,40 @@ describe("selectors — candidate model", () => {
     expect(roleScore.score).toBeGreaterThan(cssScore.score);
     expect(roleScore.level).toBe("high");
     expect(cssScore.level).toBe("low");
+  });
+
+  it("explains when selector confidence comes from automatic context narrowing", () => {
+    const score = scoreSelectorCandidate({
+      id: "css-context",
+      kind: "css",
+      selector: {
+        css: ".cpzui-input__inner",
+        anchor: {
+          text: "State/Province/Territory",
+          scopeSelector: ".cpzui-form-item__row",
+          relationship: "nearControl",
+          kind: "formField"
+        }
+      },
+      diagnostics: {
+        matchedCount: 1,
+        visibleCount: 1,
+        uniquelyIdentifiesTarget: true,
+        anchorReducedMatches: true,
+        context: {
+          appliedAutomatically: true,
+          mode: "primary",
+          reason: "Context narrowed 4 visible matches to 1",
+          directMatchedCount: 4,
+          directVisibleCount: 4,
+          contextMatchedCount: 1,
+          contextVisibleCount: 1
+        }
+      }
+    });
+
+    expect(score.level).toBe("high");
+    expect(score.reasons).toContain("Context narrowed 4 visible matches to 1");
   });
 
   it("ranks selector candidates by confidence and preserves fallback order for ties", () => {

@@ -14,6 +14,13 @@ export function scoreSelectorCandidate(candidate: SelectorCandidate): SelectorCa
     score += diagnostics?.anchorReducedMatches ? 18 : 10;
     reasons.push(diagnostics?.anchorReducedMatches ? "Anchor narrows matches" : "Anchored selector");
   }
+  if (diagnostics?.context?.mode === "primary" && diagnostics.context.contextVisibleCount > 0) {
+    score += diagnostics.context.contextVisibleCount === 1 ? 18 : 10;
+    reasons.push(diagnostics.context.reason);
+  } else if (diagnostics?.context?.mode === "fallback") {
+    score += 4;
+    reasons.push(diagnostics.context.reason);
+  }
   if (hasAriaState(selector)) {
     score += 8;
     reasons.push("ARIA-state constrained");

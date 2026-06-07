@@ -3,6 +3,7 @@ import {
   selectorCandidatesFromStrategy,
   type RankedSelectorCandidate,
   type SelectorCandidate,
+  type SelectorContextDiagnostics,
   type SelectorStrategy
 } from "@zoom-automation/workflow-core";
 import { computeAnchor, extractSelectors } from "./selectors.js";
@@ -26,6 +27,7 @@ export function testSelectorCandidatesInDocument(
   const tested = candidates.map((candidate) => {
     const matches = resolveSelectorCandidate(candidate.selector, root);
     const visible = matches.filter(isVisible);
+    const context = buildContextDiagnostics(candidate.selector, root, matches, visible);
     return {
       ...candidate,
       diagnostics: {
@@ -33,7 +35,10 @@ export function testSelectorCandidatesInDocument(
         matchedCount: matches.length,
         visibleCount: visible.length,
         uniquelyIdentifiesTarget: target ? visible.some((element) => isSameTarget(element, target)) && visible.length === 1 : visible.length === 1,
-        anchorReducedMatches: Boolean(candidate.selector.anchor?.text && matches.length <= 1),
+        anchorReducedMatches: context
+          ? context.directVisibleCount > context.contextVisibleCount && context.contextVisibleCount > 0
+          : Boolean(candidate.selector.anchor?.text && matches.length <= 1),
+        context,
         chosenPreview: visible[0] ? previewElement(visible[0]) : undefined
       }
     };
@@ -66,6 +71,44 @@ function resolveAnchorRoot(selector: SelectorStrategy, root: Document | Element)
     : findByRole(root, anchor.scopeRole ?? "row", undefined, false);
   const text = anchor.text.toLowerCase();
   return candidates.find((candidate) => visibleText(candidate).toLowerCase().includes(text));
+}
+
+function buildContextDiagnostics(
+  selector: SelectorStrategy,
+  root: Document | Element,
+  contextMatches: Element[],
+  contextVisible: Element[]
+): SelectorContextDiagnostics | undefined {
+  if (!selector.anchor?.text) return undefined;
+
+  const directSelector: SelectorStrategy = { ...selector, anchor: undefined };
+  const directMatches = resolveSelectorCandidate(directSelector, root);
+  const directVisible = directMatches.filter(isVisible);
+  const directVisibleCount = directVisible.length;
+  const contextVisibleCount = contextVisible.length;
+
+  let mode: SelectorContextDiagnostics["mode"] = "diagnostic";
+  let reason = "Context recorded for diagnostics";
+  if (directVisibleCount > 1 && contextVisibleCount === 1) {
+    mode = "primary";
+    reason = `Context narrowed ${directVisibleCount} visible matches to 1`;
+  } else if (directVisibleCount === 1 && contextVisibleCount === 1) {
+    mode = "fallback";
+    reason = "Direct selector is unique; context kept as fallback";
+  } else if (directVisibleCount > contextVisibleCount && contextVisibleCount > 0) {
+    mode = "primary";
+    reason = `Context narrowed ${directVisibleCount} visible matches to ${contextVisibleCount}`;
+  }
+
+  return {
+    appliedAutomatically: true,
+    mode,
+    reason,
+    directMatchedCount: directMatches.length,
+    directVisibleCount,
+    contextMatchedCount: contextMatches.length,
+    contextVisibleCount
+  };
 }
 
 function findByRole(root: Document | Element, role: string, name?: string, exact?: boolean): Element[] {

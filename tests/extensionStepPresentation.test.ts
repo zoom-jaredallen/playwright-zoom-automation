@@ -158,4 +158,21 @@ describe("extension step presentation", () => {
     expect(summary.chosenSelectorLabel).toBe("Button Save");
     expect(summary.fallbackCount).toBe(1);
   });
+
+  it("describes form-field context anchors in the step inspector", () => {
+    const summary = buildStepInspectorSummary(action("state", {
+      type: "fill",
+      selectors: {
+        role: { role: "textbox", name: "State/Province/Territory" },
+        anchor: {
+          text: "State/Province/Territory",
+          scopeSelector: ".cpzui-form-item__row",
+          relationship: "nearControl",
+          kind: "formField"
+        }
+      }
+    }));
+
+    expect(summary.anchorLabel).toBe('near control in form field "State/Province/Territory"');
+  });
 });

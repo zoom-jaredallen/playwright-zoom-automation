@@ -9,6 +9,7 @@ export interface StepInspectorSummary {
   };
   targetPreview: string;
   anchorLabel: string;
+  contextLabel: string;
   matchLabel: string;
   confidenceLabel: string;
   confidenceLevel: "high" | "medium" | "low";
@@ -27,12 +28,20 @@ export function buildStepInspectorSummary(action: RecordedAction): StepInspector
     thumbnail: action.capture?.thumbnail,
     targetPreview: action.selectorDiagnostics?.targetPreview ?? action.capture?.targetBox ? action.selectorDiagnostics?.targetPreview ?? "Captured element" : "No captured element",
     anchorLabel: formatAnchor(action),
+    contextLabel: formatContext(action),
     matchLabel: formatMatches(action.selectorDiagnostics?.matchedCount, action.selectorDiagnostics?.visibleCount),
     confidenceLabel: `${confidence.score}/100 ${confidence.level}`,
     confidenceLevel: confidence.level,
     chosenSelectorLabel: chosenCandidate?.label ?? formatChosenSelector(action),
     fallbackCount
   };
+}
+
+function formatContext(action: RecordedAction): string {
+  const context = action.selectorDiagnostics?.context;
+  if (!context) return "No automatic context decision";
+  const prefix = context.appliedAutomatically ? "Context applied automatically" : "Context selected manually";
+  return `${prefix}: ${context.reason}`;
 }
 
 export function fallbackCandidates(candidates: SelectorCandidate[], chosenCandidateId?: string): SelectorCandidate[] {
@@ -42,6 +51,8 @@ export function fallbackCandidates(candidates: SelectorCandidate[], chosenCandid
 function formatAnchor(action: RecordedAction): string {
   const anchor = action.selectorDiagnostics?.anchor ?? action.selectors.anchor;
   if (!anchor?.text) return "No anchor";
+  if (anchor.kind === "formField") return `near control in form field "${anchor.text}"`;
+  if (anchor.relationship === "nearControl") return `near control near "${anchor.text}"`;
   const relationship = anchor.relationship ?? "within";
   const scope = anchor.scopeRole ?? "row";
   return `${relationship} ${scope} containing "${anchor.text}"`;

@@ -484,6 +484,9 @@ export function getFieldContext(element: Element): {
  * ambiguity (single row) or no distinctive text.
  */
 export function computeAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const formFieldAnchor = computeFormFieldAnchor(element);
+  if (formFieldAnchor) return formFieldAnchor;
+
   const dialogAnchor = computeDialogAnchor(element);
   if (dialogAnchor) return dialogAnchor;
 
@@ -499,6 +502,33 @@ export function computeAnchor(element: Element): NonNullable<SelectorStrategy["a
   const text = pickAnchorText(container, element);
   if (!text) return undefined;
   return { scopeRole, text, relationship: "within", kind: scopeRole === "row" ? "row" : "listitem" };
+}
+
+function computeFormFieldAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
+  const row = element.closest(".cpzui-form-item__row, [class*='form-item__row']");
+  if (!row) return undefined;
+
+  const text = formFieldLabelText(row);
+  if (!text || text.length > 80) return undefined;
+
+  const scopeSelector = row.classList.contains("cpzui-form-item__row")
+    ? ".cpzui-form-item__row"
+    : "[class*='form-item__row']";
+
+  return {
+    text,
+    scopeSelector,
+    relationship: "nearControl",
+    kind: "formField"
+  };
+}
+
+function formFieldLabelText(row: Element): string | undefined {
+  const label = row.querySelector(".cpzui-form-item__label")
+    ?? row.querySelector("[class*='form-item__label']:not([class*='wrapper']):not([class*='content'])")
+    ?? row.querySelector("label")
+    ?? row.querySelector("[aria-label]");
+  return label?.textContent?.replace(/\s+/g, " ").trim();
 }
 
 function computeDialogAnchor(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
