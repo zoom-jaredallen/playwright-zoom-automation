@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { AddressProfileView, RunReadinessView, WorkflowView } from "../api.js";
 import { CheckIcon, ChevronRightIcon } from "./Icons.js";
 import { RunReadinessPanel } from "./RunReadinessPanel.js";
+import { WorkflowParameterForm } from "./WorkflowParameterForm.js";
 
 interface ConfigureStepProps {
   workflows: WorkflowView[];
@@ -17,6 +18,7 @@ interface ConfigureStepProps {
   readiness?: RunReadinessView;
   readinessLoading?: boolean;
   readinessError?: string;
+  workflowParameterValues: Record<string, string>;
   onToggleWorkflow(id: string): void;
   onReorderPipeline(order: string[]): void;
   onProfileChange(id: string): void;
@@ -24,6 +26,7 @@ interface ConfigureStepProps {
   onHeadlessChange(value: boolean): void;
   onConcurrencyChange(value: number): void;
   onRetryAttemptsChange(value: number): void;
+  onWorkflowParameterValuesChange(values: Record<string, string>): void;
   onImportWorkflow(): void;
   onBack(): void;
   onNext(): void;
@@ -34,9 +37,9 @@ interface ConfigureStepProps {
 export function ConfigureStep({
   workflows, selectedWorkflowIds, pipelineOrder, profiles, selectedProfileId,
   dryRun, headless, concurrency, retryAttempts, accountCount,
-  readiness, readinessLoading, readinessError,
+  readiness, readinessLoading, readinessError, workflowParameterValues,
   onToggleWorkflow, onReorderPipeline, onProfileChange,
-  onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange,
+  onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange, onWorkflowParameterValuesChange,
   onImportWorkflow, onBack, onNext, onAccountValuesChange
 }: ConfigureStepProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -80,6 +83,9 @@ export function ConfigureStep({
   };
 
   const profile = profiles.find((p) => p.id === selectedProfileId);
+  const selectedParameters = workflows
+    .filter((workflow) => pipelineOrder.includes(workflow.id))
+    .flatMap((workflow) => workflow.parameters ?? []);
 
   return (
     <div className="configure-step">
@@ -223,6 +229,12 @@ export function ConfigureStep({
             {csvError ? <small className="import-error">{csvError}</small> : null}
           </div>
         </section>
+
+        <WorkflowParameterForm
+          parameters={selectedParameters}
+          values={workflowParameterValues}
+          onChange={onWorkflowParameterValuesChange}
+        />
 
         <RunReadinessPanel readiness={readiness} loading={readinessLoading} error={readinessError} />
       </div>

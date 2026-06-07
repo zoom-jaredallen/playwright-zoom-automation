@@ -34,7 +34,7 @@ export function validateWorkflowParameterValues(
   return { valid: errors.length === 0, errors };
 }
 
-export function collectWorkflowParameters(workflows: Array<Pick<RecordedWorkflow, "parameters">>): WorkflowParameter[] {
+export function collectWorkflowParameters(workflows: Array<{ parameters?: WorkflowParameter[] }>): WorkflowParameter[] {
   const byName = new Map<string, WorkflowParameter>();
   for (const workflow of workflows) {
     for (const parameter of workflow.parameters ?? []) {

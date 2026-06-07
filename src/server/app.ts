@@ -19,6 +19,7 @@ import { isAllowedWebhookUrl, WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { evaluateRunReadiness } from "./services/runReadinessService.js";
 import { createAccountCohortStore } from "./services/accountCohortStore.js";
+import { collectWorkflowParameters } from "./services/workflowParameterService.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
 import { TokenManager } from "../zoom/oauth.js";
@@ -215,6 +216,9 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       };
       const config = loadConfig({ ...process.env, ADDRESS_PROFILE: body.addressProfile ?? process.env.ADDRESS_PROFILE });
       const enabledWorkflowIds = new Set(workflowRegistry.list().filter((workflow) => workflow.enabled).map((workflow) => workflow.id));
+      const selectedWorkflowParameters = collectWorkflowParameters(
+        workflowRegistry.list().filter((workflow) => (body.workflowIds ?? []).includes(workflow.id))
+      );
       const result = evaluateRunReadiness({
         selectedAccounts: body.accounts ?? [],
         workflowIds: body.workflowIds ?? [],
@@ -225,7 +229,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
           { label: "ID document", path: config.documents.idPath, required: config.documents.required },
           { label: "Business verification", path: config.documents.businessVerificationPath, required: config.documents.required }
         ],
-        parameters: [],
+        parameters: selectedWorkflowParameters,
         parameterValues: body.parameterValues ?? {}
       });
       response.json({ readiness: result });

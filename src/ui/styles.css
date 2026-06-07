@@ -3910,3 +3910,14 @@ tr:hover .copy-btn {
 .cohort-load small {
   color: var(--text-text-subtle-neutral);
 }
+
+.workflow-parameter-form {
+  display: grid;
+  gap: 10px;
+}
+
+.parameter-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}

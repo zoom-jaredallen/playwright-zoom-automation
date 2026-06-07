@@ -26,6 +26,7 @@ export interface WorkflowView {
   description: string;
   enabled: boolean;
   category: WorkflowCategory;
+  parameters?: WorkflowParameter[];
 }
 
 export interface AccountCohortView {
@@ -110,6 +111,7 @@ import type {
   RecordedAction,
   RecordedWorkflow,
   WorkflowCategory,
+  WorkflowParameter,
   WorkflowQualityReport
 } from "@zoom-automation/workflow-core";
 

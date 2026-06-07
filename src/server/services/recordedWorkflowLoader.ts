@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AutomationFlow, FlowInput, FlowResult } from "../../automation/types.js";
 import type { WorkflowContext, WorkflowDefinition } from "../../workflows/index.js";
-import type { WorkflowCategory } from "@zoom-automation/workflow-core";
+import type { WorkflowCategory, WorkflowParameter } from "@zoom-automation/workflow-core";
 
 const RECORDED_BASE = path.resolve("src/workflows/recorded");
 
@@ -39,13 +39,15 @@ export function listRecordedDefinitions(): WorkflowDefinition[] {
       if (!statSync(path.join(RECORDED_BASE, id)).isDirectory()) continue;
       const schema = JSON.parse(readFileSync(path.join(RECORDED_BASE, id, "schema.json"), "utf8")) as {
         meta?: { name?: string; description?: string; category?: WorkflowCategory };
+        parameters?: WorkflowParameter[];
       };
       definitions.push({
         id,
         name: schema.meta?.name || id,
         description: schema.meta?.description ?? "Recorded workflow",
         enabled: true,
-        category: schema.meta?.category ?? "custom"
+        category: schema.meta?.category ?? "custom",
+        parameters: schema.parameters ?? []
       });
     } catch {
       // Skip directories without a readable schema.json.

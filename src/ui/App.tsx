@@ -78,6 +78,7 @@ function AppContent() {
   const [concurrency, setConcurrency] = useState(1);
   const [retryAttempts, setRetryAttempts] = useState(2);
   const [accountValues, setAccountValues] = useState<Record<string, Record<string, string>> | undefined>();
+  const [workflowParameterValues, setWorkflowParameterValues] = useState<Record<string, string>>({});
   const [readiness, setReadiness] = useState<RunReadinessView | undefined>();
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [readinessError, setReadinessError] = useState<string | undefined>();
@@ -152,7 +153,7 @@ function AppContent() {
       workflowIds: pipelineOrder,
       addressProfile: selectedProfileId,
       dryRun,
-      parameterValues: {}
+      parameterValues: workflowParameterValues
     })
       .then((response) => setReadiness(response.readiness))
       .catch((error) => {
@@ -160,7 +161,7 @@ function AppContent() {
         setReadinessError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setReadinessLoading(false));
-  }, [wizardStep, selectedAccounts, pipelineOrder, selectedProfileId, dryRun]);
+  }, [wizardStep, selectedAccounts, pipelineOrder, selectedProfileId, dryRun, workflowParameterValues]);
 
   const refreshRecordedWorkflows = useCallback(() => {
     setRecordedLoading(true);
@@ -271,6 +272,7 @@ function AppContent() {
   const executeStartJob = async () => {
     setConfirmOpen(false);
     setJobError(undefined);
+    const mergedAccountValues = mergeGlobalParameterValues(selectedAccounts, workflowParameterValues, accountValues);
     try {
       const response = await createJob({
         accounts: selectedAccounts,
@@ -283,7 +285,7 @@ function AppContent() {
         retryAttempts,
         retryBaseDelayMs: 5000,
         accountDelayMs: 0,
-        accountValues
+        accountValues: mergedAccountValues
       });
       setJob(response.job);
       setWizardStep("run");
@@ -560,6 +562,7 @@ function AppContent() {
                 readiness={readiness}
                 readinessLoading={readinessLoading}
                 readinessError={readinessError}
+                workflowParameterValues={workflowParameterValues}
                 onToggleWorkflow={handleToggleWorkflow}
                 onReorderPipeline={setPipelineOrder}
                 onProfileChange={setSelectedProfileId}
@@ -567,6 +570,7 @@ function AppContent() {
                 onHeadlessChange={setHeadless}
                 onConcurrencyChange={setConcurrency}
                 onRetryAttemptsChange={setRetryAttempts}
+                onWorkflowParameterValuesChange={setWorkflowParameterValues}
                 onImportWorkflow={() => setImportOpen(true)}
                 onAccountValuesChange={setAccountValues}
                 onBack={() => setWizardStep("accounts")}
@@ -593,4 +597,21 @@ function AppContent() {
 function statusLabel(status: string): string {
   const labels: Record<string, string> = { queued: "Queued", running: "Running", completed: "Done", failed: "Failed", cancelled: "Cancelled" };
   return labels[status] ?? status;
+}
+
+function mergeGlobalParameterValues(
+  accounts: SubAccountView[],
+  globalValues: Record<string, string>,
+  perAccountValues: Record<string, Record<string, string>> | undefined
+): Record<string, Record<string, string>> | undefined {
+  const usableGlobals = Object.fromEntries(Object.entries(globalValues).filter(([, value]) => value.trim().length > 0));
+  if (Object.keys(usableGlobals).length === 0 && !perAccountValues) return undefined;
+  const merged: Record<string, Record<string, string>> = {};
+  for (const account of accounts) {
+    merged[account.id] = {
+      ...usableGlobals,
+      ...(perAccountValues?.[account.id] ?? {})
+    };
+  }
+  return merged;
 }
