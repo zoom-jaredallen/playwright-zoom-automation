@@ -428,6 +428,17 @@ describe("compileWorkflow", () => {
     expect(flow).toContain('"relationship":"near"');
   });
 
+  it("writes selector diagnostics artifacts on generated flow failure", () => {
+    const workflow = createTestWorkflow();
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain('import { mkdir, writeFile } from "node:fs/promises";');
+    expect(flow).toContain("private async writeSelectorDiagnostics");
+    expect(flow).toContain("selector-diagnostics.json");
+    expect(flow).toContain("await this.writeSelectorDiagnostics(artifactBase, error)");
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

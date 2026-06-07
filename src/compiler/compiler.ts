@@ -65,7 +65,7 @@ function generateFlowFile(id: string, workflow: RecordedWorkflow): string {
   const actionCode = workflow.actions.map((action, index) => generateActionCode(action, index, workflow)).join("\n\n");
   const assertionImports = workflow.assertions.length > 0 ? "\n    // Assertions are checked inline after their triggering actions" : "";
 
-  return `import { mkdir } from "node:fs/promises";
+  return `import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import type { AutomationFlow, FlowInput, FlowResult } from "../../../automation/types.js";
@@ -126,6 +126,7 @@ ${actionCode}
     } catch (error) {
       await page.screenshot({ path: \`\${artifactBase}-failure.png\`, fullPage: true }).catch(() => undefined);
       await context.tracing.stop({ path: \`\${artifactBase}-trace.zip\` }).catch(() => undefined);
+      await this.writeSelectorDiagnostics(artifactBase, error).catch(() => undefined);
       throw error;
     } finally {
       await context.close();

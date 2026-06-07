@@ -199,6 +199,15 @@ export function generateHealingCode(): string {
   return `
   private healingReport: Array<{ actionDescription: string; originalStrategy: string; healedStrategy: string; confidence: number }> = [];
 
+  private async writeSelectorDiagnostics(artifactBase: string, error?: unknown): Promise<void> {
+    const payload = {
+      timestamp: new Date().toISOString(),
+      error: error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error ?? "") },
+      healingReport: this.healingReport
+    };
+    await writeFile(\`\${artifactBase}-selector-diagnostics.json\`, JSON.stringify(payload, null, 2), "utf8");
+  }
+
   /** Feature 1: resolve element queries against an iframe when a frame selector was recorded. */
   private scope(page: Page, frameSelector?: string): import("playwright").Page | import("playwright").FrameLocator {
     return frameSelector ? page.frameLocator(frameSelector) : page;
