@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchJobArtifacts, type ArtifactView, type JobView, type SubAccountView } from "../api.js";
+import { RunAccountTimeline } from "./RunAccountTimeline.js";
 
 type RunAccountState = JobView["accounts"][number];
 
@@ -168,21 +169,9 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
                   </div>
 
                   <div className="run-step-log-header">
-                    <strong>Step logs</strong>
+                    <strong>Step timeline</strong>
                   </div>
-                  {accountState.logs && accountState.logs.length > 0 ? (
-                    accountState.logs.map((log, i) => (
-                      <div key={i} className="run-log-entry">
-                        <span className="run-log-time">
-                          {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                        </span>
-                        <span className="run-log-step">{log.step}</span>
-                        {log.detail ? <span className="run-log-detail">{log.detail}</span> : null}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="run-log-empty">No step logs recorded yet.</div>
-                  )}
+                  <RunAccountTimeline logs={accountState.logs} />
                 </div>
               ) : null}
             </div>

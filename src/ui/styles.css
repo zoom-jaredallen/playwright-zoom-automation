@@ -3721,6 +3721,94 @@ tr:hover .copy-btn {
   font-weight: 600;
 }
 
+.run-timeline {
+  display: grid;
+  gap: 10px;
+}
+
+.run-timeline-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.run-timeline-stat {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 6px;
+  background: var(--fill-fill-neutral);
+}
+
+.run-timeline-stat span {
+  color: var(--text-text-subtle-neutral);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.run-timeline-stat strong {
+  overflow: hidden;
+  color: var(--text-text-neutral);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-timeline-list {
+  display: grid;
+  gap: 5px;
+}
+
+.run-timeline-entry {
+  display: grid;
+  grid-template-columns: 66px 12px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+}
+
+.run-timeline-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--border-border-neutral);
+}
+
+.run-timeline-entry.success .run-timeline-dot { background: var(--fill-fill-success); }
+.run-timeline-entry.warning .run-timeline-dot { background: var(--fill-fill-warning); }
+.run-timeline-entry.error .run-timeline-dot { background: var(--fill-fill-error); }
+
+.run-timeline-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.run-timeline-copy strong {
+  overflow: hidden;
+  color: var(--text-text-neutral);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-timeline-copy small {
+  color: var(--text-text-subtle-neutral);
+}
+
+.run-timeline-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-timeline-artifacts a {
+  color: var(--text-text-primary);
+  font-size: 11px;
+}
+
 .readiness-panel {
   align-self: start;
 }

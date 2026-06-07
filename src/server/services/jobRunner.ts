@@ -185,18 +185,38 @@ export function createJobProgressAdapter(store: JobStore, jobId: string, workflo
     },
     markRunning: async (account) => {
       store.markAccount(jobId, account.id, { status: "running", workflowId });
-      store.logAccountStep(jobId, account.id, "Starting workflow", workflowId);
+      store.logAccountStep(jobId, account.id, "Starting workflow", workflowId, {
+        workflowId,
+        stepId: "workflow-start",
+        stepName: "Starting workflow",
+        level: "info"
+      });
     },
     markCompleted: async (account, message) => {
-      store.logAccountStep(jobId, account.id, "Completed", message);
+      store.logAccountStep(jobId, account.id, "Completed", message, {
+        workflowId,
+        stepId: "workflow-complete",
+        stepName: "Completed",
+        level: "success"
+      });
       store.markAccount(jobId, account.id, { status: "completed", workflowId, message });
     },
     markSkipped: async (account, message) => {
-      store.logAccountStep(jobId, account.id, "Skipped", message);
+      store.logAccountStep(jobId, account.id, "Skipped", message, {
+        workflowId,
+        stepId: "workflow-skipped",
+        stepName: "Skipped",
+        level: "warning"
+      });
       store.markAccount(jobId, account.id, { status: "skipped", workflowId, message });
     },
     markFailed: async (account, error) => {
-      store.logAccountStep(jobId, account.id, "Failed", error.message);
+      store.logAccountStep(jobId, account.id, "Failed", error.message, {
+        workflowId,
+        stepId: "workflow-failed",
+        stepName: "Failed",
+        level: "error"
+      });
       store.markAccount(jobId, account.id, { status: "failed", workflowId, error: error.message });
     }
   };
@@ -223,21 +243,26 @@ function createStepTrackingLogger(
       baseLogger.info(message, meta);
       const activeAccountId = activeAccount.getStore();
       if (activeAccountId && isUserFacingStep(message)) {
-        try { store.logAccountStep(jobId, activeAccountId, message); } catch { /* ignore */ }
+        try {
+          store.logAccountStep(jobId, activeAccountId, message, undefined, {
+            stepName: message,
+            level: "info"
+          });
+        } catch { /* ignore */ }
       }
     },
     warn(message: string, meta?: Record<string, unknown>) {
       baseLogger.warn(message, meta);
       const activeAccountId = activeAccount.getStore();
       if (activeAccountId) {
-        try { store.logAccountStep(jobId, activeAccountId, `⚠ ${message}`); } catch { /* ignore */ }
+        try { store.logAccountStep(jobId, activeAccountId, `Warning: ${message}`, undefined, { stepName: message, level: "warning" }); } catch { /* ignore */ }
       }
     },
     error(message: string, meta?: Record<string, unknown>) {
       baseLogger.error(message, meta);
       const activeAccountId = activeAccount.getStore();
       if (activeAccountId) {
-        try { store.logAccountStep(jobId, activeAccountId, `✗ ${message}`); } catch { /* ignore */ }
+        try { store.logAccountStep(jobId, activeAccountId, `Error: ${message}`, undefined, { stepName: message, level: "error" }); } catch { /* ignore */ }
       }
     },
     child(meta: Record<string, unknown>) {

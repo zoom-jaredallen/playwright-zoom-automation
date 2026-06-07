@@ -49,6 +49,11 @@ export interface JobView {
       timestamp: string;
       step: string;
       detail?: string;
+      workflowId?: string;
+      stepId?: string;
+      stepName?: string;
+      level?: "info" | "success" | "warning" | "error";
+      artifactRefs?: Array<{ type: "trace" | "screenshot" | "details" | "log" | "other"; url: string; label?: string }>;
     }>;
   }>;
   summary: {
