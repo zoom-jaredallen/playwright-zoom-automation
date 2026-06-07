@@ -10,6 +10,7 @@ import {
   fetchRecordedWorkflows,
   fetchWorkflows,
   queryAccounts,
+  retryJob,
   saveRecordedWorkflow,
   subscribeToJob,
   type AccountQueryFilters,
@@ -269,14 +270,31 @@ function AppContent() {
     }
   };
 
-  const handleRetryFailed = (failedJob: JobView) => {
-    const failedAccountIds = failedJob.accounts
-      .filter((a) => a.status === "failed")
+  const handleRetryJob = async (sourceJob: JobView, statuses: Array<"failed" | "skipped">) => {
+    const retryAccountIds = sourceJob.accounts
+      .filter((a) => statuses.includes(a.status as "failed" | "skipped"))
       .map((a) => a.accountId);
-    setSelectedIds(new Set(failedAccountIds));
-    setWizardStep("accounts");
-    setActiveView("run");
-    addToast("info", `${failedAccountIds.length} failed accounts selected for retry`);
+    try {
+      const response = await retryJob({
+        jobId: sourceJob.id,
+        accounts,
+        statuses,
+        dryRun: sourceJob.input.dryRun,
+        headless,
+        concurrency,
+        retryAttempts,
+        retryBaseDelayMs: 5000,
+        accountDelayMs: 0,
+        addressProfile: sourceJob.input.addressProfile
+      });
+      setSelectedIds(new Set(retryAccountIds));
+      setJob(response.job);
+      setWizardStep("run");
+      setActiveView("run");
+      addToast("info", `Retry started for ${retryAccountIds.length} account${retryAccountIds.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      addToast("error", `Retry failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const handleOpenRecordedWorkflow = async (workflowId: string) => {
@@ -390,7 +408,7 @@ function AppContent() {
       ) : null}
 
       {activeView === "history" ? (
-        <JobHistoryPanel jobs={jobHistory} onRetryFailed={handleRetryFailed} onRefresh={refreshHistory} />
+        <JobHistoryPanel jobs={jobHistory} onRetry={handleRetryJob} onRefresh={refreshHistory} />
       ) : activeView === "editor" ? (
         selectedRecordedWorkflow ? (
           <WorkflowEditor

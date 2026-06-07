@@ -203,6 +203,25 @@ export async function cancelJob(jobId: string): Promise<{ job: JobView }> {
   return requestJson(`/api/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+export async function retryJob(input: {
+  jobId: string;
+  accounts: SubAccountView[];
+  statuses: Array<"failed" | "skipped">;
+  dryRun?: boolean;
+  headless?: boolean;
+  concurrency?: number;
+  retryAttempts?: number;
+  retryBaseDelayMs?: number;
+  accountDelayMs?: number;
+  addressProfile?: string;
+}): Promise<{ job: JobView }> {
+  const { jobId, ...body } = input;
+  return requestJson(`/api/jobs/${jobId}/retry`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+}
+
 export async function fetchJobArtifacts(jobId: string, accountId?: string): Promise<{ artifacts: ArtifactView[] }> {
   const params = new URLSearchParams();
   if (accountId) params.set("accountId", accountId);

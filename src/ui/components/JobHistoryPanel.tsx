@@ -4,11 +4,11 @@ import { RefreshIcon } from "./Icons.js";
 
 interface JobHistoryPanelProps {
   jobs: JobView[];
-  onRetryFailed(job: JobView): void;
+  onRetry(job: JobView, statuses: Array<"failed" | "skipped">): void;
   onRefresh(): void;
 }
 
-export function JobHistoryPanel({ jobs, onRetryFailed, onRefresh }: JobHistoryPanelProps) {
+export function JobHistoryPanel({ jobs, onRetry, onRefresh }: JobHistoryPanelProps) {
   const [expandedId, setExpandedId] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
@@ -47,6 +47,7 @@ export function JobHistoryPanel({ jobs, onRetryFailed, onRefresh }: JobHistoryPa
           {filteredJobs.map((job) => {
             const expanded = expandedId === job.id;
             const failedCount = job.summary.failed;
+            const skippedCount = job.summary.skipped;
             return (
               <div key={job.id} className="history-item">
                 <button
@@ -78,8 +79,13 @@ export function JobHistoryPanel({ jobs, onRetryFailed, onRefresh }: JobHistoryPa
                     <div className="history-detail-header">
                       <span>Job ID: {job.id.slice(0, 8)}…</span>
                       {failedCount > 0 ? (
-                        <button className="tertiary-button" onClick={() => onRetryFailed(job)}>
+                        <button className="tertiary-button" onClick={() => onRetry(job, ["failed"])}>
                           Retry {failedCount} failed
+                        </button>
+                      ) : null}
+                      {skippedCount > 0 ? (
+                        <button className="tertiary-button" onClick={() => onRetry(job, ["skipped"])}>
+                          Retry {skippedCount} skipped
                         </button>
                       ) : null}
                       <button className="tertiary-button" onClick={() => exportJobCsv(job)}>

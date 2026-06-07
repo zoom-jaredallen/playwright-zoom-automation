@@ -11,6 +11,7 @@ import { filterSelectableAccounts, type AccountSelectionFilters } from "./servic
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createJobEventEmitter } from "./services/jobEvents.js";
 import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
+import { createRetryJobInput, selectRetryAccounts } from "./services/jobRetryService.js";
 import { computeDashboardMetrics } from "./services/analytics.js";
 import { listJobArtifacts } from "./services/artifacts.js";
 import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./services/scheduler.js";
@@ -430,6 +431,56 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     const wasCancelled = cancelRunningJob(request.params.jobId);
     const updatedJob = jobStore.markJob(request.params.jobId, "cancelled", "Cancelled by user");
     response.json({ job: updatedJob, message: wasCancelled ? "Cancellation signalled" : "Job marked cancelled" });
+  });
+
+  app.post("/api/jobs/:jobId/retry", (request, response, next) => {
+    try {
+      const sourceJob = jobStore.getJob(request.params.jobId);
+      if (!sourceJob) {
+        response.status(404).json({ error: "Job not found" });
+        return;
+      }
+      const statuses = Array.isArray(request.body?.statuses) ? request.body.statuses : ["failed"];
+      const accountIds = selectRetryAccounts(sourceJob, { statuses });
+      if (accountIds.length === 0) {
+        response.status(409).json({ error: "No matching accounts to retry" });
+        return;
+      }
+
+      const sourceAccounts = Array.isArray(request.body?.accounts) && request.body.accounts.length > 0
+        ? request.body.accounts as SubAccount[]
+        : cachedAccounts;
+      const selectedAccounts = sourceAccounts.filter((account) => accountIds.includes(account.id));
+      if (selectedAccounts.length !== accountIds.length) {
+        response.status(409).json({ error: "Retry accounts are not available in the current account cache. Query accounts again first." });
+        return;
+      }
+
+      const retryInput = createRetryJobInput(sourceJob, accountIds);
+      const job = jobStore.createJob({
+        ...retryInput,
+        dryRun: request.body?.dryRun ?? retryInput.dryRun,
+        addressProfile: request.body?.addressProfile ?? retryInput.addressProfile
+      });
+      startAutomationJob({
+        jobId: job.id,
+        accounts: selectedAccounts,
+        workflowIds: job.input.workflowIds,
+        addressProfile: job.input.addressProfile,
+        dryRun: job.input.dryRun,
+        headless: request.body?.headless ?? true,
+        retryAttempts: request.body?.retryAttempts ?? 2,
+        retryBaseDelayMs: request.body?.retryBaseDelayMs ?? 5_000,
+        accountDelayMs: request.body?.accountDelayMs ?? 2_000,
+        concurrency: Math.min(request.body?.concurrency ?? 1, 10),
+        store: jobStore,
+        registry: workflowRegistry
+      });
+      watchJobForWebhooks(job.id);
+      response.status(201).json({ job });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post("/api/jobs", (request, response, next) => {
