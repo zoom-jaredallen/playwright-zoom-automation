@@ -139,19 +139,27 @@ The extension side panel currently includes recording pause/resume, manual step 
 
 Prefer the recorder debug bridge before using visual browser or computer-control tools. It is much lower token and exposes structured recorder state from the Chrome extension through the local web server.
 
-Start the server first:
+Use this path whenever you need to inspect or test a recorded Zoom workflow and the user has Chrome logged into Zoom with the recorder extension loaded:
+
+1. Start the local web server:
 
 ```bash
 UI_PORT=4174 npm run dev
 ```
 
-Reload the unpacked extension from `extension/dist/`. The extension posts snapshots to:
+2. Reload the unpacked extension from `extension/dist/`.
+3. Record or import the workflow in Chrome.
+4. Inspect the latest structured snapshot before reaching for screenshots or computer-use:
 
-```text
-output/recorder-sessions/
+```bash
+npm run recorder:latest
+npm run recorder:actions
+npm run recorder:workflow
 ```
 
-Useful commands:
+The extension posts snapshots to `output/recorder-sessions/`. A snapshot includes raw actions, prepared/deduped actions, generated workflow JSON when available, quality scoring, page URL/title, and browser test events. Use these files and CLI output for most diagnosis.
+
+Common CLI commands:
 
 ```bash
 npm run recorder:latest
@@ -165,7 +173,11 @@ npm run recorder:test -- --from step_id
 npm run recorder:export -- --out output/debug/workflow.json
 ```
 
-The CLI uses `RECORDER_DEBUG_BASE_URL` when set, otherwise `http://127.0.0.1:4174`. The extension uses its configured `serverUrl` when set, otherwise the same default. Debug commands are queued through `/api/recorder/debug/commands`; the extension polls and executes safe recorder commands only.
+`npm run recorder:test` enqueues a browser-preflight command through `/api/recorder/debug/commands`. The extension polls the queue, runs the workflow against the active Chrome tab, then posts structured results and events back to the server. Use `npm run recorder:events` or `npm run recorder:latest` to inspect progress/results. Use `npm run recorder:test -- --from step_id` to replay from a selected step after manually resetting the Zoom page to the expected state.
+
+The CLI uses `RECORDER_DEBUG_BASE_URL` when set, otherwise `http://127.0.0.1:4174`. The extension uses its configured `serverUrl` when set, otherwise the same default. If commands appear stuck, confirm the web server is running, the unpacked extension has been reloaded after the latest build, and Chrome is on a scriptable Zoom page.
+
+Fallback to Chrome/browser/computer-control only when the debug bridge cannot answer the question, for example when you need to click through a brand-new flow, visually inspect layout, or recover from a modal/pop-up that blocks recording.
 
 Do not put secrets in recorded steps or debug snapshots. Treat `output/recorder-sessions/` as local diagnostics and avoid committing it.
 
