@@ -3916,8 +3916,54 @@ tr:hover .copy-btn {
   gap: 10px;
 }
 
+.parameter-group {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-border-subtle-neutral);
+}
+
+.parameter-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.parameter-group-header small,
+.parameter-override-hint {
+  color: var(--text-text-subtle-neutral);
+}
+
 .parameter-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
+}
+
+.override-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 16px;
+  align-items: start;
+}
+
+.override-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.override-chip {
+  max-width: 180px;
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 999px;
+  background: var(--fill-fill-subtler-neutral);
+  color: var(--text-text-neutral);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

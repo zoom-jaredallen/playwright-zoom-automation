@@ -13,6 +13,8 @@ import {
 } from "../src/server/services/runTimelineService.js";
 import {
   buildWorkflowParameterDefaults,
+  groupWorkflowParameters,
+  normalizeWorkflowParameterForUi,
   validateWorkflowParameterValues
 } from "../src/server/services/workflowParameterService.js";
 import type { SubAccount } from "../src/automation/types.js";
@@ -204,6 +206,37 @@ describe("workflow parameter service", () => {
     });
     expect(validateWorkflowParameterValues(workflow, { "contact.email": "admin@example.com", country: "US" }).errors[0]?.message)
       .toBe("country must be one of: Australia");
+  });
+
+  it("normalizes workflow parameters for grouped UI and account overrides", () => {
+    const company = normalizeWorkflowParameterForUi({
+      name: "companyName",
+      type: "string",
+      required: true,
+      description: "Company name",
+      source: "prompt"
+    });
+    const document = normalizeWorkflowParameterForUi({
+      name: "businessVerificationPath",
+      type: "file",
+      required: true,
+      description: "Business verification document",
+      source: "prompt"
+    });
+
+    expect(company.ui).toEqual(expect.objectContaining({
+      group: "Business identity",
+      label: "Company name",
+      accountOverrideAllowed: true
+    }));
+    expect(document.ui).toEqual(expect.objectContaining({
+      group: "Documents",
+      fileAccept: ".pdf,.png,.jpg,.jpeg"
+    }));
+
+    const groups = groupWorkflowParameters([document, company]);
+    expect(groups.map((group) => group.name)).toEqual(["Business identity", "Documents"]);
+    expect(groups[0].parameters.map((parameter) => parameter.name)).toEqual(["companyName"]);
   });
 });
 

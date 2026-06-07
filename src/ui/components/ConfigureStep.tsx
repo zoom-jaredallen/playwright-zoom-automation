@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { AddressProfileView, RunReadinessView, WorkflowView } from "../api.js";
+import { AccountOverrideGrid } from "./AccountOverrideGrid.js";
 import { CheckIcon, ChevronRightIcon } from "./Icons.js";
 import { RunReadinessPanel } from "./RunReadinessPanel.js";
 import { WorkflowParameterForm } from "./WorkflowParameterForm.js";
@@ -218,22 +219,20 @@ export function ConfigureStep({
             </div>
           ) : null}
 
-          {/* Per-account values (optional) */}
-          <div className="field" style={{ marginTop: 12 }}>
-            <span>Per-account values (CSV)</span>
-            <small>First column = sub-account id; other columns = parameter names (e.g. <code>contact.email</code>). Overrides the profile per account.</small>
-            <input type="file" accept=".csv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleCsv(f); e.target.value = ""; }} />
-            {csvSummary ? (
-              <small className="csv-summary">Loaded: {csvSummary} <button className="tertiary-button" onClick={clearCsv}>Clear</button></small>
-            ) : null}
-            {csvError ? <small className="import-error">{csvError}</small> : null}
-          </div>
         </section>
 
         <WorkflowParameterForm
           parameters={selectedParameters}
           values={workflowParameterValues}
           onChange={onWorkflowParameterValuesChange}
+        />
+
+        <AccountOverrideGrid
+          parameters={selectedParameters}
+          summary={csvSummary}
+          error={csvError}
+          onFile={(file) => void handleCsv(file)}
+          onClear={clearCsv}
         />
 
         <RunReadinessPanel readiness={readiness} loading={readinessLoading} error={readinessError} />
