@@ -38,6 +38,8 @@ export interface SelectorTestResult {
     score?: number;
     scoreLevel?: RankedSelectorCandidate["score"]["level"];
   }>;
+  selectorDiagnostics?: RecordedAction["selectorDiagnostics"];
+  repairSuggestions?: RecordedAction["repairSuggestions"];
   error?: string;
 }
 

@@ -700,7 +700,7 @@ function renderStepInspector(action: RecordedAction): HTMLElement {
     makeActionButton("Refresh matches", false, () => void testSelectorForAction(action))
   );
 
-  section.append(top, actionsRow, renderInspectorFallbacks(action, summary.fallbackCount));
+  section.append(top, actionsRow, renderInspectorRepairs(action), renderInspectorFallbacks(action, summary.fallbackCount));
   return section;
 }
 
@@ -739,6 +739,38 @@ function renderInspectorFallbacks(action: RecordedAction, fallbackCount: number)
     const label = document.createElement("span");
     label.textContent = candidate.label ?? `${candidate.kind} selector`;
     const use = makeActionButton("Use", false, () => void useSelectorCandidate(action.id, candidate.selector));
+    item.append(label, use);
+    list.appendChild(item);
+  }
+  wrapper.appendChild(list);
+  return wrapper;
+}
+
+function renderInspectorRepairs(action: RecordedAction): HTMLElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "inspector-fallbacks";
+  const title = document.createElement("span");
+  title.className = "field-label";
+  title.textContent = `Repair suggestions (${action.repairSuggestions?.length ?? 0})`;
+  wrapper.appendChild(title);
+
+  if (!action.repairSuggestions?.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Test this selector to generate repair suggestions.";
+    wrapper.appendChild(empty);
+    return wrapper;
+  }
+
+  const list = document.createElement("div");
+  list.className = "selector-candidates compact";
+  for (const suggestion of action.repairSuggestions.slice(0, 4)) {
+    const item = document.createElement("div");
+    item.className = `selector-candidate repair-${suggestion.risk}`;
+    const label = document.createElement("span");
+    label.textContent = `${suggestion.source} · ${suggestion.score.score}/100 · ${suggestion.risk} risk`;
+    label.title = suggestion.score.reasons.join("; ");
+    const use = makeActionButton("Apply", false, () => void useSelectorCandidate(action.id, suggestion.selector));
     item.append(label, use);
     list.appendChild(item);
   }
@@ -1344,6 +1376,14 @@ async function testSelectorForAction(action: RecordedAction): Promise<void> {
   setMessage("Testing selector in the active page...");
   const result = await sendMessage({ type: "TEST_SELECTOR", action }) as SelectorTestResult;
   selectorTestResults = { ...selectorTestResults, [action.id]: result };
+  if (!result.error) {
+    await sendMessage({
+      type: "UPDATE_ACTION",
+      actionId: action.id,
+      selectorDiagnostics: result.selectorDiagnostics,
+      repairSuggestions: result.repairSuggestions
+    });
+  }
   render();
 }
 

@@ -29,6 +29,7 @@ import {
   setStepGuard,
   selectorCandidatesFromStrategy,
   rankSelectorCandidates,
+  createSelectorRepairPlan,
   scoreSelectorCandidate,
   type RecordedAction
 } from "@zoom-automation/workflow-core";
@@ -302,6 +303,23 @@ describe("selectors — candidate model", () => {
     expect(ranked.map((candidate) => candidate.id)).toEqual(["role", "label", "css"]);
     expect(ranked[0].rank).toBe(1);
     expect(ranked[0].score.score).toBeGreaterThan(ranked[2].score.score);
+  });
+
+  it("creates smart repair suggestions that prefer semantic unique matches over brittle fallbacks", () => {
+    const plan = createSelectorRepairPlan({
+      currentSelector: { css: ".zoom-btn:nth-child(3)", anchor: { text: "Business address", scopeRole: "row" } },
+      candidates: [
+        { id: "css", kind: "css", selector: { css: ".zoom-btn:nth-child(3)" }, diagnostics: { matchedCount: 2, visibleCount: 2 } },
+        { id: "xpath", kind: "xpath", selector: { xpath: "//div[3]/button[2]" }, diagnostics: { matchedCount: 1, visibleCount: 1 } },
+        { id: "role", kind: "role", selector: { role: { role: "button", name: "Save", exact: true } }, diagnostics: { matchedCount: 1, visibleCount: 1, uniquelyIdentifiesTarget: true } }
+      ]
+    });
+
+    expect(plan.best?.candidateId).toBe("role");
+    expect(plan.suggestions.map((suggestion) => suggestion.candidateId)).toEqual(["role", "xpath", "css"]);
+    expect(plan.suggestions[0].selector.anchor?.text).toBe("Business address");
+    expect(plan.suggestions[0].risk).toBe("low");
+    expect(plan.suggestions.at(-1)?.risk).toBe("high");
   });
 });
 

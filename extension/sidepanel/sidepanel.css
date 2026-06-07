@@ -900,6 +900,18 @@ input:not([type="checkbox"]), select {
   align-items: center;
 }
 
+.selector-candidate.repair-low {
+  border-left: 3px solid var(--border-border-success);
+}
+
+.selector-candidate.repair-medium {
+  border-left: 3px solid var(--border-border-warning);
+}
+
+.selector-candidate.repair-high {
+  border-left: 3px solid var(--border-border-error);
+}
+
 .quality-score {
   display: inline-grid;
   min-width: 36px;

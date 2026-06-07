@@ -7,7 +7,7 @@ import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, comp
 import { buildSelectorCandidatesForElement, testSelectorCandidatesInDocument } from "../shared/selectorCandidates.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
-import type { RankedSelectorCandidate, SelectorCandidate } from "@zoom-automation/workflow-core";
+import { createSelectorRepairPlan, type RankedSelectorCandidate, type SelectorCandidate } from "@zoom-automation/workflow-core";
 
 let recording = false;
 let paused = false;
@@ -888,6 +888,12 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
       ? action.selectorCandidates
       : buildCandidatesFromLegacyAction(action);
     const ranked = testSelectorCandidatesInDocument(candidates, document);
+    const persistedCandidates = stripRuntimeScores(ranked);
+    const repairPlan = createSelectorRepairPlan({
+      currentSelector: action.selectors,
+      candidates: persistedCandidates
+    });
+    const best = ranked[0];
 
     const chosen = findReplayElementSync(action);
     if (chosen) {
@@ -900,7 +906,9 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
       visibleCount: ranked[0]?.diagnostics?.visibleCount ?? 0,
       chosenPreview: chosen ? elementPreview(chosen) : undefined,
       chosenSelector: ranked[0] ? candidateLabel(ranked[0]) : undefined,
-      fallbackCandidates: ranked.map(candidateResult)
+      fallbackCandidates: ranked.map(candidateResult),
+      selectorDiagnostics: best ? selectorDiagnosticsFromRanked(best, chosen) : undefined,
+      repairSuggestions: repairPlan.suggestions
     };
   } catch (error) {
     return {
@@ -911,6 +919,22 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+function selectorDiagnosticsFromRanked(candidate: RankedSelectorCandidate, target: Element | null): RecordedAction["selectorDiagnostics"] {
+  return {
+    matchedCount: candidate.diagnostics?.matchedCount ?? 0,
+    visibleCount: candidate.diagnostics?.visibleCount ?? 0,
+    chosenCandidateId: candidate.id,
+    confidence: candidate.score,
+    targetPreview: target ? elementPreview(target) : candidate.diagnostics?.chosenPreview,
+    anchor: {
+      text: candidate.selector.anchor?.text,
+      scopeRole: candidate.selector.anchor?.scopeRole,
+      relationship: candidate.selector.anchor?.relationship,
+      resolved: Boolean(candidate.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
+    }
+  };
 }
 
 async function pickSelector(action: RecordedAction): Promise<SelectorPickResult> {
