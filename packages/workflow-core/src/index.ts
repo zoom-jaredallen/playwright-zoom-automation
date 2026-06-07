@@ -4,3 +4,4 @@ export * from "./model.js";
 export * from "./analysis.js";
 export * from "./capabilities.js";
 export * from "./confidence.js";
+export * from "./selectors/index.js";

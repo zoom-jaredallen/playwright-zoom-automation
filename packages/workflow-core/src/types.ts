@@ -39,6 +39,7 @@ export interface SelectorStrategy {
   text?: string;
   testId?: string;
   css?: string;
+  xpath?: string;
   /** 0-based index disambiguating which match to use when several match. */
   nth?: number;
   /**
@@ -52,6 +53,56 @@ export interface SelectorStrategy {
     scopeRole?: string;
     relationship?: AnchorRelationship;
   };
+}
+
+export type SelectorCandidateKind =
+  | "role"
+  | "label"
+  | "testId"
+  | "text"
+  | "css"
+  | "xpath"
+  | "relative"
+  | "zoomComponent";
+
+export type SelectorCandidateSource = "recorded" | "legacy" | "manual" | "healed" | "generated";
+
+export interface SelectorDiagnostics {
+  matchedCount?: number;
+  visibleCount?: number;
+  chosenPreview?: string;
+  uniquelyIdentifiesTarget?: boolean;
+  anchorReducedMatches?: boolean;
+  brittleReason?: string;
+}
+
+export interface SelectorCandidate {
+  id: string;
+  kind: SelectorCandidateKind;
+  selector: SelectorStrategy;
+  source?: SelectorCandidateSource;
+  label?: string;
+  diagnostics?: SelectorDiagnostics;
+}
+
+export interface SelectorCandidateScore {
+  score: number;
+  level: "high" | "medium" | "low";
+  reasons: string[];
+}
+
+export interface RankedSelectorCandidate extends SelectorCandidate {
+  rank: number;
+  score: SelectorCandidateScore;
+}
+
+export interface SelectMetadata {
+  targetCandidates?: SelectorCandidate[];
+  optionCandidates?: SelectorCandidate[];
+  optionLabel?: string;
+  optionValue?: string;
+  popupSelectorHint?: SelectorStrategy;
+  verificationText?: string;
 }
 
 /**
@@ -98,6 +149,9 @@ export interface RecordedAction {
   timestamp: number;
   type: ActionType;
   selectors: SelectorStrategy;
+  selectorCandidates?: SelectorCandidate[];
+  selectedCandidateId?: string;
+  selectMetadata?: SelectMetadata;
   value?: string;
   url?: string;
   filePath?: string;

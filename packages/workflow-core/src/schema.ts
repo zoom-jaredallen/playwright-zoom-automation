@@ -24,6 +24,7 @@ const selectorSchema = z
     text: z.string().optional(),
     testId: z.string().optional(),
     css: z.string().optional(),
+    xpath: z.string().optional(),
     nth: z.number().optional(),
     anchor: z
       .object({
@@ -33,6 +34,39 @@ const selectorSchema = z
       })
       .loose()
       .optional()
+  })
+  .loose();
+
+const selectorDiagnosticsSchema = z
+  .object({
+    matchedCount: z.number().optional(),
+    visibleCount: z.number().optional(),
+    chosenPreview: z.string().optional(),
+    uniquelyIdentifiesTarget: z.boolean().optional(),
+    anchorReducedMatches: z.boolean().optional(),
+    brittleReason: z.string().optional()
+  })
+  .loose();
+
+const selectorCandidateSchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(["role", "label", "testId", "text", "css", "xpath", "relative", "zoomComponent"]),
+    selector: selectorSchema,
+    source: z.enum(["recorded", "legacy", "manual", "healed", "generated"]).optional(),
+    label: z.string().optional(),
+    diagnostics: selectorDiagnosticsSchema.optional()
+  })
+  .loose();
+
+const selectMetadataSchema = z
+  .object({
+    targetCandidates: z.array(selectorCandidateSchema).optional(),
+    optionCandidates: z.array(selectorCandidateSchema).optional(),
+    optionLabel: z.string().optional(),
+    optionValue: z.string().optional(),
+    popupSelectorHint: selectorSchema.optional(),
+    verificationText: z.string().optional()
   })
   .loose();
 
@@ -76,6 +110,9 @@ const actionSchema: z.ZodType = z.lazy(() => z
       "assert", "screenshot", "dismiss", "hover", "press", "download", "dialog", "if"
     ]),
     selectors: selectorSchema,
+    selectorCandidates: z.array(selectorCandidateSchema).optional(),
+    selectedCandidateId: z.string().optional(),
+    selectMetadata: selectMetadataSchema.optional(),
     value: z.string().optional(),
     url: z.string().optional(),
     filePath: z.string().optional(),

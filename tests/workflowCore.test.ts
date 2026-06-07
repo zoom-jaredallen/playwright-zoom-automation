@@ -27,6 +27,9 @@ import {
   insertIntoBranch,
   flattenActions,
   setStepGuard,
+  selectorCandidatesFromStrategy,
+  rankSelectorCandidates,
+  scoreSelectorCandidate,
   type RecordedAction
 } from "@zoom-automation/workflow-core";
 
@@ -214,6 +217,54 @@ describe("confidence — scoreSelector", () => {
     const result = scoreSelector({});
     expect(result.level).toBe("low");
     expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+describe("selectors — candidate model", () => {
+  it("converts legacy selector strategies into ranked candidates", () => {
+    const candidates = selectorCandidatesFromStrategy({
+      role: { role: "combobox", name: "Country" },
+      label: "Country",
+      css: ".cpzui-select"
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["role", "label", "css"]);
+    expect(candidates[0]).toEqual(expect.objectContaining({
+      id: "role-combobox-country",
+      selector: { role: { role: "combobox", name: "Country" } },
+      source: "legacy"
+    }));
+  });
+
+  it("scores live-tested unique accessible selectors above broad css selectors", () => {
+    const roleScore = scoreSelectorCandidate({
+      id: "role",
+      kind: "role",
+      selector: { role: { role: "combobox", name: "Country", exact: true } },
+      diagnostics: { matchedCount: 1, visibleCount: 1, uniquelyIdentifiesTarget: true, anchorReducedMatches: true }
+    });
+    const cssScore = scoreSelectorCandidate({
+      id: "css",
+      kind: "css",
+      selector: { css: ".zoom-input__inner:nth-child(2)" },
+      diagnostics: { matchedCount: 8, visibleCount: 4, uniquelyIdentifiesTarget: false }
+    });
+
+    expect(roleScore.score).toBeGreaterThan(cssScore.score);
+    expect(roleScore.level).toBe("high");
+    expect(cssScore.level).toBe("low");
+  });
+
+  it("ranks selector candidates by confidence and preserves fallback order for ties", () => {
+    const ranked = rankSelectorCandidates([
+      { id: "css", kind: "css", selector: { css: ".zoom-input__inner" }, diagnostics: { matchedCount: 4, visibleCount: 4 } },
+      { id: "label", kind: "label", selector: { label: "Country" }, diagnostics: { matchedCount: 1, visibleCount: 1 } },
+      { id: "role", kind: "role", selector: { role: { role: "combobox", name: "Country" } }, diagnostics: { matchedCount: 1, visibleCount: 1 } }
+    ]);
+
+    expect(ranked.map((candidate) => candidate.id)).toEqual(["role", "label", "css"]);
+    expect(ranked[0].rank).toBe(1);
+    expect(ranked[0].score.score).toBeGreaterThan(ranked[2].score.score);
   });
 });
 
