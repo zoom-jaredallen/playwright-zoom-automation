@@ -243,7 +243,7 @@ ${generateHealingCode()}
       return await this.isElementVisible(page, condition.selector ?? actionSelectors) ? undefined : "step";
     }
     if (condition.type === "fieldEmptyFill") {
-      const element = await this.findElement(page, condition.selector ?? actionSelectors, 2_000).catch(() => undefined);
+      const element = await this.findElement(page, condition.selector ?? actionSelectors, [], 2_000).catch(() => undefined);
       if (!element) return "step";
       const value = await element.inputValue({ timeout: 500 }).catch(() => "");
       return value.trim() ? "step" : undefined;
@@ -253,7 +253,7 @@ ${generateHealingCode()}
 
   private async isElementVisible(page: Page, selectors: Record<string, any>): Promise<boolean> {
     try {
-      const element = await this.findElement(page, selectors, 2_000);
+      const element = await this.findElement(page, selectors, [], 2_000);
       return await element.isVisible();
     } catch {
       return false;
@@ -280,6 +280,8 @@ function generateActionCode(action: RecordedAction, index: number, workflow: Rec
   // Feature 1: scope element resolution to an iframe when one was recorded.
   const frame = JSON.stringify(action.frameSelector);
   const selectors = JSON.stringify(action.selectors);
+  const selectorCandidates = JSON.stringify(action.selectorCandidates ?? []);
+  const selectMetadata = JSON.stringify(action.selectMetadata ?? {});
   let core: string;
 
   switch (action.type) {
@@ -297,7 +299,7 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
 
     case "click": {
       const ariaState = action.ariaState ? `, ${JSON.stringify(action.ariaState)}` : "";
-      const clickCall = `${coreIndent}await this.clickElement(page, ${selectors}, ${timeout}, ${frame}${ariaState});`;
+      const clickCall = `${coreIndent}await this.clickElement(page, ${selectors}, ${selectorCandidates}, ${timeout}, ${frame}${ariaState});`;
       // Feature 2: wait for the XHR/fetch the click triggers instead of a fixed sleep.
       core = wrapNetworkWait(action, clickCall, coreIndent, timeout);
       break;
@@ -307,7 +309,7 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)}, activeAccountId)`
         : JSON.stringify(action.value ?? "");
-      core = `${coreIndent}await this.fillField(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
+      core = `${coreIndent}await this.fillField(page, ${selectors}, ${selectorCandidates}, ${value}, ${timeout}, ${frame});`;
       break;
     }
 
@@ -315,29 +317,29 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
       const value = action.value?.includes("{{")
         ? `this.resolveValue(${JSON.stringify(action.value)}, activeAccountId)`
         : JSON.stringify(action.value ?? "");
-      core = `${coreIndent}await this.selectOption(page, ${selectors}, ${value}, ${timeout}, ${frame});`;
+      core = `${coreIndent}await this.selectOption(page, ${selectors}, ${selectorCandidates}, ${value}, ${timeout}, ${frame}, ${selectMetadata});`;
       break;
     }
 
     case "upload":
       core = `${coreIndent}// File upload — path resolved from config.documents
-${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
+${coreIndent}await this.uploadFile(page, ${selectors}, ${selectorCandidates}, ${timeout}, ${frame});`;
       break;
 
     case "hover":
       // Feature 4: hover to reveal menus/tooltips.
-      core = `${coreIndent}await this.hoverElement(page, ${selectors}, ${timeout}, ${frame});`;
+      core = `${coreIndent}await this.hoverElement(page, ${selectors}, ${selectorCandidates}, ${timeout}, ${frame});`;
       break;
 
     case "press":
       // Feature 4: keyboard navigation.
-      core = `${coreIndent}await this.pressKey(page, ${selectors}, ${JSON.stringify(action.key ?? "Enter")}, ${timeout}, ${frame});`;
+      core = `${coreIndent}await this.pressKey(page, ${selectors}, ${selectorCandidates}, ${JSON.stringify(action.key ?? "Enter")}, ${timeout}, ${frame});`;
       break;
 
     case "download": {
       // Feature 7: capture the file via Playwright's download event.
       const label = slugify(action.description ?? `download-${index + 1}`);
-      core = `${coreIndent}await this.downloadFile(page, ${selectors}, ${timeout}, ${frame}, \`\${artifactBase}-${label}\`);`;
+      core = `${coreIndent}await this.downloadFile(page, ${selectors}, ${selectorCandidates}, ${timeout}, ${frame}, \`\${artifactBase}-${label}\`);`;
       break;
     }
 
@@ -360,7 +362,7 @@ ${coreIndent}await this.uploadFile(page, ${selectors}, ${timeout}, ${frame});`;
       const label = slugify(action.screenshotLabel ?? action.description ?? `step-${index + 1}`);
       // Feature 9: scope the screenshot to the matched element when requested.
       core = action.elementScreenshot
-        ? `${coreIndent}await this.elementScreenshot(page, ${selectors}, \`\${artifactBase}-${label}.png\`, ${timeout}, ${frame});`
+        ? `${coreIndent}await this.elementScreenshot(page, ${selectors}, ${selectorCandidates}, \`\${artifactBase}-${label}.png\`, ${timeout}, ${frame});`
         : `${coreIndent}await page.screenshot({ path: \`\${artifactBase}-${label}.png\`, fullPage: true });`;
       break;
     }
@@ -525,6 +527,7 @@ function generateAssertionActionCode(action: RecordedAction, indent: string, tim
   const actionTimeout = action.timeout ?? timeout;
   const onFailure = action.onFailure ?? "screenshot";
   const selectors = JSON.stringify(action.selectors);
+  const selectorCandidates = JSON.stringify(action.selectorCandidates ?? []);
   // Feature 6: assertions use Playwright's auto-waiting locators (waitFor / polling)
   // so they retry until the timeout instead of checking once.
   const assertionBody = (() => {
@@ -534,7 +537,7 @@ function generateAssertionActionCode(action: RecordedAction, indent: string, tim
       case "elementVisible":
         return hasUsableSelector(action.selectors)
           ? `${indent}{
-${indent}  const element = await this.findElement(page, ${selectors}, ${actionTimeout});
+${indent}  const element = await this.findElement(page, ${selectors}, ${selectorCandidates}, ${actionTimeout});
 ${indent}  await element.waitFor({ state: "visible", timeout: ${actionTimeout} });
 ${indent}}`
           : `${indent}await page.locator(${expected}).first().waitFor({ state: "visible", timeout: ${actionTimeout} });`;

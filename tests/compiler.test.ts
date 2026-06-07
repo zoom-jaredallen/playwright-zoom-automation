@@ -324,8 +324,77 @@ describe("compileWorkflow", () => {
     const result = compileWorkflow(workflow, testOutputDir);
     const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
 
-    expect(flow).toContain('const element = await this.findElement(page, {"role":{"role":"link","name":"Michael Chen"},"text":"Michael Chen"}, 10000);');
+    expect(flow).toContain('const element = await this.findElement(page, {"role":{"role":"link","name":"Michael Chen"},"text":"Michael Chen"}, [], 10000);');
     expect(flow).not.toContain('page.locator("Michael Chen").first().waitFor');
+  });
+
+  it("generates candidate-aware element calls", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "act_candidate",
+          timestamp: 1000,
+          type: "click",
+          selectors: { css: ".weak" },
+          selectorCandidates: [
+            {
+              id: "role-save",
+              kind: "role",
+              selector: { role: { role: "button", name: "Save" } },
+              source: "recorded",
+              diagnostics: { matchedCount: 1, visibleCount: 1 }
+            }
+          ],
+          selectedCandidateId: "role-save",
+          pageUrl: "https://zoom.us/test",
+          pageTitle: "Test",
+          description: "Click Save"
+        }
+      ],
+      assertions: []
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain('await this.clickElement(page, {"css":".weak"}, [{"id":"role-save"');
+    expect(flow).toContain("private buildSelectorStrategies");
+    expect(flow).toContain("xpath=");
+  });
+
+  it("generates dedicated select replay with select metadata", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "act_select",
+          timestamp: 1000,
+          type: "select",
+          selectors: { role: { role: "combobox", name: "Country" } },
+          selectorCandidates: [
+            { id: "role-country", kind: "role", selector: { role: { role: "combobox", name: "Country" } }, source: "recorded" }
+          ],
+          selectMetadata: {
+            optionLabel: "Australia",
+            optionCandidates: [
+              { id: "option-au", kind: "role", selector: { role: { role: "option", name: "Australia" } }, source: "recorded" }
+            ],
+            popupSelectorHint: { role: { role: "listbox" } },
+            verificationText: "Australia"
+          },
+          value: "Australia",
+          pageUrl: "https://zoom.us/test",
+          pageTitle: "Test",
+          description: "Select country"
+        }
+      ],
+      assertions: []
+    });
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("await this.selectOption(page");
+    expect(flow).toContain('"optionLabel":"Australia"');
+    expect(flow).toContain("private async findOpenSelectPopup");
+    expect(flow).toContain("selectOption({ label: value }");
   });
 
   it("preserves the original schema.json", () => {

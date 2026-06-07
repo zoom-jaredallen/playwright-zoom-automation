@@ -253,7 +253,7 @@ export function generateHealingCode(): string {
     return undefined;
   }
 
-  private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, timeout: number): Promise<import("playwright").Locator> {
+  private async findElement(root: import("playwright").Page | import("playwright").FrameLocator, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number): Promise<import("playwright").Locator> {
     const esc = (value: string) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
 
     // Anchors: scope to a container (e.g. the row whose Name contains "michael.chen")
@@ -273,49 +273,13 @@ export function generateHealingCode(): string {
     const pick = (base: import("playwright").Locator): import("playwright").Locator =>
       typeof selectors.nth === "number" ? base.nth(selectors.nth) : base.first();
 
-    const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
+    const strategies = this.buildSelectorStrategies(scope, selectors, selectorCandidates, esc, pick);
 
     const anchoredCheckbox = await this.findAnchoredCheckbox(root, selectors, esc, timeout);
     if (anchoredCheckbox) {
       this.healingReport.push({ actionDescription: "", originalStrategy: "role:checkbox", healedStrategy: "anchored-checkbox", confidence: 0.9 });
       this.options.logger.warn("Selector healed", { original: "role:checkbox", healed: "anchored-checkbox" });
       return anchoredCheckbox;
-    }
-
-    if (selectors.role) {
-      const { role, name, exact, checked, expanded, selected, pressed } = selectors.role;
-      const opts: any = {};
-      if (name) {
-        opts.name = exact ? name : new RegExp(esc(name), "i");
-        if (exact) opts.exact = true;
-      }
-      // ARIA-state constraints disambiguate e.g. the *checked* checkbox.
-      if (typeof checked === "boolean") opts.checked = checked;
-      if (typeof expanded === "boolean") opts.expanded = expanded;
-      if (typeof selected === "boolean") opts.selected = selected;
-      if (typeof pressed === "boolean") opts.pressed = pressed;
-      strategies.push({
-        name: \`role:\${role}[\${name ?? ""}]\`,
-        locator: () => pick(scope.getByRole(role, opts))
-      });
-    }
-    if (selectors.label) {
-      strategies.push({
-        name: \`label:\${selectors.label}\`,
-        locator: () => pick(scope.getByLabel(new RegExp(esc(selectors.label), "i")))
-      });
-    }
-    if (selectors.text) {
-      strategies.push({
-        name: \`text:\${selectors.text}\`,
-        locator: () => pick(scope.getByText(new RegExp(esc(selectors.text), "i")))
-      });
-    }
-    if (selectors.testId) {
-      strategies.push({ name: \`testId:\${selectors.testId}\`, locator: () => pick(scope.getByTestId(selectors.testId)) });
-    }
-    if (selectors.css) {
-      strategies.push({ name: \`css:\${selectors.css}\`, locator: () => pick(scope.locator(selectors.css)) });
     }
 
     const deadline = Date.now() + timeout;
@@ -335,7 +299,64 @@ export function generateHealingCode(): string {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    throw new Error(\`Element not found with any selector strategy: \${JSON.stringify(selectors)}\`);
+    throw new Error(\`Element not found with any selector strategy: \${JSON.stringify({ selectors, selectorCandidates })}\`);
+  }
+
+  private buildSelectorStrategies(
+    scope: any,
+    selectors: Record<string, any>,
+    selectorCandidates: Array<Record<string, any>>,
+    esc: (value: string) => string,
+    pick: (base: import("playwright").Locator) => import("playwright").Locator
+  ): Array<{ name: string; locator: () => import("playwright").Locator }> {
+    const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
+    const pushSelector = (source: Record<string, any>, labelPrefix: string) => {
+      if (!source) return;
+      if (source.role) {
+        const { role, name, exact, checked, expanded, selected, pressed } = source.role;
+        const opts: any = {};
+        if (name) {
+          opts.name = exact ? name : new RegExp(esc(name), "i");
+          if (exact) opts.exact = true;
+        }
+        if (typeof checked === "boolean") opts.checked = checked;
+        if (typeof expanded === "boolean") opts.expanded = expanded;
+        if (typeof selected === "boolean") opts.selected = selected;
+        if (typeof pressed === "boolean") opts.pressed = pressed;
+        strategies.push({
+          name: \`\${labelPrefix}:role:\${role}[\${name ?? ""}]\`,
+          locator: () => pick(scope.getByRole(role, opts))
+        });
+      }
+      if (source.label) {
+        strategies.push({
+          name: \`\${labelPrefix}:label:\${source.label}\`,
+          locator: () => pick(scope.getByLabel(new RegExp(esc(source.label), "i")))
+        });
+      }
+      if (source.text) {
+        strategies.push({
+          name: \`\${labelPrefix}:text:\${source.text}\`,
+          locator: () => pick(scope.getByText(new RegExp(esc(source.text), "i")))
+        });
+      }
+      if (source.testId) {
+        strategies.push({ name: \`\${labelPrefix}:testId:\${source.testId}\`, locator: () => pick(scope.getByTestId(source.testId)) });
+      }
+      if (source.css) {
+        strategies.push({ name: \`\${labelPrefix}:css:\${source.css}\`, locator: () => pick(scope.locator(source.css)) });
+      }
+      if (source.xpath) {
+        strategies.push({ name: \`\${labelPrefix}:xpath\`, locator: () => pick(scope.locator(\`xpath=\${source.xpath}\`)) });
+      }
+    };
+
+    for (const candidate of selectorCandidates ?? []) {
+      pushSelector(candidate.selector, candidate.id ?? candidate.kind ?? "candidate");
+    }
+    pushSelector(selectors, "legacy");
+
+    return strategies;
   }
 
   /** Feature 5: read an element's current ARIA toggle state. */
@@ -350,9 +371,9 @@ export function generateHealingCode(): string {
       && (await matches("aria-selected", ariaState.selected));
   }
 
-  private async clickElement(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string, ariaState?: Record<string, any>): Promise<void> {
+  private async clickElement(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector?: string, ariaState?: Record<string, any>): Promise<void> {
     await dismissBlockingZoomPopups(page, this.options.logger);
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     // Feature 5: skip the click if the element is already in the desired ARIA state (idempotent re-runs).
     if (ariaState && await this.isAriaStateSatisfied(el, ariaState)) {
       this.options.logger.info("Skipping click; element already in desired state", { ariaState });
@@ -361,46 +382,86 @@ export function generateHealingCode(): string {
     await el.click();
   }
 
-  private async fillField(page: Page, selectors: Record<string, any>, value: string, timeout: number, frameSelector?: string): Promise<void> {
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+  private async fillField(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, value: string, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     await el.fill(value, { timeout });
   }
 
-  private async selectOption(page: Page, selectors: Record<string, any>, value: string, timeout: number, frameSelector?: string): Promise<void> {
+  private async selectOption(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, value: string, timeout: number, frameSelector?: string, selectMetadata: Record<string, any> = {}): Promise<void> {
     const root = this.scope(page, frameSelector);
-    const el = await this.findElement(root, selectors, timeout);
+    const el = await this.findElement(root, selectors, selectorCandidates, timeout);
+    const tagName = await el.evaluate((node) => node.tagName.toLowerCase()).catch(() => "");
+    if (tagName === "select") {
+      await el.selectOption({ label: value }).catch(async () => {
+        await el.selectOption(value);
+      });
+      return;
+    }
+
     await el.click({ timeout });
-    const option = root.getByRole("option", { name: new RegExp(value.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first();
+    const popup = await this.findOpenSelectPopup(page, el, root, timeout, selectMetadata.popupSelectorHint);
+    const optionText = selectMetadata.optionLabel ?? value;
+    const optionCandidates = selectMetadata.optionCandidates ?? [];
+    const optionSelectors = optionCandidates[0]?.selector ?? { role: { role: "option", name: optionText } };
+    const option = optionCandidates.length > 0
+      ? await this.findElement(popup, optionSelectors, optionCandidates, Math.min(timeout, 5_000))
+      : popup.getByRole("option", { name: new RegExp(optionText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first();
     await option.waitFor({ state: "visible", timeout: 5000 });
     await option.click();
+    const verificationText = selectMetadata.verificationText ?? optionText;
+    await el.filter({ hasText: new RegExp(verificationText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
   }
 
-  private async uploadFile(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string): Promise<void> {
+  private async findOpenSelectPopup(page: Page, trigger: import("playwright").Locator, root: import("playwright").Page | import("playwright").FrameLocator, timeout: number, popupSelectorHint?: Record<string, any>): Promise<import("playwright").Locator> {
+    const controlledId = await trigger.getAttribute("aria-controls").catch(() => null);
+    if (controlledId) {
+      const controlled = page.locator(\`#\${controlledId.replace(/"/g, "\\\\\\"")}\`).first();
+      if (await controlled.isVisible({ timeout: 750 }).catch(() => false)) return controlled;
+    }
+    if (popupSelectorHint) {
+      const hinted = await this.findElement(root, popupSelectorHint, [], 1_000).catch(() => undefined);
+      if (hinted) return hinted;
+    }
+    const popupSelector = [
+      "[role='listbox']",
+      "[role='menu']",
+      "[class*='select-dropdown']",
+      "[class*='select__dropdown']",
+      "[class*='dropdown-menu']",
+      "[class*='cpzui-select'] [role='listbox']",
+      "[class*='cpzui-virtual-filter-select']"
+    ].join(", ");
+    const popup = page.locator(popupSelector).filter({ has: page.locator("[role='option'], li, [class*='option']") }).last();
+    await popup.waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) });
+    return popup;
+  }
+
+  private async uploadFile(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector?: string): Promise<void> {
     const docPath = this.options.config.documents.businessVerificationPath ?? this.options.config.documents.idPath;
     if (!docPath) return;
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     await el.setInputFiles(docPath);
   }
 
   /** Feature 4: hover to reveal menus/tooltips. */
-  private async hoverElement(page: Page, selectors: Record<string, any>, timeout: number, frameSelector?: string): Promise<void> {
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+  private async hoverElement(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     await el.hover({ timeout });
   }
 
   /** Feature 4: press a key, scoped to an element when one was recorded. */
-  private async pressKey(page: Page, selectors: Record<string, any>, key: string, timeout: number, frameSelector?: string): Promise<void> {
+  private async pressKey(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, key: string, timeout: number, frameSelector?: string): Promise<void> {
     if (!selectors || Object.keys(selectors).length === 0) {
       await page.keyboard.press(key);
       return;
     }
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     await el.press(key, { timeout });
   }
 
   /** Feature 7: click a control and capture the resulting browser download as an artifact. */
-  private async downloadFile(page: Page, selectors: Record<string, any>, timeout: number, frameSelector: string | undefined, artifactBase: string): Promise<void> {
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+  private async downloadFile(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector: string | undefined, artifactBase: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     const downloadPromise = page.waitForEvent("download", { timeout });
     await el.click();
     const download = await downloadPromise;
@@ -410,8 +471,8 @@ export function generateHealingCode(): string {
   }
 
   /** Feature 9: capture a screenshot scoped to the matched element. */
-  private async elementScreenshot(page: Page, selectors: Record<string, any>, path: string, timeout: number, frameSelector?: string): Promise<void> {
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, timeout);
+  private async elementScreenshot(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, path: string, timeout: number, frameSelector?: string): Promise<void> {
+    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
     await el.screenshot({ path });
   }
 
@@ -451,17 +512,17 @@ export function generateHealingCode(): string {
         return page.getByText(new RegExp(esc(predicate.text ?? ""), "i")).first().isVisible().catch(() => false);
       case "elementVisible":
         try {
-          const el = await this.findElement(page, predicate.selector, 3000);
+          const el = await this.findElement(page, predicate.selector, [], 3000);
           return await el.isVisible();
         } catch { return false; }
       case "fieldEmpty":
         try {
-          const el = await this.findElement(page, predicate.selector, 3000);
+          const el = await this.findElement(page, predicate.selector, [], 3000);
           return (await el.inputValue().catch(() => "")).trim() === "";
         } catch { return false; }
       case "fieldValue":
         try {
-          const el = await this.findElement(page, predicate.selector, 3000);
+          const el = await this.findElement(page, predicate.selector, [], 3000);
           const value = await el.inputValue().catch(() => "");
           if (predicate.equals !== undefined) return value === predicate.equals;
           if (predicate.contains !== undefined) return value.includes(predicate.contains);
