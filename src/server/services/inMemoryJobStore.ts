@@ -8,12 +8,19 @@ export interface CreateJobInput {
   workflowIds: string[];
   dryRun: boolean;
   addressProfile: string;
+  sourceJobId?: string;
+  retryOfAccountIds?: string[];
 }
 
 export interface AccountLogEntry {
   timestamp: string;
   step: string;
   detail?: string;
+  workflowId?: string;
+  stepId?: string;
+  stepName?: string;
+  level?: "info" | "success" | "warning" | "error";
+  artifactRefs?: Array<{ type: "trace" | "screenshot" | "details" | "log" | "other"; url: string; label?: string }>;
 }
 
 export interface JobAccountState {
@@ -55,7 +62,7 @@ export interface JobStore {
   listJobs(): AutomationJob[];
   markJob(id: string, status: JobStatus, message?: string): AutomationJob;
   markAccount(id: string, accountId: string, patch: Partial<JobAccountState>): AutomationJob;
-  logAccountStep(id: string, accountId: string, step: string, detail?: string): AutomationJob;
+  logAccountStep(id: string, accountId: string, step: string, detail?: string, metadata?: Partial<AccountLogEntry>): AutomationJob;
 }
 
 export function createJobStore(): JobStore {
@@ -80,7 +87,8 @@ export function createJobStore(): JobStore {
         input: {
           ...input,
           accountIds: [...input.accountIds],
-          workflowIds: [...input.workflowIds]
+          workflowIds: [...input.workflowIds],
+          retryOfAccountIds: input.retryOfAccountIds ? [...input.retryOfAccountIds] : undefined
         },
         accounts: input.accountIds.map((accountId) => ({
           accountId,
@@ -129,14 +137,14 @@ export function createJobStore(): JobStore {
       return cloneJob(job);
     },
 
-    logAccountStep(id, accountId, step, detail) {
+    logAccountStep(id, accountId, step, detail, metadata) {
       const job = getMutableJob(id);
       const account = job.accounts.find((item) => item.accountId === accountId);
       if (!account) {
         throw new Error(`Account is not part of job: ${accountId}`);
       }
       if (!account.logs) account.logs = [];
-      account.logs.push({ timestamp: new Date().toISOString(), step, detail });
+      account.logs.push({ ...metadata, timestamp: new Date().toISOString(), step, detail });
       account.message = step;
       job.updatedAt = new Date().toISOString();
       return cloneJob(job);

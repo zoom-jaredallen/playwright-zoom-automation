@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
   AutomationJob,
+  AccountLogEntry,
   CreateJobInput,
   JobAccountState,
   JobAccountStatus,
@@ -68,7 +69,8 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
         input: {
           ...input,
           accountIds: [...input.accountIds],
-          workflowIds: [...input.workflowIds]
+          workflowIds: [...input.workflowIds],
+          retryOfAccountIds: input.retryOfAccountIds ? [...input.retryOfAccountIds] : undefined
         },
         accounts: input.accountIds.map((accountId) => ({
           accountId,
@@ -150,14 +152,14 @@ export function createFileJobStore(options: FileJobStoreOptions): JobStore {
       return cloneJob(job);
     },
 
-    logAccountStep(id: string, accountId: string, step: string, detail?: string): AutomationJob {
+    logAccountStep(id: string, accountId: string, step: string, detail?: string, metadata?: Partial<AccountLogEntry>): AutomationJob {
       const job = getMutableJob(id);
       const account = job.accounts.find((item) => item.accountId === accountId);
       if (!account) {
         throw new Error(`Account is not part of job: ${accountId}`);
       }
       if (!account.logs) account.logs = [];
-      account.logs.push({ timestamp: new Date().toISOString(), step, detail });
+      account.logs.push({ ...metadata, timestamp: new Date().toISOString(), step, detail });
       account.message = step;
       job.updatedAt = new Date().toISOString();
       persist(job);
