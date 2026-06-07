@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cancelJob,
   checkRunReadiness,
+  createCohort,
   createJob,
+  deleteCohort,
   duplicateRecordedWorkflow,
   fetchAddressProfiles,
   fetchJobs,
+  fetchCohorts,
   fetchRecordedWorkflow,
   fetchRecordedWorkflows,
   fetchWorkflows,
@@ -14,6 +17,7 @@ import {
   saveRecordedWorkflow,
   subscribeToJob,
   type AccountQueryFilters,
+  type AccountCohortView,
   type AddressProfileView,
   type JobView,
   type RecordedWorkflowView,
@@ -25,6 +29,7 @@ import { AccountQueryPanel } from "./components/AccountQueryPanel.js";
 import { AppShell } from "./components/AppShell.js";
 import { ConfigureStep } from "./components/ConfigureStep.js";
 import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { CohortManager } from "./components/CohortManager.js";
 import { ImportWorkflow } from "./components/ImportWorkflow.js";
 import { JobHistoryPanel } from "./components/JobHistoryPanel.js";
 import { NameDialog } from "./components/NameDialog.js";
@@ -58,6 +63,7 @@ function AppContent() {
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState<string | undefined>();
   const [totalAccounts, setTotalAccounts] = useState<number | undefined>();
+  const [cohorts, setCohorts] = useState<AccountCohortView[]>([]);
 
   // Workflow state
   const [workflows, setWorkflows] = useState<WorkflowView[]>([]);
@@ -133,6 +139,9 @@ function AppContent() {
     void fetchJobs().then((r) => setJobHistory(r.jobs)).catch(() => undefined);
   }, []);
   useEffect(() => { refreshHistory(); }, []);
+  useEffect(() => {
+    void fetchCohorts().then((response) => setCohorts(response.cohorts)).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     if (wizardStep !== "configure") return;
@@ -210,6 +219,31 @@ function AppContent() {
       for (const id of accountIds) { if (selected) next.add(id); else next.delete(id); }
       return next;
     });
+  };
+
+  const handleSaveCohort = async (name: string) => {
+    try {
+      const response = await createCohort({ name, accountIds: [...selectedIds], filters });
+      setCohorts((current) => [response.cohort, ...current.filter((cohort) => cohort.id !== response.cohort.id)]);
+      addToast("success", `Saved cohort "${response.cohort.name}"`);
+    } catch (error) {
+      addToast("error", `Cohort save failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  const handleLoadCohort = (cohort: AccountCohortView) => {
+    setSelectedIds(new Set(cohort.accountIds));
+    addToast("info", `Loaded cohort "${cohort.name}"`);
+  };
+
+  const handleDeleteCohort = async (id: string) => {
+    try {
+      await deleteCohort(id);
+      setCohorts((current) => current.filter((cohort) => cohort.id !== id));
+      addToast("success", "Cohort deleted");
+    } catch (error) {
+      addToast("error", `Cohort delete failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const handleToggleWorkflow = (workflowId: string) => {
@@ -492,6 +526,13 @@ function AppContent() {
                   onQuery={handleQuery}
                   onToggle={handleToggleAccount}
                   onTogglePage={handleTogglePage}
+                />
+                <CohortManager
+                  cohorts={cohorts}
+                  selectedCount={selectedIds.size}
+                  onSave={handleSaveCohort}
+                  onLoad={handleLoadCohort}
+                  onDelete={handleDeleteCohort}
                 />
                 <div className="wizard-footer">
                   <span />

@@ -18,6 +18,7 @@ import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./s
 import { isAllowedWebhookUrl, WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { evaluateRunReadiness } from "./services/runReadinessService.js";
+import { createAccountCohortStore } from "./services/accountCohortStore.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
 import { TokenManager } from "../zoom/oauth.js";
@@ -38,6 +39,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
   const workflowRegistry = createWorkflowRegistry();
   const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
+  const cohortStore = createAccountCohortStore(path.resolve("output/cohorts"));
   const webhookService = new WebhookService();
   // Single-user tool: the most recent account-query result is cached process-wide so
   // POST /api/jobs can resolve account IDs without re-querying. Not safe for concurrent
@@ -308,6 +310,38 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/cohorts", (_request, response) => {
+    response.json({ cohorts: cohortStore.list() });
+  });
+
+  app.post("/api/cohorts", (request, response) => {
+    const name = typeof request.body?.name === "string" ? request.body.name.trim() : "";
+    const accountIds = Array.isArray(request.body?.accountIds) ? request.body.accountIds : [];
+    if (!name || accountIds.length === 0) {
+      response.status(400).json({ error: "name and accountIds are required" });
+      return;
+    }
+    const cohort = cohortStore.create({ name, accountIds, filters: request.body?.filters });
+    response.status(201).json({ cohort });
+  });
+
+  app.put("/api/cohorts/:id", (request, response, next) => {
+    try {
+      response.json({ cohort: cohortStore.update(request.params.id, request.body) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/cohorts/:id", (request, response) => {
+    const deleted = cohortStore.delete(request.params.id);
+    if (!deleted) {
+      response.status(404).json({ error: "Cohort not found" });
+      return;
+    }
+    response.json({ ok: true });
   });
 
   app.get("/api/jobs", (_request, response) => {

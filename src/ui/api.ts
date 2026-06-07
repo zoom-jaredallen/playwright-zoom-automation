@@ -28,6 +28,15 @@ export interface WorkflowView {
   category: WorkflowCategory;
 }
 
+export interface AccountCohortView {
+  id: string;
+  name: string;
+  accountIds: string[];
+  filters?: AccountQueryFilters;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface JobView {
   id: string;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -162,6 +171,25 @@ export async function queryAccounts(filters: AccountQueryFilters): Promise<{
     method: "POST",
     body: JSON.stringify({ filters })
   });
+}
+
+export async function fetchCohorts(): Promise<{ cohorts: AccountCohortView[] }> {
+  return requestJson("/api/cohorts");
+}
+
+export async function createCohort(input: {
+  name: string;
+  accountIds: string[];
+  filters?: AccountQueryFilters;
+}): Promise<{ cohort: AccountCohortView }> {
+  return requestJson("/api/cohorts", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function deleteCohort(id: string): Promise<{ ok: boolean }> {
+  return requestJson(`/api/cohorts/${id}`, { method: "DELETE" });
 }
 
 export async function createJob(input: {
