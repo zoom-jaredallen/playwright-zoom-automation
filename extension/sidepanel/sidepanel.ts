@@ -1,4 +1,4 @@
-import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
+import { isCommitClickLabel, scoreSelector, type AssertionType } from "@zoom-automation/workflow-core";
 import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
 import { applySelectorCandidate } from "../shared/selectorRepair.js";
 import { buildStepInspectorSummary, fallbackCandidates } from "../shared/stepInspector.js";
@@ -897,7 +897,7 @@ function renderAssertionEditor(action: RecordedAction): HTMLElement {
       selectedType,
       assertionOptionsForUi().map((option) => [option.value, option.label]),
       (value) => {
-        const defaults = defaultAssertionInput(value as RecordedAction["assertionType"]);
+        const defaults = defaultAssertionInput(value as AssertionType);
         return updateActionPatch(action.id, {
           assertionType: defaults.assertionType,
           expected: action.expected || defaults.expected

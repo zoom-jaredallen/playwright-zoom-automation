@@ -4,6 +4,7 @@
  */
 import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowTestEvent } from "../shared/types.js";
 import { createStepTestPlan } from "../shared/testPlan.js";
+import { firstRecordableNavigationUrl, shouldAcceptRecordedAction, shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
 import {
   applyStepUpdate,
   buildWorkflow as buildWorkflowCore,
@@ -61,7 +62,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendRes
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
   if (!recording || activeRecordingTabId !== tabId) return;
-  if (!tab.url?.includes("zoom.us")) return;
+  if (!tab.url?.includes("zoom.us") || !shouldRecordNavigationUrl(tab.url)) return;
   void syncContentRecorder(tabId);
 });
 
@@ -100,11 +101,13 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
           impersonationDetected = true;
         }
         // Filter out meta-only actions (impersonation detection notices)
-        if (!message.action.id.startsWith("meta_")) {
+        const accepted = !message.action.id.startsWith("meta_") && shouldAcceptRecordedAction(message.action, { frameId: sender.frameId });
+        if (accepted) {
           actions.push(await withVisibleTabThumbnail(message.action, sender.tab));
         }
-        if (!recordingStartUrl && message.action.type === "navigate" && message.action.url) {
-          recordingStartUrl = message.action.url;
+        const startUrlCandidate = message.action.type === "navigate" ? message.action.url : message.action.pageUrl;
+        if (accepted && !recordingStartUrl && startUrlCandidate && shouldRecordNavigationUrl(startUrlCandidate, { frameId: sender.frameId })) {
+          recordingStartUrl = startUrlCandidate;
         }
         if (sender.tab?.id !== undefined) {
           activeRecordingTabId = sender.tab.id;
@@ -800,7 +803,9 @@ async function hydrateDraftState(): Promise<void> {
   paused = draft.paused;
   actions = draft.actions ?? [];
   recordingStartTime = draft.recordingStartTime;
-  recordingStartUrl = draft.recordingStartUrl;
+  recordingStartUrl = shouldRecordNavigationUrl(draft.recordingStartUrl)
+    ? draft.recordingStartUrl
+    : firstRecordableNavigationUrl(actions) ?? "";
   impersonationDetected = draft.impersonationDetected;
   activeRecordingTabId = draft.activeTabId;
   updateBadge();
@@ -857,8 +862,10 @@ async function importWorkflow(workflow: RecordedWorkflow): Promise<{ ok: boolean
   activeRecordingTabId = undefined;
   impersonationDetected = workflow.config?.requiresImpersonation !== false;
   recordingStartTime = parseRecordedAt(workflow.meta.recordedAt) ?? Date.now();
-  recordingStartUrl = workflow.meta.recordedOnUrl || normalizeNavigationUrl(workflow.config?.startUrl ?? "/");
-  actions = workflow.actions.map(normalizeImportedAction);
+  actions = workflow.actions.map(normalizeImportedAction).filter((action) => shouldAcceptRecordedAction(action));
+  recordingStartUrl = shouldRecordNavigationUrl(workflow.meta.recordedOnUrl)
+    ? workflow.meta.recordedOnUrl
+    : firstRecordableNavigationUrl(actions) ?? normalizeNavigationUrl(workflow.config?.startUrl ?? "/");
   updateBadge();
   await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
   await persistAndBroadcast();

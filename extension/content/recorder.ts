@@ -6,6 +6,7 @@
 import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth, computeAnchor } from "../shared/selectors.js";
 import { buildSelectorCandidatesForElement, testSelectorCandidatesInDocument } from "../shared/selectorCandidates.js";
 import { detectParameters } from "../shared/parameterizer.js";
+import { shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
 import { createSelectorRepairPlan, type RankedSelectorCandidate, type SelectorCandidate } from "@zoom-automation/workflow-core";
 
@@ -117,7 +118,7 @@ function startRecording(): void {
   showRecordingIndicator();
   
   // Record initial navigation (skip if it's a login/impersonation page)
-  if (!isLoginOrImpersonationUrl(window.location.href)) {
+  if (!isLoginOrImpersonationUrl(window.location.href) && shouldRecordNavigationUrl(window.location.href, currentFrameContext())) {
     recordAction({
       type: "navigate",
       url: window.location.href,
@@ -442,6 +443,10 @@ function handleNavigation(): void {
     return;
   }
 
+  if (!shouldRecordNavigationUrl(window.location.href, currentFrameContext())) {
+    return;
+  }
+
   // Detect if we just entered an impersonated context
   if (!impersonationDetected && detectImpersonationContext()) {
     impersonationDetected = true;
@@ -494,6 +499,10 @@ function recordAction(
   partial: Partial<RecordedAction> & { type: ActionType; selectors: RecordedAction["selectors"] },
   targetElement?: Element
 ): void {
+  if (partial.type === "navigate" && !shouldRecordNavigationUrl(partial.url ?? window.location.href, currentFrameContext())) {
+    return;
+  }
+
   // Feature 1: record the iframe context so the compiler can scope to a frameLocator.
   if (frameSelector && !partial.frameSelector) {
     partial.frameSelector = frameSelector;
@@ -546,6 +555,14 @@ function recordAction(
   // instead of a fixed timeout.
   if (action.type === "click" && SUBMIT_LABEL_PATTERN.test(actionLabel(action))) {
     captureNetworkWaitFor(action);
+  }
+}
+
+function currentFrameContext(): { frameId: number } {
+  try {
+    return { frameId: window.top === window ? 0 : 1 };
+  } catch {
+    return { frameId: 1 };
   }
 }
 
@@ -907,7 +924,7 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
       chosenPreview: chosen ? elementPreview(chosen) : undefined,
       chosenSelector: ranked[0] ? candidateLabel(ranked[0]) : undefined,
       fallbackCandidates: ranked.map(candidateResult),
-      selectorDiagnostics: best ? selectorDiagnosticsFromRanked(best, chosen) : undefined,
+      selectorDiagnostics: best ? selectorDiagnosticsFromRanked(best, chosen ?? null) : undefined,
       repairSuggestions: repairPlan.suggestions
     };
   } catch (error) {
