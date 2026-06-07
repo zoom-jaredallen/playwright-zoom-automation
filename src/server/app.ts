@@ -21,6 +21,7 @@ import { cancelRunningJob, startAutomationJob } from "./services/jobRunner.js";
 import { createRetryJobInput, selectRetryAccounts } from "./services/jobRetryService.js";
 import { computeDashboardMetrics } from "./services/analytics.js";
 import { listJobArtifacts } from "./services/artifacts.js";
+import { buildRunCockpit } from "./services/runCockpitService.js";
 import { createSchedulerStore, shouldRunNow, type ScheduleDefinition } from "./services/scheduler.js";
 import { isAllowedWebhookUrl, WebhookService } from "./services/webhooks.js";
 import { createWorkflowRegistry } from "./services/workflowRegistry.js";
@@ -439,6 +440,15 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       return;
     }
     response.json({ job });
+  });
+
+  app.get("/api/jobs/:jobId/cockpit", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+    response.json({ cockpit: buildRunCockpit(job) });
   });
 
   app.get("/api/jobs/:jobId/work-items", (request, response) => {

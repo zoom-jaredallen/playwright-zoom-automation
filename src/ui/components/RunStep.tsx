@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { fetchJobArtifacts, type ArtifactView, type JobView, type SubAccountView } from "../api.js";
+import { fetchJobArtifacts, fetchRunCockpit, type ArtifactView, type JobView, type RunCockpitView, type SubAccountView } from "../api.js";
 import { RunAccountTimeline } from "./RunAccountTimeline.js";
+import { RunCockpit, type RunFilter } from "./RunCockpit.js";
 
 type RunAccountState = JobView["accounts"][number];
 
@@ -10,14 +11,17 @@ interface RunStepProps {
   pipelineOrder: string[];
   workflowNames: Map<string, string>;
   onCancel?(): void;
+  onRetry?(job: JobView, statuses: Array<"failed" | "skipped">): void;
   onBack(): void;
   onNewRun(): void;
 }
 
-export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCancel, onBack, onNewRun }: RunStepProps) {
+export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCancel, onRetry, onBack, onNewRun }: RunStepProps) {
   const [expandedAccountId, setExpandedAccountId] = useState<string | undefined>();
   const [artifactsByAccount, setArtifactsByAccount] = useState<Record<string, ArtifactView[]>>({});
   const [artifactErrors, setArtifactErrors] = useState<Record<string, string>>({});
+  const [cockpit, setCockpit] = useState<RunCockpitView | undefined>();
+  const [filter, setFilter] = useState<RunFilter>("all");
 
   useEffect(() => {
     if (!job || !expandedAccountId) return;
@@ -33,6 +37,11 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
         }));
       });
   }, [artifactErrors, artifactsByAccount, expandedAccountId, job?.id]);
+
+  useEffect(() => {
+    if (!job) return;
+    void fetchRunCockpit(job.id).then((response) => setCockpit(response.cockpit)).catch(() => setCockpit(undefined));
+  }, [job?.id, job?.updatedAt, job?.summary.completed, job?.summary.failed, job?.summary.skipped, job?.summary.running]);
 
   if (!job) {
     return (
@@ -74,6 +83,16 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
         />
       </div>
 
+      <RunCockpit
+        cockpit={cockpit}
+        filter={filter}
+        onFilterChange={setFilter}
+        onRetryFailed={onRetry ? () => onRetry(job, ["failed"]) : undefined}
+        onRetrySkipped={onRetry ? () => onRetry(job, ["skipped"]) : undefined}
+        exportUrl={`/api/jobs/${job.id}/export?format=csv`}
+        traceUrl={`/api/jobs/${job.id}/artifacts`}
+      />
+
       {/* Stats */}
       <div className="run-stats">
         <div className="run-stat">
@@ -106,7 +125,7 @@ export function RunStep({ job, accountsById, pipelineOrder, workflowNames, onCan
           <span>Status</span>
           <span>Progress</span>
         </div>
-        {job.accounts.map((accountState) => {
+        {filteredAccounts(job, filter, cockpit).map((accountState) => {
           const account = accountsById.get(accountState.accountId);
           const workflowName = accountState.workflowId
             ? workflowNames.get(accountState.workflowId) ?? accountState.workflowId
@@ -257,4 +276,10 @@ function progressPercent(job: JobView): number {
   if (total === 0) return 0;
   const done = job.summary.completed + job.summary.failed + job.summary.skipped;
   return Math.round((done / total) * 100);
+}
+
+function filteredAccounts(job: JobView, filter: RunFilter, cockpit: RunCockpitView | undefined): JobView["accounts"] {
+  if (filter === "all" || !cockpit) return job.accounts;
+  const ids = new Set(cockpit.quickFilters[filter]);
+  return job.accounts.filter((account) => ids.has(account.accountId));
 }

@@ -3967,3 +3967,106 @@ tr:hover .copy-btn {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.run-cockpit {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--background-bg-default);
+}
+
+.run-cockpit-header,
+.run-cockpit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.run-cockpit-header h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.run-cockpit-header p {
+  margin: 0;
+  color: var(--text-text-subtle-neutral);
+  font-size: 13px;
+}
+
+.run-cockpit-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.run-cockpit-tile {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+
+.run-cockpit-tile span {
+  color: var(--text-text-subtle-neutral);
+  font-size: 12px;
+}
+
+.run-cockpit-tile strong {
+  font-size: 22px;
+}
+
+.run-cockpit-tile.primary strong { color: var(--text-text-primary); }
+.run-cockpit-tile.success strong { color: var(--text-text-success); }
+.run-cockpit-tile.warning strong { color: var(--text-text-warning); }
+.run-cockpit-tile.error strong { color: var(--text-text-error); }
+
+.run-cockpit-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-cockpit-panel {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--fill-fill-subtle-neutral);
+  color: var(--text-text-neutral);
+  font-size: 13px;
+}
+
+.run-filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 999px;
+  background: var(--background-bg-default);
+  color: var(--text-text-neutral);
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  border-color: var(--border-border-primary);
+  background: var(--fill-fill-subtler-primary);
+  color: var(--text-text-primary);
+}
+
+.filter-chip span {
+  font-weight: 700;
+}

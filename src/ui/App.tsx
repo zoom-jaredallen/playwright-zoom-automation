@@ -583,6 +583,7 @@ function AppContent() {
                 pipelineOrder={pipelineOrder}
                 workflowNames={workflowNames}
                 onCancel={handleCancelJob}
+                onRetry={handleRetryJob}
                 onBack={() => setWizardStep("configure")}
                 onNewRun={() => { setJob(undefined); setWizardStep("accounts"); }}
               />

@@ -103,6 +103,28 @@ export interface RunReadinessView {
   warnings: ReadinessCheckView[];
 }
 
+export interface RunCockpitView {
+  progress: {
+    totalAccounts: number;
+    finishedAccounts: number;
+    percent: number;
+    queued: number;
+    running: number;
+    completed: number;
+    skipped: number;
+    failed: number;
+  };
+  currentAccounts: Array<{ accountId: string; message?: string }>;
+  retriesInProgress: string[];
+  quickFilters: {
+    failed: string[];
+    skipped: string[];
+    needsReview: string[];
+    noAddressFound: string[];
+  };
+  failureCategories: Record<string, number>;
+}
+
 // ─── Recorded Workflow Types (for Editor) ────────────────────────────────────
 // These come from the shared `@zoom-automation/workflow-core` package so the Web
 // UI, server, compiler, and Chrome extension all share one schema. The `*View`
@@ -233,6 +255,10 @@ export async function fetchJobs(): Promise<{ jobs: JobView[] }> {
 
 export async function fetchJob(jobId: string): Promise<{ job: JobView }> {
   return requestJson(`/api/jobs/${jobId}`);
+}
+
+export async function fetchRunCockpit(jobId: string): Promise<{ cockpit: RunCockpitView }> {
+  return requestJson(`/api/jobs/${jobId}/cockpit`);
 }
 
 export async function cancelJob(jobId: string): Promise<{ job: JobView }> {

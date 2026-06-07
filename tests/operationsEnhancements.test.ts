@@ -11,6 +11,7 @@ import {
   appendStructuredAccountLog,
   deriveAccountTimeline
 } from "../src/server/services/runTimelineService.js";
+import { buildRunCockpit } from "../src/server/services/runCockpitService.js";
 import {
   buildWorkflowParameterDefaults,
   groupWorkflowParameters,
@@ -84,6 +85,25 @@ describe("job retry service", () => {
       sourceJobId: source.id,
       retryOfAccountIds: ["a2"]
     });
+  });
+});
+
+describe("run cockpit service", () => {
+  it("summarizes current activity, retry state, filters, and failure categories", () => {
+    const store = seedJobStore();
+    const [job] = store.listJobs();
+    store.markAccount(job.id, "a1", { status: "running", message: "Filling address form" });
+    store.markAccount(job.id, "a2", { status: "failed", error: "locator.waitFor: selector failed" });
+    store.markAccount(job.id, "a3", { status: "skipped", message: "Address not found" });
+    const updated = store.getJob(job.id)!;
+
+    const cockpit = buildRunCockpit(updated);
+
+    expect(cockpit.progress.totalAccounts).toBe(3);
+    expect(cockpit.currentAccounts).toEqual([{ accountId: "a1", message: "Filling address form" }]);
+    expect(cockpit.quickFilters.failed).toEqual(["a2"]);
+    expect(cockpit.quickFilters.noAddressFound).toEqual(["a3"]);
+    expect(cockpit.failureCategories.selector).toBe(1);
   });
 });
 
