@@ -18,7 +18,7 @@ export type {
   OnFailure
 } from "@zoom-automation/workflow-core";
 
-import type { RecordedAction, RecordedWorkflow, SelectorStrategy } from "@zoom-automation/workflow-core";
+import type { RankedSelectorCandidate, RecordedAction, RecordedWorkflow, SelectorCandidate, SelectorStrategy } from "@zoom-automation/workflow-core";
 
 // ─── Extension-only types ──────────────────────────────────────────────────────
 
@@ -33,6 +33,10 @@ export interface SelectorTestResult {
     label: string;
     matchedCount: number;
     visibleCount: number;
+    candidateId?: string;
+    kind?: SelectorCandidate["kind"];
+    score?: number;
+    scoreLevel?: RankedSelectorCandidate["score"]["level"];
   }>;
   error?: string;
 }
@@ -40,6 +44,8 @@ export interface SelectorTestResult {
 export interface SelectorPickResult {
   actionId: string;
   selectors: SelectorStrategy;
+  selectorCandidates?: SelectorCandidate[];
+  selectedCandidateId?: string;
   frameSelector?: string;
   preview?: string;
   description?: string;
@@ -82,6 +88,8 @@ export type ExtensionMessage =
       actionId: string;
       description?: string;
       selectors?: RecordedAction["selectors"];
+      selectorCandidates?: RecordedAction["selectorCandidates"];
+      selectedCandidateId?: RecordedAction["selectedCandidateId"];
       cssSelector?: string;
       selectorNote?: string;
       frameSelector?: string;

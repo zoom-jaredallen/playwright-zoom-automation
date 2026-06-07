@@ -133,6 +133,8 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       updateAction(message.actionId, {
         description: message.description,
         selectors: message.selectors,
+        selectorCandidates: message.selectorCandidates,
+        selectedCandidateId: message.selectedCandidateId,
         cssSelector: message.cssSelector,
         selectorNote: message.selectorNote,
         frameSelector: message.frameSelector,

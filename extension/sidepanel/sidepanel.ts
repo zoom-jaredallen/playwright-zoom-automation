@@ -966,6 +966,8 @@ async function pickSelectorForAction(action: RecordedAction): Promise<void> {
 
   const update: Omit<Extract<ExtensionMessage, { type: "UPDATE_ACTION" }>, "type" | "actionId"> = {
     selectors: result.selectors,
+    selectorCandidates: result.selectorCandidates,
+    selectedCandidateId: result.selectedCandidateId,
     frameSelector: result.frameSelector,
     description: result.description
   };

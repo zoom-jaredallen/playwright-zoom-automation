@@ -275,6 +275,8 @@ export function deleteStep(actions: RecordedAction[], actionId: string): Recorde
 export interface StepUpdate {
   description?: string;
   selectors?: RecordedAction["selectors"];
+  selectorCandidates?: RecordedAction["selectorCandidates"];
+  selectedCandidateId?: RecordedAction["selectedCandidateId"];
   cssSelector?: string;
   selectorNote?: string;
   frameSelector?: string;
@@ -311,6 +313,16 @@ export function applyStepUpdate(original: RecordedAction, update: StepUpdate): R
   }
   if (update.selectors !== undefined) {
     action.selectors = { ...update.selectors };
+  }
+  if (update.selectorCandidates !== undefined) {
+    action.selectorCandidates = update.selectorCandidates.map((candidate) => ({
+      ...candidate,
+      selector: { ...candidate.selector },
+      diagnostics: candidate.diagnostics ? { ...candidate.diagnostics } : undefined
+    }));
+  }
+  if (update.selectedCandidateId !== undefined) {
+    action.selectedCandidateId = update.selectedCandidateId || undefined;
   }
   if (update.cssSelector !== undefined) {
     const cssSelector = update.cssSelector.trim();

@@ -4,8 +4,10 @@
  * background service worker.
  */
 import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth, computeAnchor } from "../shared/selectors.js";
+import { buildSelectorCandidatesForElement, testSelectorCandidatesInDocument } from "../shared/selectorCandidates.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
+import type { RankedSelectorCandidate, SelectorCandidate } from "@zoom-automation/workflow-core";
 
 let recording = false;
 let paused = false;
@@ -830,16 +832,10 @@ async function evalPredicateDom(predicate: any): Promise<boolean> {
 
 async function testSelector(action: RecordedAction): Promise<SelectorTestResult> {
   try {
-    const candidates = selectorCandidates(action.selectors);
-    const results = candidates.map((candidate) => {
-      const elements = resolveCandidate(candidate.selector, candidate.label);
-      return {
-        selector: candidate.selector,
-        label: candidate.label,
-        matchedCount: elements.length,
-        visibleCount: elements.filter(isElementVisible).length
-      };
-    });
+    const candidates = action.selectorCandidates?.length
+      ? action.selectorCandidates
+      : buildCandidatesFromLegacyAction(action);
+    const ranked = testSelectorCandidatesInDocument(candidates, document);
 
     const chosen = findReplayElementSync(action);
     if (chosen) {
@@ -848,11 +844,11 @@ async function testSelector(action: RecordedAction): Promise<SelectorTestResult>
 
     return {
       actionId: action.id,
-      matchedCount: results[0]?.matchedCount ?? 0,
-      visibleCount: results[0]?.visibleCount ?? 0,
+      matchedCount: ranked[0]?.diagnostics?.matchedCount ?? 0,
+      visibleCount: ranked[0]?.diagnostics?.visibleCount ?? 0,
       chosenPreview: chosen ? elementPreview(chosen) : undefined,
-      chosenSelector: results.find((result) => result.visibleCount > 0)?.label,
-      fallbackCandidates: results
+      chosenSelector: ranked[0] ? candidateLabel(ranked[0]) : undefined,
+      fallbackCandidates: ranked.map(candidateResult)
     };
   } catch (error) {
     return {
@@ -896,13 +892,18 @@ async function pickSelector(action: RecordedAction): Promise<SelectorPickResult>
       }
 
       const selectors = extractedSelectorsForTarget(target);
+      const rankedCandidates = testSelectorCandidatesInDocument(buildSelectorCandidatesForElement(target), document, target);
+      const recommended = rankedCandidates[0];
+      const persistedCandidates = stripRuntimeScores(rankedCandidates);
       highlightElement(target);
       finish({
         actionId: action.id,
-        selectors,
+        selectors: recommended?.selector ?? selectors,
+        selectorCandidates: persistedCandidates,
+        selectedCandidateId: recommended?.id,
         frameSelector,
         preview: elementPreview(target),
-        description: describePickedTarget(action, target, selectors),
+        description: describePickedTarget(action, target, recommended?.selector ?? selectors),
         value: pickedValue(action, target)
       });
     };
@@ -1336,36 +1337,49 @@ function findReplayElementSync(action: RecordedAction): Element | undefined {
   return undefined;
 }
 
-function selectorCandidates(selectors: SelectorStrategy): Array<{ label: string; selector: SelectorStrategy }> {
-  const candidates: Array<{ label: string; selector: SelectorStrategy }> = [];
-  const withAnchor = (selector: SelectorStrategy): SelectorStrategy =>
-    selectors.anchor ? { ...selector, anchor: selectors.anchor } : selector;
-  const anchorSuffix = selectors.anchor?.text ? ` anchored to "${selectors.anchor.text}"` : "";
-
-  if (selectors.role) candidates.push({ label: `Role: ${selectors.role.role}${selectors.role.name ? ` / ${selectors.role.name}` : ""}${anchorSuffix}`, selector: withAnchor({ role: selectors.role }) });
-  if (selectors.label) candidates.push({ label: `Label: ${selectors.label}${anchorSuffix}`, selector: withAnchor({ label: selectors.label }) });
-  if (selectors.text) candidates.push({ label: `Text: ${selectors.text}${anchorSuffix}`, selector: withAnchor({ text: selectors.text }) });
-  if (selectors.testId) candidates.push({ label: `Test ID: ${selectors.testId}${anchorSuffix}`, selector: withAnchor({ testId: selectors.testId }) });
-  if (selectors.css) candidates.push({ label: `CSS: ${selectors.css}${anchorSuffix}`, selector: withAnchor({ css: selectors.css }) });
-  return candidates;
+function buildCandidatesFromLegacyAction(action: RecordedAction): SelectorCandidate[] {
+  const syntheticTarget = findReplayElementSync(action);
+  return syntheticTarget
+    ? buildSelectorCandidatesForElement(syntheticTarget)
+    : [{
+        id: "legacy-selector",
+        kind: action.selectors.role ? "role" : action.selectors.label ? "label" : action.selectors.testId ? "testId" : action.selectors.text ? "text" : action.selectors.css ? "css" : "relative",
+        selector: action.selectors,
+        source: "legacy",
+        label: formatCandidateSelector(action.selectors)
+      }];
 }
 
-function resolveCandidate(selector: SelectorStrategy, label: string): Element[] {
-  const root = resolveAnchorRoot(selector) ?? document;
-  if (selector.css) return actionableElements(Array.from(root.querySelectorAll(selector.css)));
-  if (selector.testId) return actionableElements(Array.from(root.querySelectorAll(`[data-testid="${cssEscape(selector.testId)}"]`)));
-  if (selector.label) {
-    const target = findByLabel(selector.label, root);
-    return target ? [target] : [];
-  }
-  if (selector.role) {
-    return findAllByRole(selector.role.role, selector.role.name, root);
-  }
-  if (selector.text) {
-    return actionableElements(Array.from(root.querySelectorAll("*")).filter((element) => visibleText(element).toLowerCase().includes(selector.text!.toLowerCase())));
-  }
-  if (label) return [];
-  return [];
+function stripRuntimeScores(candidates: RankedSelectorCandidate[]): SelectorCandidate[] {
+  return candidates.map(({ rank: _rank, score: _score, ...candidate }) => candidate);
+}
+
+function candidateResult(candidate: RankedSelectorCandidate): SelectorTestResult["fallbackCandidates"][number] {
+  return {
+    selector: candidate.selector,
+    label: candidateLabel(candidate),
+    matchedCount: candidate.diagnostics?.matchedCount ?? 0,
+    visibleCount: candidate.diagnostics?.visibleCount ?? 0,
+    candidateId: candidate.id,
+    kind: candidate.kind,
+    score: candidate.score.score,
+    scoreLevel: candidate.score.level
+  };
+}
+
+function candidateLabel(candidate: RankedSelectorCandidate): string {
+  return candidate.label ?? `${candidate.kind}: ${formatCandidateSelector(candidate.selector)}`;
+}
+
+function formatCandidateSelector(selectors: SelectorStrategy): string {
+  return [
+    selectors.role ? `role=${selectors.role.role}${selectors.role.name ? `/${selectors.role.name}` : ""}` : undefined,
+    selectors.label ? `label=${selectors.label}` : undefined,
+    selectors.testId ? `testId=${selectors.testId}` : undefined,
+    selectors.text ? `text=${selectors.text}` : undefined,
+    selectors.css ? `css=${selectors.css}` : undefined,
+    selectors.xpath ? `xpath=${selectors.xpath}` : undefined
+  ].filter(Boolean).join(" | ") || "selector";
 }
 
 function highlightElement(element: Element): void {
