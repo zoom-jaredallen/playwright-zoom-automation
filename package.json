@@ -35,6 +35,12 @@
     "recorder:sessions": "tsx src/recorderDebug/cli.ts sessions",
     "recorder:events": "tsx src/recorderDebug/cli.ts events",
     "recorder:test": "tsx src/recorderDebug/cli.ts test",
+    "recorder:train": "tsx src/recorderDebug/cli.ts train",
+    "recorder:wait": "tsx src/recorderDebug/cli.ts wait",
+    "recorder:report": "tsx src/recorderDebug/cli.ts report",
+    "recorder:audit": "tsx src/recorderDebug/cli.ts audit",
+    "recorder:diff": "tsx src/recorderDebug/cli.ts diff",
+    "recorder:bundle": "tsx src/recorderDebug/cli.ts bundle",
     "recorder:export": "tsx src/recorderDebug/cli.ts export",
     "playwright:install": "playwright install chromium"
   },

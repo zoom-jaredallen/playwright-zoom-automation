@@ -54,6 +54,34 @@ describe("recorder debug routes", () => {
     const command = await getJson(`${baseUrl}/api/recorder/debug/commands/${created.body.command.id}`);
     expect(command.body.command.result).toMatchObject({ ok: true, message: "test finished" });
   });
+
+  it("accepts training commands and exposes latest training report", async () => {
+    const baseUrl = await startServer();
+    const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
+      type: "RUN_TRAINING_WORKFLOW",
+      payload: { iterations: 3, fromActionId: "step-1" }
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.command).toMatchObject({ type: "RUN_TRAINING_WORKFLOW" });
+
+    await postJson(`${baseUrl}/api/recorder/debug/commands/${created.body.command.id}/result`, {
+      ok: true,
+      trainingReport: {
+        sessionId: "route-session-1",
+        workflowName: "Workflow",
+        startedAt: "2026-06-07T00:00:00.000Z",
+        finishedAt: "2026-06-07T00:00:10.000Z",
+        summary: { iterations: 3, passed: 3, failed: 0, completionRate: 100, score: 95 },
+        iterations: [],
+        stepHealth: [],
+        recommendations: []
+      }
+    });
+
+    const latest = await getJson(`${baseUrl}/api/recorder/debug/training/latest`);
+    expect(latest.status).toBe(200);
+    expect(latest.body.report.summary.score).toBe(95);
+  });
 });
 
 async function startServer(): Promise<string> {

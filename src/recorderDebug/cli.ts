@@ -2,13 +2,22 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
+  RecorderActionDiff,
+  RecorderDebugCommand,
   RecorderDebugCommandInput,
   RecorderDebugCommandResult,
   RecorderDebugCommandType,
   RecorderDebugEvent,
   RecorderDebugSessionSummary,
-  RecorderDebugSnapshot
+  RecorderDebugSnapshot,
+  RecorderTrainingReport,
+  RecorderWorkflowAudit
 } from "./types.js";
+import {
+  buildWorkflowAudit,
+  diffRecordedActions,
+  formatTrainingReportSummary
+} from "./trainingReport.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:4174";
 
@@ -35,6 +44,18 @@ export function buildCommandInput(command: string, args: string[]): RecorderDebu
     return from
       ? { type: "RUN_TEST_WORKFLOW_FROM", payload: { actionId: from } }
       : { type: "RUN_TEST_WORKFLOW", payload: {} };
+  }
+
+  if (command === "train") {
+    return {
+      type: "RUN_TRAINING_WORKFLOW",
+      payload: {
+        iterations: readIntFlag(args, "--iterations", 3),
+        fromActionId: readFlag(args, "--from"),
+        delayMs: readIntFlag(args, "--delay-ms", 1_000),
+        stopOnFailure: args.includes("--stop-on-failure")
+      }
+    };
   }
 
   const commandTypes: Record<string, RecorderDebugCommandType> = {
@@ -84,6 +105,30 @@ export async function runRecorderDebugCli(argv = process.argv.slice(2), env = pr
     return;
   }
 
+  if (command === "report") {
+    const report = (await getJson<{ report: RecorderTrainingReport }>(`${baseUrl}/api/recorder/debug/training/latest`)).report;
+    writeOutput(args.includes("--json") ? report : formatTrainingReportSummary(report));
+    return;
+  }
+
+  if (command === "audit") {
+    const snapshot = await getLatest(baseUrl);
+    const audit = buildWorkflowAudit({
+      rawActions: snapshot.rawActions,
+      preparedActions: snapshot.preparedActions,
+      qualityScore: snapshot.quality?.score ?? snapshot.workflow?.quality?.score
+    });
+    writeOutput(args.includes("--json") ? audit : formatAuditSummary(audit));
+    return;
+  }
+
+  if (command === "diff") {
+    const snapshot = await getLatest(baseUrl);
+    const diff = diffRecordedActions(snapshot);
+    writeOutput(args.includes("--json") ? diff : formatActionDiff(diff));
+    return;
+  }
+
   if (command === "export") {
     const outPath = readFlag(args, "--out");
     if (!outPath) throw new Error("export requires --out <path>");
@@ -95,6 +140,23 @@ export async function runRecorderDebugCli(argv = process.argv.slice(2), env = pr
     return;
   }
 
+  if (command === "bundle") {
+    const outPath = readFlag(args, "--out") ?? `output/debug/recorder-bundle-${Date.now()}`;
+    const snapshot = await getLatest(baseUrl);
+    const trainingReport = await getJson<{ report: RecorderTrainingReport }>(`${baseUrl}/api/recorder/debug/training/latest`)
+      .then((response) => response.report)
+      .catch(() => undefined);
+    const audit = buildWorkflowAudit({
+      rawActions: snapshot.rawActions,
+      preparedActions: snapshot.preparedActions,
+      qualityScore: snapshot.quality?.score ?? snapshot.workflow?.quality?.score
+    });
+    const diff = diffRecordedActions(snapshot);
+    writeBundle(path.resolve(outPath), { snapshot, trainingReport, audit, diff });
+    writeOutput(`Exported recorder debug bundle to ${path.resolve(outPath)}`);
+    return;
+  }
+
   if (command === "command") {
     const commandId = args[0];
     if (!commandId) throw new Error("command requires a command id");
@@ -102,7 +164,17 @@ export async function runRecorderDebugCli(argv = process.argv.slice(2), env = pr
     return;
   }
 
-  if (["test", "build", "clear", "state"].includes(command)) {
+  if (command === "wait") {
+    const commandId = args[0];
+    if (!commandId) throw new Error("wait requires a command id");
+    writeOutput(await waitForCommand(baseUrl, commandId, {
+      timeoutMs: readIntFlag(args, "--timeout-ms", 300_000),
+      intervalMs: readIntFlag(args, "--interval-ms", 1_000)
+    }));
+    return;
+  }
+
+  if (["test", "train", "build", "clear", "state"].includes(command)) {
     const body = buildCommandInput(command, args);
     writeOutput(await postJson(`${baseUrl}/api/recorder/debug/commands`, body));
     return;
@@ -148,6 +220,77 @@ function readFlag(args: string[], flag: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined;
 }
 
+function readIntFlag(args: string[], flag: string, defaultValue: number): number {
+  const raw = readFlag(args, flag);
+  if (!raw) return defaultValue;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${flag} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+async function waitForCommand(
+  baseUrl: string,
+  commandId: string,
+  options: { timeoutMs: number; intervalMs: number }
+): Promise<{ command: RecorderDebugCommand }> {
+  const started = Date.now();
+  while (Date.now() - started <= options.timeoutMs) {
+    const response = await getJson<{ command: RecorderDebugCommand }>(`${baseUrl}/api/recorder/debug/commands/${encodeURIComponent(commandId)}`);
+    if (["completed", "failed"].includes(response.command.status)) {
+      return response;
+    }
+    await sleep(options.intervalMs);
+  }
+  throw new Error(`Timed out waiting for recorder debug command ${commandId}`);
+}
+
+function writeBundle(
+  outDir: string,
+  input: {
+    snapshot: RecorderDebugSnapshot;
+    trainingReport?: RecorderTrainingReport;
+    audit: RecorderWorkflowAudit;
+    diff: RecorderActionDiff;
+  }
+): void {
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(path.join(outDir, "snapshot.json"), `${JSON.stringify(input.snapshot, null, 2)}\n`, "utf8");
+  writeFileSync(path.join(outDir, "raw-actions.json"), `${JSON.stringify(input.snapshot.rawActions, null, 2)}\n`, "utf8");
+  writeFileSync(path.join(outDir, "prepared-actions.json"), `${JSON.stringify(input.snapshot.preparedActions, null, 2)}\n`, "utf8");
+  if (input.snapshot.workflow) {
+    writeFileSync(path.join(outDir, "workflow.json"), `${JSON.stringify(input.snapshot.workflow, null, 2)}\n`, "utf8");
+  }
+  if (input.trainingReport) {
+    writeFileSync(path.join(outDir, "training-report.json"), `${JSON.stringify(input.trainingReport, null, 2)}\n`, "utf8");
+  }
+  writeFileSync(path.join(outDir, "audit.json"), `${JSON.stringify(input.audit, null, 2)}\n`, "utf8");
+  writeFileSync(path.join(outDir, "action-diff.json"), `${JSON.stringify(input.diff, null, 2)}\n`, "utf8");
+}
+
+function formatAuditSummary(audit: RecorderWorkflowAudit): string {
+  return [
+    `Workflow audit score: ${audit.score}`,
+    `Risky steps: ${audit.riskySteps.length}`,
+    audit.riskySteps.slice(0, 5).map((step) => `- ${step.actionId}: ${step.reasons.join(", ")}`).join("\n"),
+    `Recommendations: ${audit.recommendations.length}`
+  ].filter(Boolean).join("\n");
+}
+
+function formatActionDiff(diff: RecorderActionDiff): string {
+  return [
+    `Raw steps: ${diff.rawCount}`,
+    `Prepared steps: ${diff.preparedCount}`,
+    `Removed steps: ${diff.removed.length}`,
+    ...diff.removed.slice(0, 10).map((step) => `- ${step.id} ${step.type}${step.description ? `: ${step.description}` : ""}`)
+  ].join("\n");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -155,10 +298,11 @@ function normalizeBaseUrl(value: string): string {
 function helpText(): string {
   return [
     "Usage: npm run recorder:debug -- <command>",
-    "Commands: latest, workflow, actions, sessions, events, export, test, build, clear, state, command",
+    "Commands: latest, workflow, actions, sessions, events, export, test, train, wait, report, audit, diff, bundle, build, clear, state, command",
     "Examples:",
     "  npm run recorder:latest",
     "  npm run recorder:test -- --from <actionId>",
+    "  npm run recorder:train -- --iterations 3",
     "  npm run recorder:export -- --out output/debug/workflow.json"
   ].join("\n");
 }

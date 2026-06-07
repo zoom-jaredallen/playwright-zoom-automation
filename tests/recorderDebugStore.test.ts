@@ -50,6 +50,30 @@ describe("recorder debug store", () => {
     expect(store.getCommand(command.id)?.status).toBe("completed");
     expect(store.nextPendingCommand()).toBeUndefined();
   });
+
+  it("persists latest training reports from command results", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "recorder-debug-"));
+    const store = createRecorderDebugStore({ directory: dir });
+    const command = store.createCommand({ type: "RUN_TRAINING_WORKFLOW", payload: { iterations: 2 } });
+
+    store.markCommandResult(command.id, {
+      ok: true,
+      trainingReport: {
+        sessionId: "session-1",
+        workflowName: "Workflow",
+        startedAt: "2026-06-07T00:00:00.000Z",
+        finishedAt: "2026-06-07T00:00:10.000Z",
+        summary: { iterations: 2, passed: 2, failed: 0, completionRate: 100, score: 94 },
+        iterations: [],
+        stepHealth: [],
+        recommendations: []
+      }
+    });
+
+    expect(store.latestTrainingReport()?.summary.score).toBe(94);
+    const saved = JSON.parse(readFileSync(path.join(dir, "session-1", "training-report.json"), "utf8"));
+    expect(saved.summary.completionRate).toBe(100);
+  });
 });
 
 function recordedNavigateAction() {

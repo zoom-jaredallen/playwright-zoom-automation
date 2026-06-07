@@ -62,6 +62,11 @@ npm run recorder:workflow
 npm run recorder:actions
 npm run recorder:test
 npm run recorder:test -- --from step_id
+npm run recorder:train -- --iterations 3 --stop-on-failure
+npm run recorder:report
+npm run recorder:audit
+npm run recorder:diff
+npm run recorder:bundle -- --out output/debug/latest-recorder-bundle
 npm run recorder:export -- --out output/debug/workflow.json
 ```
 
@@ -72,9 +77,12 @@ The expected bridge workflow is:
 3. Record or import the workflow in the active Zoom tab.
 4. Use `npm run recorder:latest`, `npm run recorder:actions`, and `npm run recorder:workflow` to inspect structured state.
 5. Use `npm run recorder:test` or `npm run recorder:test -- --from step_id` to enqueue browser-preflight replay in the active Chrome tab.
-6. Use `npm run recorder:events` to inspect replay progress and failures.
+6. Use `npm run recorder:train -- --iterations 3 --stop-on-failure` for repeated training runs that identify flaky steps before bulk use.
+7. Use `npm run recorder:report`, `npm run recorder:audit`, `npm run recorder:diff`, and `npm run recorder:bundle` to review the resulting workflow quality.
 
 Recorder snapshots are written under `output/recorder-sessions/`. They include raw actions, prepared/deduped actions, workflow JSON, quality data, URL/title, and preflight events. They are diagnostics, may contain recorded field values, and should not be committed.
+
+Training runs execute the recorded workflow against the active Zoom tab and may mutate the lab account. Only run them when the user has explicitly authorized testing and the Zoom page has been manually reset to the expected starting state.
 
 Only fall back to browser/computer-control tools when the bridge cannot answer the question, such as recording a new unknown path, visual layout inspection, or clearing an unexpected Zoom modal.
 

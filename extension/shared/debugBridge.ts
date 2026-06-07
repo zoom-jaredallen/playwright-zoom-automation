@@ -7,6 +7,7 @@ export type RecorderDebugCommandType =
   | "GET_TEST_WORKFLOW_STATE"
   | "RUN_TEST_WORKFLOW"
   | "RUN_TEST_WORKFLOW_FROM"
+  | "RUN_TRAINING_WORKFLOW"
   | "CLEAR_ACTIONS";
 
 export interface RecorderDebugCommand {
@@ -48,6 +49,41 @@ export interface RecorderDebugCommandResult {
   actions?: RecordedAction[];
   testState?: RecorderDebugSnapshot["testState"];
   events?: WorkflowTestEvent[];
+  trainingReport?: RecorderTrainingReport;
+}
+
+export interface RecorderTrainingIteration {
+  index: number;
+  ok: boolean;
+  durationMs: number;
+  failedActionId?: string;
+  error?: string;
+  events: WorkflowTestEvent[];
+}
+
+export interface RecorderTrainingReport {
+  sessionId: string;
+  workflowName?: string;
+  startedAt: string;
+  finishedAt: string;
+  summary: {
+    iterations: number;
+    passed: number;
+    failed: number;
+    completionRate: number;
+    score: number;
+  };
+  iterations: RecorderTrainingIteration[];
+  stepHealth: Array<{
+    actionId: string;
+    description?: string;
+    attempts: number;
+    passes: number;
+    failures: number;
+    failureRate: number;
+    lastError?: string;
+  }>;
+  recommendations: string[];
 }
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:4174";

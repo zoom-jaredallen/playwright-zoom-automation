@@ -6,6 +6,7 @@ export type RecorderDebugCommandType =
   | "GET_TEST_WORKFLOW_STATE"
   | "RUN_TEST_WORKFLOW"
   | "RUN_TEST_WORKFLOW_FROM"
+  | "RUN_TRAINING_WORKFLOW"
   | "CLEAR_ACTIONS";
 
 export interface RecorderDebugStatus {
@@ -61,6 +62,69 @@ export interface RecorderDebugCommandInput {
   payload?: Record<string, unknown>;
 }
 
+export interface RecorderTrainingRunOptions {
+  iterations: number;
+  fromActionId?: string;
+  delayMs?: number;
+  stopOnFailure?: boolean;
+}
+
+export interface RecorderTrainingIteration {
+  index: number;
+  ok: boolean;
+  durationMs: number;
+  failedActionId?: string;
+  error?: string;
+  events: RecorderDebugTestEvent[];
+}
+
+export interface RecorderTrainingStepHealth {
+  actionId: string;
+  description?: string;
+  attempts: number;
+  passes: number;
+  failures: number;
+  failureRate: number;
+  lastError?: string;
+}
+
+export interface RecorderTrainingReport {
+  sessionId: string;
+  workflowName?: string;
+  startedAt: string;
+  finishedAt: string;
+  summary: {
+    iterations: number;
+    passed: number;
+    failed: number;
+    completionRate: number;
+    score: number;
+  };
+  iterations: RecorderTrainingIteration[];
+  stepHealth: RecorderTrainingStepHealth[];
+  recommendations: string[];
+}
+
+export interface RecorderWorkflowAudit {
+  score: number;
+  riskySteps: Array<{
+    actionId: string;
+    description?: string;
+    reasons: string[];
+  }>;
+  recommendations: string[];
+}
+
+export interface RecorderActionDiff {
+  rawCount: number;
+  preparedCount: number;
+  removed: Array<{
+    id: string;
+    type: string;
+    description?: string;
+  }>;
+}
+
 export type RecorderDebugCommandStatus = "pending" | "leased" | "completed" | "failed";
 
 export interface RecorderDebugCommand extends RecorderDebugCommandInput {
@@ -80,6 +144,7 @@ export interface RecorderDebugCommandResult {
   actions?: RecordedAction[];
   testState?: RecorderDebugTestState;
   events?: RecorderDebugTestEvent[];
+  trainingReport?: RecorderTrainingReport;
 }
 
 export interface RecorderDebugEvent {

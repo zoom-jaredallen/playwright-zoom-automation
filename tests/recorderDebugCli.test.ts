@@ -26,6 +26,19 @@ describe("recorder debug CLI helpers", () => {
     expect(buildCommandInput("build", [])).toEqual({ type: "BUILD_WORKFLOW", payload: {} });
     expect(buildCommandInput("clear", [])).toEqual({ type: "CLEAR_ACTIONS", payload: {} });
   });
+
+  it("builds training command payloads with harness options", () => {
+    expect(buildCommandInput("train", ["--iterations", "5", "--from", "step-1", "--delay-ms", "250", "--stop-on-failure"]))
+      .toEqual({
+        type: "RUN_TRAINING_WORKFLOW",
+        payload: {
+          iterations: 5,
+          fromActionId: "step-1",
+          delayMs: 250,
+          stopOnFailure: true
+        }
+      });
+  });
 });
 
 function makeSnapshot(): RecorderDebugSnapshot {

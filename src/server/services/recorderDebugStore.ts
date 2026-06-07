@@ -7,7 +7,8 @@ import type {
   RecorderDebugCommandResult,
   RecorderDebugEvent,
   RecorderDebugSessionSummary,
-  RecorderDebugSnapshot
+  RecorderDebugSnapshot,
+  RecorderTrainingReport
 } from "../../recorderDebug/types.js";
 
 export interface RecorderDebugStore {
@@ -16,6 +17,7 @@ export interface RecorderDebugStore {
   listSessions(): RecorderDebugSessionSummary[];
   getSession(sessionId: string): RecorderDebugSnapshot | undefined;
   listEvents(sessionId?: string): RecorderDebugEvent[];
+  latestTrainingReport(): RecorderTrainingReport | undefined;
   createCommand(input: RecorderDebugCommandInput): RecorderDebugCommand;
   nextPendingCommand(): RecorderDebugCommand | undefined;
   getCommand(commandId: string): RecorderDebugCommand | undefined;
@@ -99,6 +101,10 @@ export function createRecorderDebugStore(options: RecorderDebugStoreOptions): Re
         .map((line) => JSON.parse(line) as RecorderDebugEvent);
     },
 
+    latestTrainingReport() {
+      return readJson<RecorderTrainingReport>(path.join(root, "latest-training-report.json"));
+    },
+
     createCommand(input) {
       const command: RecorderDebugCommand = {
         id: randomUUID(),
@@ -141,10 +147,15 @@ export function createRecorderDebugStore(options: RecorderDebugStoreOptions): Re
         result
       };
       writeJson(commandPath(commandId), updated);
+      if (result.trainingReport) {
+        writeJson(path.join(root, "latest-training-report.json"), result.trainingReport);
+        writeJson(path.join(sessionDir(result.trainingReport.sessionId), "training-report.json"), result.trainingReport);
+      }
       appendEvent({
         event: "command_completed",
         commandId,
         level: result.ok ? "success" : "error",
+        sessionId: result.trainingReport?.sessionId,
         message: result.message ?? result.error ?? `${command.type} finished.`
       });
       return updated;

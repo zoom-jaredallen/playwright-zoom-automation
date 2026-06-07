@@ -121,6 +121,15 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     response.json({ events: recorderDebugStore.listEvents(sessionId) });
   });
 
+  app.get("/api/recorder/debug/training/latest", (_request, response) => {
+    const report = recorderDebugStore.latestTrainingReport();
+    if (!report) {
+      response.status(404).json({ error: "No recorder training report available" });
+      return;
+    }
+    response.json({ report });
+  });
+
   app.post("/api/recorder/debug/commands", (request, response) => {
     const input = request.body as Partial<RecorderDebugCommandInput>;
     if (!isRecorderDebugCommandType(input.type)) {
@@ -1026,6 +1035,7 @@ const RECORDER_DEBUG_COMMAND_TYPES: readonly RecorderDebugCommandType[] = [
   "GET_TEST_WORKFLOW_STATE",
   "RUN_TEST_WORKFLOW",
   "RUN_TEST_WORKFLOW_FROM",
+  "RUN_TRAINING_WORKFLOW",
   "CLEAR_ACTIONS"
 ];
 

@@ -170,10 +170,30 @@ npm run recorder:sessions
 npm run recorder:events
 npm run recorder:test
 npm run recorder:test -- --from step_id
+npm run recorder:train -- --iterations 3
+npm run recorder:train -- --iterations 5 --from step_id --delay-ms 1000 --stop-on-failure
+npm run recorder:wait -- command_id
+npm run recorder:report
+npm run recorder:audit
+npm run recorder:diff
+npm run recorder:bundle -- --out output/debug/recorder-bundle
 npm run recorder:export -- --out output/debug/workflow.json
 ```
 
 `npm run recorder:test` enqueues a browser-preflight command through `/api/recorder/debug/commands`. The extension polls the queue, runs the workflow against the active Chrome tab, then posts structured results and events back to the server. Use `npm run recorder:events` or `npm run recorder:latest` to inspect progress/results. Use `npm run recorder:test -- --from step_id` to replay from a selected step after manually resetting the Zoom page to the expected state.
+
+`npm run recorder:train` enqueues repeated browser-preflight runs through the Chrome bridge and writes a training report under `output/recorder-sessions/`. Use it to identify flaky selectors, weak assertions, hardcoded values, duplicate recorder noise, and risky steps before compiling or running across sub accounts. Training runs execute the workflow against the active Zoom tab and may mutate the lab account, so only run them when the user has explicitly authorized testing and the page has been manually reset to the expected starting state.
+
+Recommended review loop:
+
+```bash
+npm run recorder:latest
+npm run recorder:audit
+npm run recorder:train -- --iterations 3 --stop-on-failure
+npm run recorder:report
+npm run recorder:diff
+npm run recorder:bundle -- --out output/debug/latest-recorder-bundle
+```
 
 The CLI uses `RECORDER_DEBUG_BASE_URL` when set, otherwise `http://127.0.0.1:4174`. The extension uses its configured `serverUrl` when set, otherwise the same default. If commands appear stuck, confirm the web server is running, the unpacked extension has been reloaded after the latest build, and Chrome is on a scriptable Zoom page.
 
