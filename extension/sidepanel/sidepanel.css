@@ -195,9 +195,44 @@ input:not([type="checkbox"]), select {
 
 .selector-candidate {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
+}
+
+.selector-candidate > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selector-score {
+  min-width: 28px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-border-neutral);
+  border-radius: 999px;
+  color: var(--text-text-subtle-neutral);
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.selector-score.high {
+  border-color: var(--border-border-success);
+  background: var(--fill-fill-subtler-success);
+  color: var(--text-text-success);
+}
+
+.selector-score.medium {
+  border-color: var(--border-border-warning);
+  background: var(--fill-fill-subtler-warning);
+  color: var(--text-text-warning);
+}
+
+.selector-score.low {
+  border-color: var(--border-border-error);
+  background: var(--fill-fill-subtler-error);
+  color: var(--text-text-error);
 }
 
 .selector-confidence {

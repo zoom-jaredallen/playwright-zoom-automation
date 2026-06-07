@@ -1,4 +1,5 @@
 import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
+import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
 import type { ExtensionMessage, ParameterHint, RecordedAction, RecordedWorkflow, AnchorPickResult, SelectorPickResult, SelectorTestResult, WorkflowQualityReport, WorkflowTestEvent } from "../shared/types.js";
 
 const recordingStateEl = mustGet("recording-state");
@@ -832,14 +833,17 @@ function renderSelectorTestResult(action: RecordedAction): void {
       const item = document.createElement("div");
       item.className = "selector-candidate";
       const label = document.createElement("span");
-      label.textContent = `${candidate.label}: ${candidate.visibleCount}/${candidate.matchedCount} visible`;
+      label.textContent = formatSelectorCandidateLabel(candidate);
+      const score = document.createElement("span");
+      score.className = selectorCandidateScoreClass(candidate.scoreLevel);
+      score.textContent = candidate.score !== undefined ? String(candidate.score) : "—";
       const use = document.createElement("button");
       use.type = "button";
       use.className = "icon-button";
       use.textContent = "Use";
       use.disabled = candidate.visibleCount === 0;
       use.addEventListener("click", () => void useSelectorCandidate(action.id, candidate.selector));
-      item.append(label, use);
+      item.append(label, score, use);
       list.appendChild(item);
     }
     selectorTestResultEl.appendChild(list);
