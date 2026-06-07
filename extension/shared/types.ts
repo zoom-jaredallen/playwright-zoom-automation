@@ -130,6 +130,7 @@ export type ExtensionMessage =
   | { type: "GET_ACTIONS" }
   | { type: "BUILD_WORKFLOW" }
   | { type: "RUN_TEST_WORKFLOW" }
+  | { type: "RUN_TEST_WORKFLOW_FROM"; actionId: string }
   | { type: "RUN_TEST_ACTION"; action: RecordedAction }
   | { type: "GET_TEST_WORKFLOW_STATE" }
   | { type: "WAIT_FOR_PAGE_READY"; timeout?: number }

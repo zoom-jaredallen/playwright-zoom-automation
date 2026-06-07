@@ -3,6 +3,7 @@
  * script, manages recording state, and generates the final workflow JSON.
  */
 import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowTestEvent } from "../shared/types.js";
+import { createStepTestPlan } from "../shared/testPlan.js";
 import {
   applyStepUpdate,
   buildWorkflow as buildWorkflowCore,
@@ -253,7 +254,10 @@ async function handleMessage(message: ExtensionMessage, sender: chrome.runtime.M
       return { ok: true };
 
     case "RUN_TEST_WORKFLOW":
-      return await startTestWorkflow();
+      return await startTestWorkflow({ mode: "full" });
+
+    case "RUN_TEST_WORKFLOW_FROM":
+      return await startTestWorkflow({ mode: "from", actionId: message.actionId });
 
     case "RUN_TEST_ACTION":
       return await startTestAction(message.action);
@@ -458,7 +462,7 @@ function lastInsertedActionId(insertAfterActionId?: string | null): string | und
   return actions.at(-1)?.id;
 }
 
-async function startTestWorkflow(): Promise<{ ok: boolean; error?: string }> {
+async function startTestWorkflow(planOptions: { mode: "full" | "from"; actionId?: string }): Promise<{ ok: boolean; error?: string }> {
   await ensureHydrated();
   if (testRunning) return { ok: true };
   if (recording) {
@@ -466,7 +470,9 @@ async function startTestWorkflow(): Promise<{ ok: boolean; error?: string }> {
     return { ok: false, error: "Stop recording before running a test." };
   }
 
-  const testActions = await availableActions({ restore: true });
+  const available = await availableActions({ restore: true });
+  const testPlan = createStepTestPlan(available, planOptions);
+  const testActions = testPlan.actions;
   if (testActions.length === 0) {
     pushTestEvent("error", "No workflow steps are available to test.");
     return { ok: false, error: "No workflow steps are available to test." };
@@ -481,7 +487,7 @@ async function startTestWorkflow(): Promise<{ ok: boolean; error?: string }> {
   testRunning = true;
   testCurrentActionId = undefined;
   testEvents = [];
-  pushTestEvent("info", `Starting browser test with ${testActions.length} step(s).`);
+  pushTestEvent("info", `Starting ${testPlan.mode} browser test with ${testActions.length} step(s).`);
   void runTestWorkflow(testActions, tab as TestTab);
   return { ok: true };
 }

@@ -1,5 +1,8 @@
 import { isCommitClickLabel, scoreSelector } from "@zoom-automation/workflow-core";
 import { formatSelectorCandidateLabel, selectorCandidateScoreClass } from "../shared/selectorCandidateLabels.js";
+import { applySelectorCandidate } from "../shared/selectorRepair.js";
+import { createPublishReview } from "../shared/publishReview.js";
+import { suggestParameterReplacements } from "../shared/authoringAssistants.js";
 import {
   buildBulkPolicyUpdate,
   bulkPolicyTargets,
@@ -355,6 +358,16 @@ async function runTestWorkflow(): Promise<void> {
   await refreshState();
 }
 
+async function testWorkflowFromAction(action: RecordedAction): Promise<void> {
+  selectedActionId = action.id;
+  expandedActionIds = new Set([action.id]);
+  const response = await sendMessage({ type: "RUN_TEST_WORKFLOW_FROM", actionId: action.id });
+  if (!response?.ok) {
+    setMessage(response?.error ?? "Could not start test from this step.");
+  }
+  await refreshState();
+}
+
 function render(): void {
   if (selectedActionId && !actions.some((action) => action.id === selectedActionId)) {
     selectedActionId = undefined;
@@ -664,7 +677,10 @@ function renderStepTestEditor(action: RecordedAction): HTMLElement {
   const section = makeEditorSection("Step test");
   const row = document.createElement("div");
   row.className = "inline-actions";
-  row.appendChild(makeActionButton("Test step", testRunning || recording, () => void testSingleStep(action)));
+  row.append(
+    makeActionButton("Test step", testRunning || recording, () => void testSingleStep(action)),
+    makeActionButton("Test from here", testRunning || recording, () => void testWorkflowFromAction(action))
+  );
   section.append(row, renderStepTestResult(action));
   return section;
 }
@@ -922,8 +938,9 @@ function makeInsertTool(icon: StepToolbarIcon, label: string, onClick: () => voi
 function renderParameters(): void {
   parameterListEl.innerHTML = "";
   const parameters = collectAllParameters(actions);
+  const suggestions = suggestParameterReplacements(actions);
 
-  if (parameters.length === 0) {
+  if (parameters.length === 0 && suggestions.length === 0) {
     const empty = document.createElement("p");
     empty.className = "hint";
     empty.textContent = "No reusable values detected yet.";
@@ -952,6 +969,25 @@ function renderParameters(): void {
       makeParamButton("Literal", hint.confirmed === false, () => updateParameter(actionId, paramIndex, false))
     );
 
+    item.append(text, buttons);
+    parameterListEl.appendChild(item);
+  }
+
+  for (const suggestion of suggestions.slice(0, 6)) {
+    const item = document.createElement("div");
+    item.className = "param-item";
+    const text = document.createElement("div");
+    const name = document.createElement("span");
+    name.className = "param-name";
+    name.textContent = suggestion.replacement;
+    const value = document.createElement("span");
+    value.className = "param-value";
+    value.title = suggestion.originalValue;
+    value.textContent = `Suggested from ${suggestion.originalValue}`;
+    text.append(name, value);
+    const buttons = document.createElement("div");
+    buttons.className = "param-buttons";
+    buttons.append(makeParamButton("Apply", false, () => void applyParameterSuggestion(suggestion)));
     item.append(text, buttons);
     parameterListEl.appendChild(item);
   }
@@ -1302,9 +1338,7 @@ async function pickAnchorForAction(action: RecordedAction): Promise<void> {
 
 async function useSelectorCandidate(actionId: string, selector: RecordedAction["selectors"]): Promise<void> {
   const action = actions.find((candidate) => candidate.id === actionId);
-  const selectors = action?.selectors.anchor && !selector.anchor
-    ? { ...selector, anchor: action.selectors.anchor }
-    : selector;
+  const selectors = action ? applySelectorCandidate(action.selectors, selector) : selector;
   await updateActionPatch(actionId, { selectors });
   setMessage("Selector candidate applied.");
 }
@@ -1341,6 +1375,14 @@ async function deleteAction(actionId: string): Promise<void> {
 async function updateParameter(actionId: string, paramIndex: number, confirmed: boolean): Promise<void> {
   await sendMessage({ type: "UPDATE_PARAMETER", actionId, paramIndex, confirmed });
   await refreshState();
+}
+
+async function applyParameterSuggestion(suggestion: ReturnType<typeof suggestParameterReplacements>[number]): Promise<void> {
+  const update = suggestion.field === "value"
+    ? { value: suggestion.replacement }
+    : { expected: suggestion.replacement };
+  await updateActionPatch(suggestion.actionId, update);
+  setMessage(`Applied parameter ${suggestion.replacement}.`);
 }
 
 async function copyWorkflow(): Promise<void> {
@@ -1425,6 +1467,14 @@ function hydrateWorkflowDetails(workflow: RecordedWorkflow, options: { force?: b
 async function syncWorkflow(): Promise<void> {
   const workflow = await buildWorkflow();
   try {
+    const review = createPublishReview({ quality: workflow.quality ?? calculateQualityReport(workflow.actions), warningsAccepted: false });
+    if (!review.publishable) {
+      const ok = confirm(`Workflow quality warnings:\n\n${review.warnings.join("\n")}\n\nPublish anyway?`);
+      if (!ok) {
+        setMessage("Sync cancelled. Review workflow quality warnings first.");
+        return;
+      }
+    }
     const serverUrl = await getServerUrl();
     const response = await fetch(`${serverUrl}/api/workflows/import`, {
       method: "POST",
