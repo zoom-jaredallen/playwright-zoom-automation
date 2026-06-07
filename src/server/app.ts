@@ -12,6 +12,7 @@ import {
   isLifecycleLiveRunnable,
   type WorkflowLifecycleStatus
 } from "./governance/workflowLifecycle.js";
+import { createFileAuditStore } from "./audit/auditStore.js";
 import { filterSelectableAccounts, type AccountSelectionFilters } from "./services/accountSelectionService.js";
 import { createFileJobStore } from "./services/fileJobStore.js";
 import { createFileWorkItemStore } from "./queues/fileWorkItemStore.js";
@@ -26,6 +27,9 @@ import { createWorkflowRegistry } from "./services/workflowRegistry.js";
 import { evaluateRunReadiness } from "./services/runReadinessService.js";
 import { createAccountCohortStore } from "./services/accountCohortStore.js";
 import { collectWorkflowParameters } from "./services/workflowParameterService.js";
+import { computeOperationsMetrics } from "./operations/runMetricsService.js";
+import { createRunManifest } from "./operations/reportExporter.js";
+import { createFileWorkerRegistry } from "./workers/fileWorkerRegistry.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
 import { TokenManager } from "../zoom/oauth.js";
@@ -46,6 +50,8 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
   const jobStore = createFileJobStore({ directory: path.resolve("output/jobs"), events: jobEvents });
   const workItemStore = createFileWorkItemStore({ directory: path.resolve("output/work-items") });
   const lifecycleStore = createFileWorkflowLifecycleStore(path.resolve("output/workflow-lifecycle.json"));
+  const auditStore = createFileAuditStore(path.resolve("output/audit/audit.jsonl"));
+  const workerRegistry = createFileWorkerRegistry(path.resolve("output/workers.json"));
   const workflowRegistry = createWorkflowRegistry({ lifecycleStore });
   const schedulerStore = createSchedulerStore(path.resolve("output/schedules.json"));
   const cohortStore = createAccountCohortStore(path.resolve("output/cohorts"));
@@ -129,6 +135,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       resolveRecordedWorkflowPath(request.params.id);
       const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"), request.params.id);
       lifecycleStore.getOrCreate(result.id, "recorded");
+      auditStore.append({ eventType: "workflow_imported", actor: "web-ui", workflowId: result.id, message: "Recorded workflow saved" });
       response.json({ ok: true, compiled: result.id });
     } catch (error) {
       if (error instanceof PathTraversalError) {
@@ -172,6 +179,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       const uniqueId = uniqueRecordedId(name);
       const result = compileWorkflow(validation.workflow, path.resolve("src/workflows/recorded"), uniqueId);
       lifecycleStore.getOrCreate(result.id, "recorded");
+      auditStore.append({ eventType: "workflow_imported", actor: "web-ui", workflowId: result.id, message: "Recorded workflow duplicated" });
       response.status(201).json({ id: result.id, name });
     } catch (error) {
       next(error);
@@ -196,6 +204,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       const outputBase = path.resolve("src/workflows/recorded");
       const result = compileWorkflow(workflow, outputBase);
       lifecycleStore.getOrCreate(result.id, "recorded");
+      auditStore.append({ eventType: "workflow_imported", actor: "web-ui", workflowId: result.id, message: "Recorded workflow imported" });
 
       response.status(201).json({
         id: result.id,
@@ -242,6 +251,12 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       const lifecycle = lifecycleStore.transition(request.params.id, status, {
         actor: typeof request.body?.actor === "string" ? request.body.actor : "web-ui",
         note: typeof request.body?.note === "string" ? request.body.note : undefined
+      });
+      auditStore.append({
+        eventType: status === "published" ? "workflow_published" : status === "approved" ? "workflow_approved" : "workflow_validated",
+        actor: typeof request.body?.actor === "string" ? request.body.actor : "web-ui",
+        workflowId: request.params.id,
+        message: `Workflow moved to ${status}`
       });
       response.json({ lifecycle });
     } catch (error) {
@@ -332,6 +347,9 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       dryRun: schedule.jobConfig.dryRun,
       addressProfile: schedule.jobConfig.addressProfile
     });
+    if (!job.input.dryRun) {
+      auditStore.append({ eventType: "live_run_started", actor: "scheduler", jobId: job.id, message: "Scheduled live run started" });
+    }
     watchJobForWebhooks(job.id);
     // Record the schedule's final run status when the job finishes.
     const unsubscribe = jobEvents.subscribe(job.id, (updated) => {
@@ -460,6 +478,18 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     }
   });
 
+  app.get("/api/jobs/:jobId/manifest", (request, response) => {
+    const job = jobStore.getJob(request.params.jobId);
+    if (!job) {
+      response.status(404).json({ error: "Job not found" });
+      return;
+    }
+    const config = loadConfig(process.env);
+    const artifacts = listJobArtifacts({ artifactsDir: path.resolve(config.runtime.artifactsDir), job });
+    const workItems = workItemStore.listWorkItems({ jobId: job.id });
+    response.json({ manifest: createRunManifest({ job, workItems, artifacts }) });
+  });
+
   app.get("/api/jobs/:jobId/artifacts", (request, response) => {
     const job = jobStore.getJob(request.params.jobId);
     if (!job) {
@@ -544,6 +574,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       }
     }
     const updatedJob = jobStore.markJob(request.params.jobId, "cancelled", "Cancelled by user");
+    auditStore.append({ eventType: "run_cancelled", actor: "web-ui", jobId: request.params.jobId, message: "Run cancelled" });
     response.json({ job: updatedJob, message: wasCancelled ? "Cancellation signalled" : "Job marked cancelled" });
   });
 
@@ -583,6 +614,16 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         dryRun: retryDryRun,
         addressProfile: request.body?.addressProfile ?? retryInput.addressProfile
       });
+      auditStore.append({
+        eventType: "work_item_retried",
+        actor: "web-ui",
+        jobId: job.id,
+        message: "Retry job created",
+        metadata: { sourceJobId: sourceJob.id, accountIds }
+      });
+      if (!job.input.dryRun) {
+        auditStore.append({ eventType: "live_run_started", actor: "web-ui", jobId: job.id, message: "Live retry run started" });
+      }
       startAutomationJob({
         jobId: job.id,
         accounts: selectedAccounts,
@@ -654,6 +695,9 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         dryRun: body.dryRun ?? true,
         addressProfile: body.addressProfile ?? process.env.ADDRESS_PROFILE ?? "australia_sydney"
       });
+      if (!job.input.dryRun) {
+        auditStore.append({ eventType: "live_run_started", actor: "web-ui", jobId: job.id, message: "Live run started" });
+      }
 
       startAutomationJob({
         jobId: job.id,
@@ -756,6 +800,25 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     const jobs = jobStore.listJobs();
     const metrics = computeDashboardMetrics(jobs);
     response.json(metrics);
+  });
+
+  app.get("/api/operations", (_request, response) => {
+    response.json({
+      metrics: computeOperationsMetrics({
+        jobs: jobStore.listJobs(),
+        workItems: workItemStore.listWorkItems(),
+        workers: workerRegistry.list()
+      })
+    });
+  });
+
+  app.get("/api/audit", (request, response) => {
+    response.json({
+      events: auditStore.list({
+        jobId: typeof request.query.jobId === "string" ? request.query.jobId : undefined,
+        workflowId: typeof request.query.workflowId === "string" ? request.query.workflowId : undefined
+      })
+    });
   });
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────
