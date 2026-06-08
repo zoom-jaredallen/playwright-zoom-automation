@@ -1,29 +1,50 @@
-/**
- * Content script that captures user interactions in the Zoom admin portal.
- * Runs on all zoom.us pages. Only actively records when told to by the
- * background service worker.
- */
 import { extractSelectors, getFieldContext, getAriaState, getFrameSelector, computeNth, computeAnchor } from "../shared/selectors.js";
-import { buildSelectorCandidatesForElement, testSelectorCandidatesInDocument } from "../shared/selectorCandidates.js";
 import { detectParameters } from "../shared/parameterizer.js";
 import { shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
 import { insertRecordedAction } from "../shared/recordedActionPolicy.js";
-import { buildZoomComboboxSelection, normalizeZoomOptionText } from "../shared/zoomCombobox.js";
-import { optionTextMatches, selectedOptionValueMatches } from "../shared/replayOptionMatching.js";
-import type { RecordedAction, ExtensionMessage, ActionType, SelectorStrategy, AnchorPickResult, ReplayTargetResult, SelectorPickResult, SelectorTestResult } from "../shared/types.js";
-import { createSelectorRepairPlan, type RankedSelectorCandidate, type SelectorCandidate } from "@zoom-automation/workflow-core";
+import { buildZoomComboboxSelection } from "../shared/zoomCombobox.js";
+import type { RecordedAction, ExtensionMessage, ActionType } from "../shared/types.js";
+import { actionLabel, captureMetadataForTarget, currentFrameContext, highlightActionTarget } from "./actionContext.js";
+import {
+  closestZoomComboboxTrigger,
+  detectImpersonationContext,
+  generateId,
+  getOptionText,
+  inputElementValue,
+  isDownloadTrigger,
+  isElementVisible,
+  isInputElement,
+  isInsideDropdownList,
+  isLoginOrImpersonationUrl,
+  isRecorderUI,
+  isSameOrChildOf,
+  normalizedOptionElement,
+  visibleText
+} from "./domHelpers.js";
+import { captureNetworkWaitFor, startNetworkObserver, SUBMIT_LABEL_PATTERN } from "./networkCapture.js";
+import { waitForPageReady } from "./pageReadiness.js";
+import { hideRecordingIndicator, showRecordingIndicator } from "./recordingIndicator.js";
+import { isSelectorPicking, pickAnchor, pickSelector } from "./selectorPicker.js";
+import { createFillDebouncer } from "./fillDebouncer.js";
+import {
+  buildCandidatesFromLegacyAction,
+  candidateLabel,
+  candidateResult,
+  executeTestAction,
+  findReplayElementSync,
+  formatCandidateSelector,
+  locateReplayElement,
+  locateReplayOption,
+  verifyReplaySelect
+} from "./replayRunner.js";
+import { rankSelectorCandidatesForTarget, selectorDiagnosticsForTarget, testSelector } from "./selectorDiagnostics.js";
 
 let recording = false;
 let paused = false;
 let listenersAttached = false;
 let actionQueue: RecordedAction[] = [];
-let lastFillTimeout: ReturnType<typeof setTimeout> | undefined;
-let lastFillElement: Element | null = null;
-let lastFillValue = "";
-let lastRecordedFill: { element: Element; value: string; recordedAt: number } | undefined;
 let impersonationDetected = false;
-let activeSelectorPick: { cancel: (message: string) => void } | undefined;
-const replayWorkflowState = new Map<string, string[]>();
+const fillDebouncer = createFillDebouncer(recordFillFromElement);
 
 // Click deduplication state
 let lastClickTarget: Element | null = null;
@@ -42,37 +63,7 @@ const RECORD_HOVER_STEPS_BY_DEFAULT = false;
 // Frame selector for this recorder context — undefined in the top frame (feature 1)
 const frameSelector = getFrameSelector();
 
-// Network capture for submit-triggered XHR/fetch waits (feature 2)
-const SUBMIT_LABEL_PATTERN = /save|submit|add|continue|next|confirm|apply|create|update/i;
-const recentNetworkEntries: Array<{ url: string; startTime: number }> = [];
 startNetworkObserver();
-
-const PAGE_READY_QUIET_MS = 450;
-const PAGE_READY_INITIAL_SETTLE_MS = 150;
-const PAGE_READY_LOADING_SELECTORS = [
-  "[aria-busy='true']",
-  "[role='progressbar']",
-  ".loading",
-  ".loader",
-  ".spinner",
-  ".zm-loader",
-  ".zm-loading",
-  ".cpzui-loading",
-  ".cpzui-spinner",
-  "[class*='loading']",
-  "[class*='spinner']"
-].join(",");
-
-const CHECKBOX_TARGET_SELECTOR = [
-  'input[type="checkbox"]',
-  '[role="checkbox"]',
-  'label:has(input[type="checkbox"])',
-  '[class*="checkbox"]',
-  '[class*="Checkbox"]',
-  '[class*="cpzui-checkbox"]',
-  '[class*="zm-checkbox"]',
-  '[class*="zmu-checkbox"]'
-].join(",");
 
 // ─── Message Handling ────────────────────────────────────────────────────────
 
@@ -85,12 +76,12 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     sendResponse({ ok: true });
   } else if (message.type === "PAUSE_RECORDING") {
     paused = true;
-    flushPendingFill();
-    showRecordingIndicator();
+    fillDebouncer.flush();
+    showRecordingIndicator(paused);
     sendResponse({ ok: true });
   } else if (message.type === "RESUME_RECORDING") {
     paused = false;
-    showRecordingIndicator();
+    showRecordingIndicator(paused);
     sendResponse({ ok: true });
   } else if (message.type === "GET_STATUS") {
     sendResponse({ recording, paused, actionCount: actionQueue.length });
@@ -112,7 +103,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
   } else if (message.type === "HIGHLIGHT_ACTION_TARGET") {
     void highlightActionTarget(message.action).then(sendResponse);
   } else if (message.type === "PICK_SELECTOR") {
-    void pickSelector(message.action).then(sendResponse);
+    void pickSelector(message.action, frameSelector).then(sendResponse);
   } else if (message.type === "PICK_ANCHOR") {
     void pickAnchor(message.action).then(sendResponse);
   }
@@ -125,7 +116,7 @@ function startRecording(): void {
   if (recording) {
     paused = false;
     attachListeners();
-    showRecordingIndicator();
+    showRecordingIndicator(paused);
     return;
   }
 
@@ -134,7 +125,7 @@ function startRecording(): void {
   actionQueue = [];
   impersonationDetected = detectImpersonationContext();
   attachListeners();
-  showRecordingIndicator();
+  showRecordingIndicator(paused);
   
   // Record initial navigation (skip if it's a login/impersonation page)
   if (!isLoginOrImpersonationUrl(window.location.href) && shouldRecordNavigationUrl(window.location.href, currentFrameContext())) {
@@ -163,56 +154,10 @@ function startRecording(): void {
   } satisfies ExtensionMessage);
 }
 
-async function locateReplayElement(action: RecordedAction): Promise<ReplayTargetResult> {
-  try {
-    const element = await findReplayElement(action);
-    return replayTargetResult(element);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-async function locateReplayOption(action: RecordedAction, optionText: string): Promise<ReplayTargetResult> {
-  try {
-    const option = await findReplayOption(action, optionText);
-    return replayTargetResult(option);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-async function verifyReplaySelect(action: RecordedAction, expected?: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const element = findReplayElementSync(action) ?? await findReplayElement(action);
-    await waitForSelectValue(action, element, expected ?? action.selectMetadata?.verificationText ?? action.selectMetadata?.optionLabel ?? resolveReplayValue(action));
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function replayTargetResult(element: Element): ReplayTargetResult {
-  element.scrollIntoView?.({ block: "center", inline: "center" });
-  const rect = element.getBoundingClientRect();
-  return {
-    ok: true,
-    preview: elementPreview(element),
-    text: elementAccessibleText(element),
-    rect: {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-      centerX: rect.left + rect.width / 2,
-      centerY: rect.top + rect.height / 2
-    }
-  };
-}
-
 function stopRecording(): void {
   recording = false;
   paused = false;
-  flushPendingFill();
+  fillDebouncer.flush();
   detachListeners();
   hideRecordingIndicator();
 }
@@ -250,7 +195,7 @@ function detachListeners(): void {
 // ─── Event Handlers ──────────────────────────────────────────────────────────
 
 function handleClick(event: MouseEvent): void {
-  if (activeSelectorPick) return;
+  if (isSelectorPicking()) return;
   if (!recording || paused) return;
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
@@ -265,7 +210,7 @@ function handleClick(event: MouseEvent): void {
   lastClickTarget = target;
   lastClickTime = now;
 
-  flushPendingFill();
+  fillDebouncer.flush();
 
   const selectors = extractSelectors(target);
   const text = selectors.text ?? selectors.role?.name ?? target.textContent?.trim().slice(0, 60);
@@ -402,31 +347,31 @@ function handleClick(event: MouseEvent): void {
 }
 
 function handleInput(event: Event): void {
-  if (activeSelectorPick) return;
+  if (isSelectorPicking()) return;
   if (!recording || paused) return;
   const target = event.target as HTMLInputElement | HTMLTextAreaElement;
   if (!target || !isInputElement(target)) return;
   if (isRecorderUI(target)) return;
 
-  queuePendingFill(target);
+  fillDebouncer.queue(target);
 }
 
 function handleChange(event: Event): void {
-  if (activeSelectorPick) return;
+  if (isSelectorPicking()) return;
   if (!recording || paused) return;
   const target = event.target as HTMLSelectElement | HTMLInputElement | HTMLTextAreaElement;
   if (!target) return;
   if (isRecorderUI(target)) return;
 
   if (isInputElement(target)) {
-    queuePendingFill(target);
-    flushPendingFill();
+    fillDebouncer.queue(target);
+    fillDebouncer.flush();
     return;
   }
 
   if (target.tagName.toLowerCase() !== "select") return;
 
-  flushPendingFill();
+  fillDebouncer.flush();
 
   const select = target as HTMLSelectElement;
   const selectors = extractSelectors(select);
@@ -455,7 +400,7 @@ function handleChange(event: Event): void {
 const PRESS_KEYS = new Set(["Tab", "Escape", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "PageDown", "PageUp"]);
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (activeSelectorPick) return;
+  if (isSelectorPicking()) return;
   if (!recording || paused) return;
   const target = event.target as Element;
 
@@ -463,7 +408,7 @@ function handleKeydown(event: KeyboardEvent): void {
   // submitting a search field) record it as a press so the action isn't lost.
   if (event.key === "Enter") {
     if (!target || isRecorderUI(target)) return;
-    flushPendingFill();
+    fillDebouncer.flush();
     const selectors = extractSelectors(target);
     if (target.tagName === "BUTTON" || target.getAttribute("role") === "button") {
       recordAction({
@@ -484,10 +429,10 @@ function handleKeydown(event: KeyboardEvent): void {
 
   // Capture keyboard navigation keys as "press" actions (feature 4).
   if (PRESS_KEYS.has(event.key) && target && !isRecorderUI(target)) {
-    const flushedFill = flushPendingFill();
+    const flushedFill = fillDebouncer.flush();
     if (event.key === "Tab" && isInputElement(target)) {
       if (!flushedFill) {
-        recordFillFromElement(target, inputElementValue(target));
+        fillDebouncer.recordNow(target, inputElementValue(target));
       }
       return;
     }
@@ -508,7 +453,7 @@ function handleKeydown(event: KeyboardEvent): void {
  * too many incidental hover steps during normal recording.
  */
 function handleMouseOver(event: MouseEvent): void {
-  if (activeSelectorPick) return;
+  if (isSelectorPicking()) return;
   if (!recording || paused) return;
   const target = event.target as Element;
   if (!target || isRecorderUI(target)) return;
@@ -546,7 +491,7 @@ function handleNavigation(): void {
     return;
   }
 
-  flushPendingFill();
+  fillDebouncer.flush();
   lastHoverTarget = null;
   // Feature 10: record the destination so the compiler can assert arrival via waitForURL.
   const destination = window.location.hash || window.location.pathname;
@@ -557,55 +502,6 @@ function handleNavigation(): void {
     selectors: {},
     description: `Navigate to ${destination}`
   });
-}
-
-// ─── Fill Debouncing ─────────────────────────────────────────────────────────
-
-function queuePendingFill(target: Element): void {
-  const value = inputElementValue(target);
-  if (lastFillElement === target) {
-    lastFillValue = value;
-    clearTimeout(lastFillTimeout);
-    lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
-    return;
-  }
-
-  flushPendingFill();
-  lastFillElement = target;
-  lastFillValue = value;
-  lastFillTimeout = setTimeout(() => flushPendingFill(), 800);
-}
-
-function flushPendingFill(): boolean {
-  if (!lastFillElement || !lastFillValue) {
-    lastFillElement = null;
-    lastFillValue = "";
-    return false;
-  }
-
-  if (
-    lastRecordedFill &&
-    lastRecordedFill.element === lastFillElement &&
-    lastRecordedFill.value === lastFillValue &&
-    Date.now() - lastRecordedFill.recordedAt < 1_500
-  ) {
-    lastFillElement = null;
-    lastFillValue = "";
-    clearTimeout(lastFillTimeout);
-    return false;
-  }
-
-  const recorded = recordFillFromElement(lastFillElement, lastFillValue);
-
-  lastRecordedFill = {
-    element: lastFillElement,
-    value: lastFillValue,
-    recordedAt: Date.now()
-  };
-  lastFillElement = null;
-  lastFillValue = "";
-  clearTimeout(lastFillTimeout);
-  return recorded;
 }
 
 function recordFillFromElement(target: Element, value: string): boolean {
@@ -629,12 +525,6 @@ function recordFillFromElement(target: Element, value: string): boolean {
     parameterHints: params.length > 0 ? params : undefined,
     description: `Fill "${selectors.label ?? selectors.role?.name ?? "field"}" with "${value.slice(0, 30)}${value.length > 30 ? "…" : ""}"`
   }, target);
-
-  lastRecordedFill = {
-    element: target,
-    value,
-    recordedAt: Date.now()
-  };
 
   return true;
 }
@@ -672,9 +562,9 @@ function recordAction(
   }
 
   if (targetElement) {
-    const rankedCandidates = testSelectorCandidatesInDocument(buildSelectorCandidatesForElement(targetElement), document, targetElement);
+    const rankedCandidates = rankSelectorCandidatesForTarget(targetElement);
     const recommended = rankedCandidates[0];
-    partial.selectorCandidates = stripRuntimeScores(rankedCandidates);
+    partial.selectorCandidates = rankedCandidates.map(({ rank: _rank, score: _score, ...candidate }) => candidate);
     partial.selectedCandidateId = recommended?.id;
     partial.selectorDiagnostics = selectorDiagnosticsForTarget(targetElement, recommended);
     partial.capture = captureMetadataForTarget(targetElement);
@@ -706,1594 +596,4 @@ function recordAction(
   if (action.type === "click" && SUBMIT_LABEL_PATTERN.test(actionLabel(action))) {
     captureNetworkWaitFor(action);
   }
-}
-
-function currentFrameContext(): { frameId: number } {
-  try {
-    return { frameId: window.top === window ? 0 : 1 };
-  } catch {
-    return { frameId: 1 };
-  }
-}
-
-async function highlightActionTarget(action: RecordedAction): Promise<{ ok: boolean; error?: string }> {
-  const element = findReplayElementSync(action);
-  if (!element) {
-    return { ok: false, error: "No element matched this step on the current page." };
-  }
-  highlightElement(element);
-  return { ok: true };
-}
-
-function captureMetadataForTarget(element: Element): RecordedAction["capture"] {
-  const rect = element.getBoundingClientRect();
-  return {
-    capturedAt: new Date().toISOString(),
-    pageUrl: window.location.href,
-    viewport: { width: window.innerWidth, height: window.innerHeight },
-    targetBox: {
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height)
-    }
-  };
-}
-
-function selectorDiagnosticsForTarget(element: Element, candidate: RankedSelectorCandidate | undefined): RecordedAction["selectorDiagnostics"] {
-  const fallbackScore = { score: 0, level: "low" as const, reasons: ["No selector candidates captured"] };
-  return {
-    matchedCount: candidate?.diagnostics?.matchedCount ?? 0,
-    visibleCount: candidate?.diagnostics?.visibleCount ?? 0,
-    chosenCandidateId: candidate?.id,
-    confidence: candidate?.score ?? fallbackScore,
-    targetPreview: elementPreview(element),
-    anchor: {
-      text: candidate?.selector.anchor?.text,
-      scopeRole: candidate?.selector.anchor?.scopeRole,
-      scopeSelector: candidate?.selector.anchor?.scopeSelector,
-      kind: candidate?.selector.anchor?.kind,
-      relationship: candidate?.selector.anchor?.relationship,
-      resolved: Boolean(candidate?.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
-    },
-    context: candidate?.diagnostics?.context
-  };
-}
-
-function actionLabel(action: RecordedAction): string {
-  return action.selectors.role?.name ?? action.selectors.text ?? action.selectors.label ?? action.description ?? "";
-}
-
-// ─── Feature 2: Network-aware waits ────────────────────────────────────────────
-
-/**
- * Observe the page's resource timeline for XHR/fetch calls. The recorder shares
- * the page's performance timeline, so this captures the API requests Zoom makes.
- */
-function startNetworkObserver(): void {
-  if (typeof PerformanceObserver === "undefined") return;
-  try {
-    const observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        const resource = entry as PerformanceResourceTiming;
-        if (resource.initiatorType === "xmlhttprequest" || resource.initiatorType === "fetch") {
-          recentNetworkEntries.push({ url: resource.name, startTime: resource.startTime });
-          if (recentNetworkEntries.length > 50) recentNetworkEntries.shift();
-        }
-      }
-    });
-    observer.observe({ type: "resource", buffered: false });
-  } catch {
-    // resource timing unavailable — feature degrades gracefully
-  }
-}
-
-/**
- * After a submit-like click, wait briefly for the first XHR/fetch it triggers and
- * patch the recorded action with a stable path so the compiler emits waitForResponse.
- */
-function captureNetworkWaitFor(action: RecordedAction): void {
-  const since = performance.now();
-  setTimeout(() => {
-    const triggered = recentNetworkEntries.find((entry) => entry.startTime >= since - 50);
-    if (!triggered) return;
-    const path = stableNetworkPath(triggered.url);
-    if (!path) return;
-    chrome.runtime.sendMessage({
-      type: "UPDATE_ACTION",
-      actionId: action.id,
-      networkWaitUrl: path
-    } satisfies ExtensionMessage);
-  }, 1_200);
-}
-
-/** Reduce a full URL to a stable path fragment (no origin, no query string). */
-function stableNetworkPath(url: string): string | undefined {
-  try {
-    const parsed = new URL(url, window.location.href);
-    if (parsed.pathname && parsed.pathname !== "/") return parsed.pathname;
-  } catch { /* not a parseable URL */ }
-  return undefined;
-}
-
-// ─── Browser Test Replay ─────────────────────────────────────────────────────
-
-async function executeTestAction(action: RecordedAction): Promise<{ ok: boolean; error?: string; skipped?: boolean; message?: string }> {
-  try {
-    await waitForPageReady(action.timeout ?? 10_000);
-    const condition = await evaluatePreflightCondition(action);
-    if (condition.skip) {
-      return { ok: true, skipped: true, message: condition.message };
-    }
-
-    switch (action.type) {
-      case "click": {
-        const element = await findReplayElement(action);
-        replayClickElement(element);
-        return { ok: true };
-      }
-      case "fill": {
-        const element = await findReplayElement(action);
-        setElementValue(element, resolveReplayValue(action));
-        return { ok: true };
-      }
-      case "select": {
-        const wanted = resolveReplayValue(action).trim();
-        if (!wanted) {
-          return { ok: false, error: "Select step has no value to choose." };
-        }
-        const element = await findReplayElement(action);
-        if (element instanceof HTMLSelectElement) {
-          // Prefer an exact match (by visible text or value) before falling back to substring.
-          const options = Array.from(element.options);
-          const option =
-            options.find((c) => c.text.trim() === wanted || c.value === wanted) ??
-            options.find((c) => c.text.includes(wanted));
-          if (!option) {
-            return { ok: false, error: `No option matching "${wanted}"` };
-          }
-          element.value = option.value;
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          return { ok: true };
-        }
-        replayClickElement(element);
-        const option = await findReplayOption(action, action.selectMetadata?.optionLabel ?? wanted);
-        replayClickElement(option);
-        await waitForSelectValue(action, element, action.selectMetadata?.verificationText ?? action.selectMetadata?.optionLabel ?? wanted);
-        return { ok: true };
-      }
-      case "selectRows": {
-        const selected = await selectReplayRows(action);
-        return { ok: true, message: `Selected ${selected.length} row(s): ${selected.join(", ")}` };
-      }
-      case "hover": {
-        const element = await findReplayElement(action);
-        element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-        element.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-        return { ok: true };
-      }
-      case "press": {
-        const targetEl = (findReplayElementSync(action) ?? document.activeElement ?? document.body) as Element;
-        (targetEl as HTMLElement).focus?.();
-        targetEl.dispatchEvent(new KeyboardEvent("keydown", { key: action.key ?? "Enter", bubbles: true }));
-        targetEl.dispatchEvent(new KeyboardEvent("keyup", { key: action.key ?? "Enter", bubbles: true }));
-        return { ok: true };
-      }
-      case "wait":
-        await sleep(Math.min(Math.max(action.waitMs ?? 1_000, 250), 60_000));
-        return { ok: true };
-      case "assert":
-        await executeAssertion(action);
-        return { ok: true };
-      case "dismiss":
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-        return { ok: true };
-      case "upload":
-        return { ok: false, error: "Upload steps cannot be replayed inside the extension preflight runner." };
-      case "download":
-        return { ok: true, skipped: true, message: "Download steps are verified by the backend Playwright runner, not the preflight." };
-      case "dialog":
-        return { ok: true, skipped: true, message: "Native dialog handling is verified by the backend Playwright runner." };
-      case "if":
-        return { ok: true, skipped: true, message: "IF blocks are evaluated by the backend Playwright runner, not the preflight." };
-      case "navigate":
-      case "screenshot":
-        return { ok: true };
-      default:
-        return { ok: false, error: `Unsupported test action: ${action.type}` };
-    }
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    await waitForPageReady(action.timeout ?? 10_000, { afterAction: true }).catch(() => undefined);
-  }
-}
-
-function resolveReplayValue(action: RecordedAction): string {
-  const value = action.value ?? "";
-  if (!value.includes("{{") || !action.parameterHints?.length) return value;
-
-  return value.replace(/\{\{([^}]+)\}\}/g, (placeholder, rawName) => {
-    const paramName = String(rawName).trim();
-    const hint = action.parameterHints?.find(
-      (candidate) => candidate.confirmed !== false && candidate.suggestedName === paramName
-    );
-    return hint?.originalValue ?? placeholder;
-  });
-}
-
-function resolveReplayExpected(value: string): string {
-  return value.replace(/\{\{([^}]+)\}\}/g, (placeholder, rawName) => {
-    const name = String(rawName).trim();
-    const values = replayWorkflowState.get(name);
-    return values ? values.join("|") : placeholder;
-  });
-}
-
-async function selectReplayRows(action: RecordedAction): Promise<string[]> {
-  const policy = action.rowSelection;
-  if (!policy || policy.mode !== "firstAvailable") {
-    throw new Error("Select rows step requires rowSelection.mode=firstAvailable");
-  }
-  const count = Math.max(1, Number(policy.count ?? 1));
-  const minimumCount = Math.max(1, Number(policy.minimumCount ?? count));
-  const rowSelector = policy.rowSelector ?? "tr, [role='row']";
-  const checkboxSelector = policy.checkboxSelector ?? CHECKBOX_TARGET_SELECTOR;
-  const valuePattern = new RegExp(policy.valuePattern ?? "\\+\\d[\\d\\s().-]{5,}");
-  const unavailablePattern = policy.unavailableText ? new RegExp(policy.unavailableText, "i") : undefined;
-  const timeout = action.timeout ?? 10_000;
-  const selectedValues: string[] = [];
-  const deadline = Date.now() + timeout;
-
-  while (Date.now() < deadline && selectedValues.length < count) {
-    const rows = Array.from(document.querySelectorAll(rowSelector));
-    for (const row of rows) {
-      if (selectedValues.length >= count) break;
-      if (!isElementVisible(row)) continue;
-      const rowText = visibleText(row);
-      if (unavailablePattern?.test(rowText)) continue;
-      const value = rowText.match(valuePattern)?.[0]?.replace(/\s+/g, " ").trim();
-      if (!value || selectedValues.includes(value)) continue;
-      const checkbox = findReplayRowCheckbox(row, checkboxSelector);
-      if (!checkbox || !isElementVisible(checkbox)) continue;
-      if (isReplayCheckboxDisabled(checkbox)) continue;
-      if (!isReplayCheckboxChecked(checkbox)) {
-        await ensureReplayCheckboxChecked(checkbox);
-      }
-      if (!isReplayCheckboxChecked(checkbox)) continue;
-      selectedValues.push(value);
-    }
-    if (selectedValues.length < count) await sleep(250);
-  }
-
-  if (selectedValues.length < minimumCount) {
-    throw new Error(`Expected at least ${minimumCount} available row(s), found ${selectedValues.length}`);
-  }
-  replayWorkflowState.set(policy.outputName ?? "selected.rows", selectedValues);
-  return selectedValues;
-}
-
-function findReplayRowCheckbox(row: Element, checkboxSelector: string): Element | undefined {
-  const candidates = Array.from(row.querySelectorAll(checkboxSelector)).filter(isElementVisible);
-  return candidates.find((candidate): candidate is HTMLInputElement =>
-    candidate instanceof HTMLInputElement && candidate.type === "checkbox"
-  )
-    ?? candidates.find((candidate) => candidate.getAttribute("role") === "checkbox")
-    ?? pickElement(candidates);
-}
-
-async function ensureReplayCheckboxChecked(element: Element): Promise<void> {
-  const targets = replayCheckboxClickTargets(element);
-  for (const target of targets) {
-    if (isReplayCheckboxChecked(element)) return;
-    replayClickElement(target);
-    await sleep(150);
-    if (isReplayCheckboxChecked(element)) return;
-  }
-}
-
-function replayCheckboxClickTargets(element: Element): Element[] {
-  const targets = [
-    element,
-    bestCheckboxTarget(element),
-    element.closest(".cpzui-checkbox__wrap, [class*='checkbox__wrap'], [class*='Checkbox__wrap']"),
-    element.closest(".cpzui-checkbox, [class*='checkbox'], [class*='Checkbox']")
-  ].filter((candidate): candidate is Element => Boolean(candidate && isElementVisible(candidate)));
-  return targets.filter((candidate, index, all) => all.indexOf(candidate) === index);
-}
-
-function isReplayCheckboxDisabled(element: Element): boolean {
-  if (element instanceof HTMLInputElement) return element.disabled;
-  const input = element.querySelector<HTMLInputElement>("input[type='checkbox']");
-  if (input) return input.disabled;
-  const attr = element.getAttribute("aria-disabled") ?? element.getAttribute("disabled");
-  return attr === "" || attr === "true";
-}
-
-function isReplayCheckboxChecked(element: Element): boolean {
-  if (element instanceof HTMLInputElement) return element.checked;
-  const input = element.querySelector<HTMLInputElement>("input[type='checkbox']");
-  return Boolean(input?.checked) ||
-    element.getAttribute("aria-checked") === "true" ||
-    Boolean(element.closest("[aria-checked='true'], .is-checked, [class*='is-checked']"));
-}
-
-async function waitForPageReady(timeout: number, options: { afterAction?: boolean } = {}): Promise<void> {
-  const deadline = Date.now() + Math.max(timeout, 1_000);
-  if (options.afterAction) {
-    await sleep(PAGE_READY_INITIAL_SETTLE_MS);
-  }
-
-  await waitForDocumentComplete(deadline);
-  await waitForNoVisibleLoading(deadline);
-  if (options.afterAction) return;
-  await waitForDomQuiet(deadline, PAGE_READY_QUIET_MS);
-}
-
-async function waitForDocumentComplete(deadline: number): Promise<void> {
-  while (Date.now() < deadline) {
-    if (document.readyState === "complete" || document.readyState === "interactive") {
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error("Page did not reach a ready document state before the step timeout.");
-}
-
-async function waitForNoVisibleLoading(deadline: number): Promise<void> {
-  while (Date.now() < deadline) {
-    if (!hasVisibleLoadingIndicator()) {
-      return;
-    }
-    await sleep(100);
-  }
-  throw new Error("Page still shows a loading indicator after the step timeout.");
-}
-
-async function waitForDomQuiet(deadline: number, quietMs: number): Promise<void> {
-  let lastMutation = Date.now();
-  const observer = new MutationObserver(() => {
-    lastMutation = Date.now();
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true
-  });
-
-  try {
-    while (Date.now() < deadline) {
-      if (Date.now() - lastMutation >= quietMs && !hasVisibleLoadingIndicator()) {
-        return;
-      }
-      await sleep(75);
-    }
-  } finally {
-    observer.disconnect();
-  }
-
-  throw new Error("Page did not settle before the step timeout.");
-}
-
-function hasVisibleLoadingIndicator(): boolean {
-  return Array.from(document.querySelectorAll(PAGE_READY_LOADING_SELECTORS)).some((element) => {
-    if (!isElementVisible(element)) return false;
-    const text = visibleText(element).toLowerCase();
-    if (text.includes("loaded") || text.includes("not loading")) return false;
-    return true;
-  });
-}
-
-function hasUsableSelector(selectors: SelectorStrategy): boolean {
-  return Boolean(selectors.role || selectors.label || selectors.text || selectors.testId || selectors.css);
-}
-
-async function evaluatePreflightCondition(action: RecordedAction): Promise<{ skip: boolean; message?: string }> {
-  // Compound predicate guard (mirrors the backend evalPredicate against the DOM).
-  if (action.guard && !(await evalPredicateDom(action.guard))) {
-    return {
-      skip: true,
-      message: action.guardElse === "skipAccount" ? "Guard not satisfied; skip account" : "Guard not satisfied"
-    };
-  }
-
-  const condition = action.condition;
-  if (!condition || condition.type === "none") {
-    return { skip: false };
-  }
-
-  if (condition.type === "textExistsSkip" || condition.type === "addressAlreadyExistsSkipAccount") {
-    const expectedText = condition.text ?? action.expected ?? action.value ?? "";
-    if (expectedText && visibleText(document.body).toLowerCase().includes(expectedText.toLowerCase())) {
-      return {
-        skip: true,
-        message: condition.type === "addressAlreadyExistsSkipAccount"
-          ? "Address already exists; skip account"
-          : `Text already exists: ${expectedText}`
-      };
-    }
-  }
-
-  if (condition.type === "elementVisibleClick") {
-    const target = findReplayElementSync({ ...action, selectors: condition.selector ?? action.selectors });
-    if (!target || !isElementVisible(target)) {
-      return { skip: true, message: "Conditional element is not visible" };
-    }
-  }
-
-  if (condition.type === "fieldEmptyFill" && action.type === "fill") {
-    const target = findReplayElementSync({ ...action, selectors: condition.selector ?? action.selectors });
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
-      if (target.value.trim()) {
-        return { skip: true, message: "Field already has a value" };
-      }
-    }
-  }
-
-  return { skip: false };
-}
-
-/** DOM mirror of the backend evalPredicate, for preflight guard evaluation. */
-async function evalPredicateDom(predicate: any): Promise<boolean> {
-  if (!predicate || predicate.kind === "always") return true;
-  const sel = (selectors: SelectorStrategy) => findReplayElementSync({ selectors } as RecordedAction);
-  switch (predicate.kind) {
-    case "and":
-      return (await Promise.all((predicate.operands ?? []).map(evalPredicateDom))).every(Boolean);
-    case "or":
-      return (await Promise.all((predicate.operands ?? []).map(evalPredicateDom))).some(Boolean);
-    case "not":
-      return !(await evalPredicateDom(predicate.operand));
-    case "urlContains":
-      return window.location.href.includes(predicate.text ?? "");
-    case "textVisible":
-      return visibleText(document.body).toLowerCase().includes(String(predicate.text ?? "").toLowerCase());
-    case "elementVisible": {
-      const el = sel(predicate.selector);
-      return Boolean(el && isElementVisible(el));
-    }
-    case "fieldEmpty": {
-      const el = sel(predicate.selector);
-      return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? el.value.trim() === "" : false;
-    }
-    case "fieldValue": {
-      const el = sel(predicate.selector);
-      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
-      if (predicate.equals !== undefined) return el.value === predicate.equals;
-      if (predicate.contains !== undefined) return el.value.includes(predicate.contains);
-      return el.value.trim() !== "";
-    }
-    default:
-      return true;
-  }
-}
-
-async function testSelector(action: RecordedAction): Promise<SelectorTestResult> {
-  try {
-    const candidates = action.selectorCandidates?.length
-      ? action.selectorCandidates
-      : buildCandidatesFromLegacyAction(action);
-    const ranked = testSelectorCandidatesInDocument(candidates, document);
-    const persistedCandidates = stripRuntimeScores(ranked);
-    const repairPlan = createSelectorRepairPlan({
-      currentSelector: action.selectors,
-      candidates: persistedCandidates
-    });
-    const best = ranked[0];
-
-    const chosen = findReplayElementSync(action);
-    if (chosen) {
-      highlightElement(chosen);
-    }
-
-    return {
-      actionId: action.id,
-      matchedCount: ranked[0]?.diagnostics?.matchedCount ?? 0,
-      visibleCount: ranked[0]?.diagnostics?.visibleCount ?? 0,
-      chosenPreview: chosen ? elementPreview(chosen) : undefined,
-      chosenSelector: ranked[0] ? candidateLabel(ranked[0]) : undefined,
-      fallbackCandidates: ranked.map(candidateResult),
-      selectorDiagnostics: best ? selectorDiagnosticsFromRanked(best, chosen ?? null) : undefined,
-      repairSuggestions: repairPlan.suggestions
-    };
-  } catch (error) {
-    return {
-      actionId: action.id,
-      matchedCount: 0,
-      visibleCount: 0,
-      fallbackCandidates: [],
-      error: error instanceof Error ? error.message : String(error)
-    };
-  }
-}
-
-function selectorDiagnosticsFromRanked(candidate: RankedSelectorCandidate, target: Element | null): RecordedAction["selectorDiagnostics"] {
-  return {
-    matchedCount: candidate.diagnostics?.matchedCount ?? 0,
-    visibleCount: candidate.diagnostics?.visibleCount ?? 0,
-    chosenCandidateId: candidate.id,
-    confidence: candidate.score,
-    targetPreview: target ? elementPreview(target) : candidate.diagnostics?.chosenPreview,
-    anchor: {
-      text: candidate.selector.anchor?.text,
-      scopeRole: candidate.selector.anchor?.scopeRole,
-      scopeSelector: candidate.selector.anchor?.scopeSelector,
-      kind: candidate.selector.anchor?.kind,
-      relationship: candidate.selector.anchor?.relationship,
-      resolved: Boolean(candidate.selector.anchor?.text && candidate.diagnostics?.anchorReducedMatches)
-    },
-    context: candidate.diagnostics?.context
-  };
-}
-
-async function pickSelector(action: RecordedAction): Promise<SelectorPickResult> {
-  activeSelectorPick?.cancel("Replaced by a newer target picker.");
-
-  return await new Promise<SelectorPickResult>((resolve) => {
-    let currentTarget: Element | undefined;
-
-    const finish = (result: SelectorPickResult): void => {
-      cleanup();
-      resolve(result);
-    };
-    const cancel = (message: string): void => {
-      finish({ actionId: action.id, selectors: action.selectors, error: message });
-    };
-    const onPointerMove = (event: MouseEvent): void => {
-      const target = pickableTargetAtPoint(event, action.type);
-      if (!target || isRecorderUI(target)) return;
-      currentTarget = target;
-      showPickerHighlight(target);
-    };
-    const onClick = (event: MouseEvent): void => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-
-      const target = pickableTargetAtPoint(event, action.type) ?? currentTarget;
-      if (!target || isRecorderUI(target)) {
-        cancel("No selectable page element was found under the pointer.");
-        return;
-      }
-
-      const selectors = extractedSelectorsForTarget(target);
-      const rankedCandidates = testSelectorCandidatesInDocument(buildSelectorCandidatesForElement(target), document, target);
-      const recommended = rankedCandidates[0];
-      const persistedCandidates = stripRuntimeScores(rankedCandidates);
-      highlightElement(target);
-      finish({
-        actionId: action.id,
-        selectors: recommended?.selector ?? selectors,
-        selectorCandidates: persistedCandidates,
-        selectedCandidateId: recommended?.id,
-        frameSelector,
-        preview: elementPreview(target),
-        description: describePickedTarget(action, target, recommended?.selector ?? selectors),
-        value: pickedValue(action, target)
-      });
-    };
-    const onKeydown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      cancel("Target picker cancelled.");
-    };
-    const cleanup = (): void => {
-      document.removeEventListener("mousemove", onPointerMove, true);
-      document.removeEventListener("click", onClick, true);
-      document.removeEventListener("keydown", onKeydown, true);
-      hidePickerInstruction();
-      clearPickerHighlight();
-      if (activeSelectorPick?.cancel === cancel) {
-        activeSelectorPick = undefined;
-      }
-    };
-
-    activeSelectorPick = { cancel };
-    showPickerInstruction(action);
-    document.addEventListener("mousemove", onPointerMove, true);
-    document.addEventListener("click", onClick, true);
-    document.addEventListener("keydown", onKeydown, true);
-    window.setTimeout(() => {
-      if (activeSelectorPick?.cancel === cancel) {
-        cancel("Target picker timed out.");
-      }
-    }, 30_000);
-  });
-}
-
-async function pickAnchor(action: RecordedAction): Promise<AnchorPickResult> {
-  activeSelectorPick?.cancel("Replaced by a newer anchor picker.");
-
-  return await new Promise<AnchorPickResult>((resolve) => {
-    let currentTarget: Element | undefined;
-
-    const finish = (result: AnchorPickResult): void => {
-      cleanup();
-      resolve(result);
-    };
-    const cancel = (message: string): void => {
-      finish({ actionId: action.id, error: message });
-    };
-    const onPointerMove = (event: MouseEvent): void => {
-      const target = semanticPickTarget(event.target as Element);
-      if (!target || isRecorderUI(target)) return;
-      currentTarget = target;
-      showPickerHighlight(target);
-    };
-    const onClick = (event: MouseEvent): void => {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-
-      const target = currentTarget ?? semanticPickTarget(event.target as Element);
-      if (!target || isRecorderUI(target)) {
-        cancel("No anchor text was selected.");
-        return;
-      }
-
-      const anchor = computeAnchor(target) ?? anchorFromPickedElement(target);
-      if (!anchor) {
-        cancel("Pick stable text inside a row, dialog, form, or section.");
-        return;
-      }
-
-      highlightElement(target);
-      finish({
-        actionId: action.id,
-        anchor,
-        preview: elementPreview(target)
-      });
-    };
-    const onKeydown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      cancel("Anchor picker cancelled.");
-    };
-    const cleanup = (): void => {
-      document.removeEventListener("mousemove", onPointerMove, true);
-      document.removeEventListener("click", onClick, true);
-      document.removeEventListener("keydown", onKeydown, true);
-      hidePickerInstruction();
-      clearPickerHighlight();
-      if (activeSelectorPick?.cancel === cancel) {
-        activeSelectorPick = undefined;
-      }
-    };
-
-    activeSelectorPick = { cancel };
-    showPickerInstruction(action, "anchor");
-    document.addEventListener("mousemove", onPointerMove, true);
-    document.addEventListener("click", onClick, true);
-    document.addEventListener("keydown", onKeydown, true);
-    window.setTimeout(() => {
-      if (activeSelectorPick?.cancel === cancel) {
-        cancel("Anchor picker timed out.");
-      }
-    }, 30_000);
-  });
-}
-
-function pickableTargetAtPoint(event: MouseEvent, actionType: RecordedAction["type"]): Element | undefined {
-  for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
-    if (isRecorderUI(element)) continue;
-    const target = pickableTarget(element, actionType, { allowSemanticFallback: false });
-    if (target) return target;
-  }
-  return pickableTarget(event.target as Element | null, actionType);
-}
-
-function pickableTarget(
-  element: Element | null,
-  actionType: RecordedAction["type"],
-  options: { allowSemanticFallback?: boolean } = {}
-): Element | undefined {
-  if (!element) return undefined;
-  const allowSemanticFallback = options.allowSemanticFallback !== false;
-  if (actionType === "assert") {
-    return assertionTarget(element) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
-  }
-  const checkbox = actionType === "click" ? checkboxTarget(element) : undefined;
-  if (checkbox) return checkbox;
-
-  if (actionType === "fill") {
-    return element.closest("input, textarea, [contenteditable='true'], [role='textbox']") ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
-  }
-  if (actionType === "select") {
-    return element.closest(
-      "select, [role='combobox'], [role='option'], [class*='cpzui-select'], [class*='cpzui-virtual-filter-select']"
-    ) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
-  }
-  if (actionType === "press") {
-    return element.closest("input, textarea, button, a, [role='button'], [role='textbox'], [tabindex]") ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
-  }
-  return element.closest(
-    `button, a, input[type='button'], input[type='submit'], ${CHECKBOX_TARGET_SELECTOR}, [role='button'], [role='link'], [aria-expanded], [class*='cpzui-button']`
-  ) ?? (allowSemanticFallback ? semanticPickTarget(element) : undefined);
-}
-
-function checkboxTarget(element: Element): Element | undefined {
-  const direct = element.closest(CHECKBOX_TARGET_SELECTOR);
-  if (direct) return bestCheckboxTarget(direct);
-
-  const row = element.closest('tr, [role="row"], li, [role="listitem"]');
-  const rowCheckbox = row?.querySelector(CHECKBOX_TARGET_SELECTOR);
-  return rowCheckbox ? bestCheckboxTarget(rowCheckbox) : undefined;
-}
-
-function bestCheckboxTarget(element: Element): Element {
-  const label = element.closest("label");
-  if (label && isElementVisible(label)) return label;
-  const visibleWrapper = element.closest('[role="checkbox"], [class*="checkbox"], [class*="Checkbox"], [class*="cpzui-checkbox"], [class*="zm-checkbox"], [class*="zmu-checkbox"]');
-  if (visibleWrapper && isElementVisible(visibleWrapper)) return visibleWrapper;
-  return element;
-}
-
-function assertionTarget(element: Element): Element | undefined {
-  let current: Element | null = element;
-  let depth = 0;
-  while (current && depth < 6) {
-    if (isMeaningfulAssertionTarget(current)) {
-      return current;
-    }
-    current = current.parentElement;
-    depth++;
-  }
-  return undefined;
-}
-
-function isMeaningfulAssertionTarget(element: Element): boolean {
-  const tag = element.tagName.toLowerCase();
-  if (["html", "body", "main", "form", "table", "thead", "tbody", "tr"].includes(tag)) return false;
-  if (!isElementVisible(element)) return false;
-
-  const text = visibleText(element);
-  if (text.length < 2 || text.length > 120) return false;
-  if (!/[A-Za-z0-9]/.test(text)) return false;
-
-  if (element.matches("a, button, td, th, span, strong, p, label, [role='link'], [role='button'], [role='gridcell'], [role='cell'], [data-testid]")) {
-    return true;
-  }
-
-  return element.children.length === 0;
-}
-
-function semanticPickTarget(element: Element): Element {
-  let current: Element | null = element;
-  let depth = 0;
-  while (current && depth < 6) {
-    if (
-      current.matches("button, a, input, textarea, select, [role], [aria-label], [data-testid]") ||
-      /cpzui-(button|select|virtual-filter-select|checkbox|tab)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(current.className ?? "")) ||
-      current.classList.contains("cpzui-form-item__label")
-    ) {
-      return current;
-    }
-    current = current.parentElement;
-    depth++;
-  }
-  return element;
-}
-
-function anchorFromPickedElement(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
-  const formFieldAnchor = formFieldAnchorFromPickedElement(element);
-  if (formFieldAnchor) return formFieldAnchor;
-
-  const container = element.closest('tr, [role="row"], li, [role="listitem"]');
-  if (!container) return undefined;
-
-  const scopeRole = container.tagName === "TR" || container.getAttribute("role") === "row" ? "row" : "listitem";
-  const text = manualAnchorText(element, container);
-  if (!text) return undefined;
-  return { scopeRole, text, relationship: "within" };
-}
-
-function formFieldAnchorFromPickedElement(element: Element): NonNullable<SelectorStrategy["anchor"]> | undefined {
-  const row = element.closest(".cpzui-form-item__row, [class*='form-item__row']");
-  if (!row) return undefined;
-
-  const text = formFieldLabelText(row);
-  if (!text || text.length > 80) return undefined;
-
-  return {
-    text,
-    scopeSelector: row.classList.contains("cpzui-form-item__row") ? ".cpzui-form-item__row" : "[class*='form-item__row']",
-    relationship: "nearControl",
-    kind: "formField"
-  };
-}
-
-function formFieldLabelText(row: Element): string | undefined {
-  const label = row.querySelector(".cpzui-form-item__label")
-    ?? row.querySelector("[class*='form-item__label']:not([class*='wrapper']):not([class*='content'])")
-    ?? row.querySelector("label")
-    ?? row.querySelector("[aria-label]");
-  return label?.textContent?.replace(/\s+/g, " ").trim();
-}
-
-function manualAnchorText(element: Element, container: Element): string | undefined {
-  const ownText = visibleText(element);
-  if (ownText.length > 1 && ownText.length <= 80) return ownText;
-
-  const candidates = Array.from(container.querySelectorAll("td, th, [role='gridcell'], [role='cell'], span, strong, a"))
-    .map((candidate) => visibleText(candidate))
-    .filter((text) => text.length > 1 && text.length <= 80);
-  const email = candidates.find((text) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text));
-  return email ?? candidates[0];
-}
-
-function extractedSelectorsForTarget(target: Element): SelectorStrategy {
-  let selectors = extractSelectors(target);
-  const nth = computeNth(target, selectors);
-  if (nth !== undefined) {
-    selectors = { ...selectors, nth };
-  }
-  const anchor = computeAnchor(target);
-  if (anchor) {
-    selectors = { ...selectors, anchor };
-  }
-  return selectors;
-}
-
-function describePickedTarget(action: RecordedAction, target: Element, selectors: SelectorStrategy): string {
-  const label = selectors.role?.name ?? selectors.label ?? selectors.text ?? elementPreview(target);
-  if (action.type === "assert") return `Assert text visible: ${assertionText(target) ?? label}`;
-  if (action.type === "fill") return `Fill "${label}"`;
-  if (action.type === "select") return `Select option in "${label}"`;
-  if (action.type === "press") return `Press ${action.key ?? "Enter"}${label ? ` in "${label}"` : ""}`;
-  return `Click "${label}"`;
-}
-
-function pickedValue(action: RecordedAction, target: Element): string | undefined {
-  if (action.type === "assert") return assertionText(target);
-  if (action.type !== "select") return undefined;
-  if (target instanceof HTMLOptionElement) return target.text.trim() || target.value;
-  if (target.getAttribute("role") === "option") return visibleText(target);
-  return undefined;
-}
-
-function assertionText(target: Element): string | undefined {
-  const text = visibleText(target).replace(/\s+/g, " ").trim();
-  if (!text) return undefined;
-  return text.length > 120 ? text.slice(0, 120).trim() : text;
-}
-
-function showPickerInstruction(action: RecordedAction, mode: "target" | "anchor" = "target"): void {
-  const existing = document.getElementById("__zoom_recorder_picker_instruction");
-  if (existing) existing.remove();
-  const instruction = document.createElement("div");
-  instruction.id = "__zoom_recorder_picker_instruction";
-  instruction.textContent = mode === "anchor"
-    ? "Click stable label, row, dialog, or section text to add context. Press Esc to cancel."
-    : `Click the ${pickerNoun(action.type)} to use for this step. Press Esc to cancel.`;
-  instruction.style.cssText = [
-    "position: fixed",
-    "top: 8px",
-    "left: 50%",
-    "transform: translateX(-50%)",
-    "z-index: 999999",
-    "background: #0b5cff",
-    "color: white",
-    "padding: 7px 14px",
-    "border-radius: 18px",
-    "font-family: system-ui, sans-serif",
-    "font-size: 12px",
-    "font-weight: 700",
-    "box-shadow: 0 2px 10px rgba(0,0,0,0.24)",
-    "pointer-events: none"
-  ].join(";");
-  document.body.appendChild(instruction);
-}
-
-function pickerNoun(actionType: RecordedAction["type"]): string {
-  if (actionType === "assert") return "text or element to validate";
-  if (actionType === "fill") return "field";
-  if (actionType === "select") return "dropdown or option";
-  if (actionType === "press") return "field or control";
-  return "button or link";
-}
-
-function hidePickerInstruction(): void {
-  document.getElementById("__zoom_recorder_picker_instruction")?.remove();
-}
-
-function showPickerHighlight(element: Element): void {
-  const id = "__zoom_recorder_picker_highlight";
-  let overlay = document.getElementById(id);
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = id;
-    overlay.style.cssText = [
-      "position: fixed",
-      "border: 3px solid #0b5cff",
-      "box-shadow: 0 0 0 3px rgba(11,92,255,0.22)",
-      "border-radius: 6px",
-      "z-index: 999998",
-      "pointer-events: none"
-    ].join(";");
-    document.body.appendChild(overlay);
-  }
-  const rect = element.getBoundingClientRect();
-  overlay.style.left = `${Math.max(rect.left - 3, 0)}px`;
-  overlay.style.top = `${Math.max(rect.top - 3, 0)}px`;
-  overlay.style.width = `${Math.max(rect.width + 6, 6)}px`;
-  overlay.style.height = `${Math.max(rect.height + 6, 6)}px`;
-}
-
-function clearPickerHighlight(): void {
-  document.getElementById("__zoom_recorder_picker_highlight")?.remove();
-}
-
-async function executeAssertion(action: RecordedAction): Promise<void> {
-  const expected = resolveReplayExpected(action.expected ?? action.value ?? "");
-  const timeout = action.timeout ?? 10_000;
-  switch (action.assertionType) {
-    case "urlContains":
-      if (!window.location.href.includes(expected)) {
-        throw new Error(`Expected URL to contain "${expected}"`);
-      }
-      return;
-    case "urlMatches":
-      if (!new RegExp(expected).test(window.location.href)) {
-        throw new Error(`Expected URL to match "${expected}"`);
-      }
-      return;
-    case "elementVisible":
-      await waitFor(() => {
-        const element = hasUsableSelector(action.selectors)
-          ? findReplayElementSync(action)
-          : document.querySelector(expected);
-        return Boolean(element && isElementVisible(element));
-      }, timeout, `Expected selector to be visible: ${expected}`);
-      return;
-    case "fieldValue":
-    case "hasValue":
-      await waitFor(() => {
-        if (hasUsableSelector(action.selectors)) {
-          const element = findReplayElementSync(action);
-          return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
-            ? element.value === expected
-            : false;
-        }
-        const fields = Array.from(document.querySelectorAll("input, textarea")) as Array<HTMLInputElement | HTMLTextAreaElement>;
-        return fields.some((field) => field.value === expected);
-      }, timeout, `Expected a field value to equal "${expected}"`);
-      return;
-    case "tableRowContains":
-      await waitFor(() => Array.from(document.querySelectorAll("tr, [role='row']")).some((row) => visibleText(row).includes(expected)), timeout, `Expected table row containing "${expected}"`);
-      return;
-    case "addressStatusEquals":
-      await waitFor(() => Array.from(document.querySelectorAll("tr, [role='row']")).some((row) => visibleText(row).includes(expected)), timeout, `Expected address status "${expected}"`);
-      return;
-    case "entityExists":
-    case "entityState":
-      await waitFor(() => expected.split("|").every((token) => visibleText(document.body).toLowerCase().includes(token.trim().toLowerCase())), timeout, `Expected entity "${expected}"`);
-      return;
-    case "entityAbsent":
-      await waitFor(() => expected.split("|").every((token) => !visibleText(document.body).toLowerCase().includes(token.trim().toLowerCase())), timeout, `Expected entity "${expected}" to be absent`);
-      return;
-    case "toastVisible":
-      await waitFor(() => Array.from(document.querySelectorAll("[role='status'], [role='alert'], .toast, .zm-toast, .zmu-toast, [class*='toast'], [class*='Toast'], [class*='banner']")).some((toast) => isElementVisible(toast) && visibleText(toast).includes(expected)), timeout, `Expected toast or banner containing "${expected}"`);
-      return;
-    case "textVisible":
-    case "hasText":
-    default:
-      await findByText(expected, timeout);
-      return;
-  }
-}
-
-async function findReplayElement(action: RecordedAction): Promise<Element> {
-  const timeout = action.timeout ?? 10_000;
-  const startedAt = Date.now();
-  while (Date.now() - startedAt <= timeout) {
-    const syncElement = findReplayElementSync(action);
-    if (syncElement) return syncElement;
-    await sleep(150);
-  }
-  if (action.selectors.text) {
-    return await findByText(action.selectors.text, Math.min(timeout, 5_000));
-  }
-  throw new Error(`Could not find element for ${action.description ?? action.type}`);
-}
-
-async function findReplayOption(action: RecordedAction, optionText: string): Promise<Element> {
-  const timeout = action.timeout ?? 10_000;
-  const startedAt = Date.now();
-  while (Date.now() - startedAt <= timeout) {
-    const popupOption = findOpenPopupOption(optionText);
-    if (popupOption) return popupOption;
-
-    for (const candidate of action.selectMetadata?.optionCandidates ?? []) {
-      const option = findReplayElementSync({ ...action, type: "click", selectors: candidate.selector });
-      if (option && isInsideOpenSelectPopup(option) && optionTextMatches(optionText, elementAccessibleText(option))) return option;
-    }
-    await sleep(150);
-  }
-  throw new Error(`Could not find open select option "${optionText}"`);
-}
-
-async function waitForSelectValue(action: RecordedAction, element: Element, expected: string): Promise<void> {
-  const timeout = Math.min(Math.max(action.timeout ?? 10_000, 1_500), 5_000);
-  const anchorRoot = resolveAnchorRoot(action.selectors);
-  const needle = normalizeReplayText(expected).toLowerCase();
-  let observedTexts: string[] = [];
-
-  await waitFor(() => {
-    observedTexts = collectSelectVerificationTexts(action, element, anchorRoot);
-    return observedTexts.some((text) =>
-      selectedOptionValueMatches(expected, text) ||
-      text.toLowerCase().includes(needle)
-    );
-  }, timeout, () => `Select step did not apply "${expected}". Observed: ${observedTexts.slice(0, 6).join(" | ") || "none"}`);
-}
-
-function collectSelectVerificationTexts(action: RecordedAction, element: Element, anchorRoot?: Element): string[] {
-  const candidates: Element[] = [];
-  const add = (candidate: Element | null | undefined) => {
-    if (!candidate || candidates.includes(candidate)) return;
-    if (candidate === document.body || candidate === document.documentElement) return;
-    candidates.push(candidate);
-  };
-
-  const addElementContext = (candidate: Element | null | undefined) => {
-    if (!candidate) return;
-    add(candidate);
-    add(candidate.closest(".cpzui-form-item__row, .zoom-form-item, .zm-form-item, [class*='form-item']"));
-    add(candidate.closest("[role='combobox'], [aria-haspopup='listbox'], [class*='select-input'], [class*='filter-select']"));
-  };
-
-  addElementContext(element);
-  addElementContext(findReplayElementSync(action));
-  if (anchorRoot) {
-    add(anchorRoot);
-    anchorRoot.querySelectorAll("input, textarea, select, [role='combobox'], [role='textbox'], [aria-haspopup='listbox']").forEach(addElementContext);
-  }
-
-  const active = document.activeElement;
-  const expectedLabel = action.selectors.label ?? action.selectors.role?.name ?? action.selectors.anchor?.text;
-  if (active instanceof Element) {
-    const activeText = elementAccessibleText(active).toLowerCase();
-    const activeLooksRelated = anchorRoot?.contains(active) ||
-      Boolean(expectedLabel && activeText.includes(expectedLabel.toLowerCase()));
-    if (activeLooksRelated) addElementContext(active);
-  }
-
-  return candidates
-    .flatMap((candidate) => explicitElementTexts(candidate))
-    .map(normalizeReplayText)
-    .filter(Boolean)
-    .filter((text, index, all) => all.indexOf(text) === index);
-}
-
-function explicitElementTexts(element: Element): string[] {
-  const values = [
-    elementAccessibleText(element),
-    visibleText(element)
-  ];
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-    values.unshift(element.value);
-  }
-  return values;
-}
-
-function findOpenPopupOption(optionText: string): Element | undefined {
-  const needle = normalizeReplayText(optionText).toLowerCase();
-  const popups = Array.from(document.querySelectorAll([
-    "[role='listbox']",
-    ".cpzui-select__list",
-    ".cpzui-select-dropdown",
-    ".cpzui-virtual-filter-select-dropdown",
-    "[class*='select-dropdown']",
-    "[class*='select__list']"
-  ].join(","))).filter(isElementVisible);
-
-  const optionSelector = [
-    "[role='option']",
-    "option",
-    "li",
-    "[class*='option']",
-    "[data-testid*='Option']",
-    "[data-test-id*='Option']"
-  ].join(",");
-
-  for (const popup of popups) {
-    const options = Array.from(popup.querySelectorAll(optionSelector)).filter(isElementVisible);
-    const exact = options.find((option) => normalizeReplayText(elementAccessibleText(option)).toLowerCase() === needle);
-    if (exact) return bestClickableOption(exact);
-
-    const contains = options.find((option) => optionTextMatches(optionText, elementAccessibleText(option)));
-    if (contains) return bestClickableOption(contains);
-  }
-
-  return undefined;
-}
-
-function bestClickableOption(element: Element): Element {
-  return element.closest("[role='option'], li, [class*='option']") ?? element;
-}
-
-function isInsideOpenSelectPopup(element: Element): boolean {
-  const popup = element.closest([
-    "[role='listbox']",
-    ".cpzui-select__list",
-    ".cpzui-select-dropdown",
-    ".cpzui-virtual-filter-select-dropdown",
-    "[class*='select-dropdown']",
-    "[class*='select__list']"
-  ].join(","));
-  return Boolean(popup && isElementVisible(popup));
-}
-
-function findVisibleTextSync(text: string): Element | undefined {
-  const needle = normalizeReplayText(text).toLowerCase();
-  return Array.from(document.querySelectorAll("body *")).find((element) => {
-    if (!isElementVisible(element)) return false;
-    return normalizeReplayText(elementAccessibleText(element)).toLowerCase().includes(needle);
-  });
-}
-
-function resolveAnchorRoot(selectors: SelectorStrategy): Element | undefined {
-  const anchor = selectors.anchor;
-  if (!anchor?.text) return undefined;
-  const scopeSelector = anchor.scopeSelector
-    ?? (anchor.scopeRole === "dialog" ? "[role='dialog'], dialog"
-      : anchor.scopeRole === "listitem" ? "li, [role='listitem']"
-      : "tr, [role='row']");
-  return Array.from(document.querySelectorAll(scopeSelector)).find(
-    (container) => isElementVisible(container) && elementAccessibleText(container).toLowerCase().includes(anchor.text!.toLowerCase())
-  );
-}
-
-function findReplayElementSync(action: RecordedAction): Element | undefined {
-  const selectors = action.selectors;
-
-  // Anchor: scope the search to the matching row before falling back to the page.
-  const anchorRoot = resolveAnchorRoot(selectors);
-  if (anchorRoot) {
-    if (selectors.testId) {
-      const el = pickElement(Array.from(anchorRoot.querySelectorAll(`[data-testid="${cssEscape(selectors.testId)}"]`)));
-      if (el) return el;
-    }
-    if (selectors.css) {
-      const el = pickElement(Array.from(anchorRoot.querySelectorAll(selectors.css)));
-      if (el) return el;
-    }
-    if (selectors.role) {
-      const el = findByRole(selectors.role.role, selectors.role.name, anchorRoot);
-      if (el) return el;
-    }
-    if (selectors.text) {
-      const el = pickElement(Array.from(anchorRoot.querySelectorAll("*")).filter(
-        (e) => isElementVisible(e) && visibleText(e).toLowerCase().includes(selectors.text!.toLowerCase())
-      ));
-      if (el) return el;
-    }
-  }
-
-  if (selectors.testId) {
-    const element = pickElement(Array.from(document.querySelectorAll(`[data-testid="${cssEscape(selectors.testId)}"]`)), selectors.nth);
-    if (element) return element;
-  }
-  if (selectors.label) {
-    const element = findByLabel(selectors.label);
-    if (element) return element;
-  }
-  if (selectors.role?.name) {
-    const element = findByRole(selectors.role.role, selectors.role.name, document, selectors.nth, selectors.role.exact);
-    if (element) return element;
-  }
-  if (selectors.css) {
-    const element = pickElement(Array.from(document.querySelectorAll(selectors.css)), selectors.nth);
-    if (element) return element;
-  }
-  if (selectors.role) {
-    const element = findByRole(selectors.role.role, selectors.role.name, document, selectors.nth, selectors.role.exact);
-    if (element) return element;
-  }
-  if (selectors.text) {
-    return pickElement(
-      Array.from(document.querySelectorAll("body *")).filter((element) => isElementVisible(element) && visibleText(element).toLowerCase().includes(selectors.text!.toLowerCase())),
-      selectors.nth
-    );
-  }
-  return undefined;
-}
-
-function buildCandidatesFromLegacyAction(action: RecordedAction): SelectorCandidate[] {
-  const syntheticTarget = findReplayElementSync(action);
-  return syntheticTarget
-    ? buildSelectorCandidatesForElement(syntheticTarget)
-    : [{
-        id: "legacy-selector",
-        kind: action.selectors.role ? "role" : action.selectors.label ? "label" : action.selectors.testId ? "testId" : action.selectors.text ? "text" : action.selectors.css ? "css" : "relative",
-        selector: action.selectors,
-        source: "legacy",
-        label: formatCandidateSelector(action.selectors)
-      }];
-}
-
-function stripRuntimeScores(candidates: RankedSelectorCandidate[]): SelectorCandidate[] {
-  return candidates.map(({ rank: _rank, score: _score, ...candidate }) => candidate);
-}
-
-function candidateResult(candidate: RankedSelectorCandidate): SelectorTestResult["fallbackCandidates"][number] {
-  return {
-    selector: candidate.selector,
-    label: candidateLabel(candidate),
-    matchedCount: candidate.diagnostics?.matchedCount ?? 0,
-    visibleCount: candidate.diagnostics?.visibleCount ?? 0,
-    candidateId: candidate.id,
-    kind: candidate.kind,
-    score: candidate.score.score,
-    scoreLevel: candidate.score.level
-  };
-}
-
-function candidateLabel(candidate: RankedSelectorCandidate): string {
-  return candidate.label ?? `${candidate.kind}: ${formatCandidateSelector(candidate.selector)}`;
-}
-
-function formatCandidateSelector(selectors: SelectorStrategy): string {
-  return [
-    selectors.role ? `role=${selectors.role.role}${selectors.role.name ? `/${selectors.role.name}` : ""}` : undefined,
-    selectors.label ? `label=${selectors.label}` : undefined,
-    selectors.testId ? `testId=${selectors.testId}` : undefined,
-    selectors.text ? `text=${selectors.text}` : undefined,
-    selectors.css ? `css=${selectors.css}` : undefined,
-    selectors.xpath ? `xpath=${selectors.xpath}` : undefined
-  ].filter(Boolean).join(" | ") || "selector";
-}
-
-function highlightElement(element: Element): void {
-  const id = "__zoom_recorder_selector_highlight";
-  document.getElementById(id)?.remove();
-  const rect = element.getBoundingClientRect();
-  const overlay = document.createElement("div");
-  overlay.id = id;
-  overlay.style.cssText = [
-    "position: fixed",
-    `left: ${Math.max(rect.left - 3, 0)}px`,
-    `top: ${Math.max(rect.top - 3, 0)}px`,
-    `width: ${Math.max(rect.width + 6, 6)}px`,
-    `height: ${Math.max(rect.height + 6, 6)}px`,
-    "border: 3px solid #0b5cff",
-    "box-shadow: 0 0 0 3px rgba(11,92,255,0.2)",
-    "border-radius: 6px",
-    "z-index: 999998",
-    "pointer-events: none"
-  ].join(";");
-  document.body.appendChild(overlay);
-  window.setTimeout(() => overlay.remove(), 2_500);
-}
-
-function elementPreview(element: Element): string {
-  const tag = element.tagName.toLowerCase();
-  const label = element.getAttribute("aria-label") ?? element.getAttribute("placeholder") ?? visibleText(element);
-  return `<${tag}> ${label.replace(/\s+/g, " ").trim().slice(0, 120)}`;
-}
-
-function findByLabel(labelText: string, root: ParentNode = document): Element | undefined {
-  const needle = normalizeReplayText(labelText).toLowerCase();
-  const labels = Array.from(root.querySelectorAll("label"));
-  for (const label of labels) {
-    if (!elementAccessibleText(label).toLowerCase().includes(needle)) continue;
-    if (label.htmlFor) {
-      const target = document.getElementById(label.htmlFor);
-      if (target && isElementVisible(target)) return target;
-    }
-    const nested = label.querySelector("input, textarea, select, button, [role='button'], [role='checkbox'], [role='combobox']");
-    if (nested && isElementVisible(nested)) return nested;
-  }
-
-  const controlSelector = "input, textarea, select, button, [role='button'], [role='checkbox'], [role='combobox'], [role='textbox']";
-  const controls = Array.from(root.querySelectorAll(controlSelector));
-  const direct = controls.find((element) => elementAccessibleText(element).toLowerCase().includes(needle) && isElementVisible(element));
-  if (direct) return direct;
-
-  const rows = Array.from(root.querySelectorAll(".cpzui-form-item__row, .zoom-form-item, .zm-form-item, [class*='form-item']"));
-  const row = rows.find((candidate) => isElementVisible(candidate) && elementAccessibleText(candidate).toLowerCase().includes(needle));
-  return row ? pickElement(Array.from(row.querySelectorAll(controlSelector))) : undefined;
-}
-
-function findByRole(role: string, name?: string, root: ParentNode = document, nth?: number, exact?: boolean): Element | undefined {
-  return pickElement(findAllByRole(role, name, root, exact), nth);
-}
-
-function findAllByRole(role: string, name?: string, root: ParentNode = document, exact?: boolean): Element[] {
-  const selectors = role === "button"
-    ? "button, [role='button'], input[type='button'], input[type='submit']"
-    : role === "textbox"
-      ? "input, textarea, [role='textbox']"
-      : role === "checkbox"
-        ? CHECKBOX_TARGET_SELECTOR
-        : role === "combobox"
-          ? "select, [role='combobox'], input[role='combobox'], [aria-haspopup='listbox']"
-          : role === "option"
-            ? "option, [role='option'], li[class*='option'], [class*='select-option'], [class*='virtual-filter-select-option']"
-            : `[role='${role}']`;
-  return actionableElements(Array.from(root.querySelectorAll(selectors))).filter((element) => {
-    if (!name) return true;
-    const accessible = elementAccessibleText(element).toLowerCase();
-    const needle = normalizeReplayText(name).toLowerCase();
-    return exact ? accessible === needle : accessible.includes(needle);
-  });
-}
-
-function pickElement(elements: Element[], nth?: number): Element | undefined {
-  const actionable = actionableElements(elements);
-  if (actionable.length === 0) return undefined;
-  if (actionable.length === 1) return actionable[0];
-  return nth === undefined ? actionable[0] : actionable[nth];
-}
-
-function actionableElements(elements: Element[]): Element[] {
-  return elements
-    .map((element) => isCheckboxLike(element) ? bestCheckboxTarget(element) : element)
-    .filter((element, index, all) => all.indexOf(element) === index)
-    .filter(isElementVisible);
-}
-
-function isCheckboxLike(element: Element): boolean {
-  return element.matches(CHECKBOX_TARGET_SELECTOR) || Boolean(element.closest(CHECKBOX_TARGET_SELECTOR));
-}
-
-function associatedCheckboxLabel(element: Element): string | undefined {
-  const label = element.closest("label") ?? (element.id ? document.querySelector(`label[for="${element.id}"]`) : null);
-  return label?.textContent?.replace(/\s+/g, " ").trim();
-}
-
-function elementAccessibleText(element: Element): string {
-  const doc = element.ownerDocument ?? document;
-  const labelledBy = element.getAttribute("aria-labelledby");
-  const labelledByText = labelledBy
-    ?.split(/\s+/)
-    .map((id) => doc.getElementById(id)?.textContent)
-    .filter(Boolean)
-    .join(" ");
-  return normalizeReplayText([
-    labelledByText,
-    element.getAttribute("aria-label"),
-    element.getAttribute("placeholder"),
-    element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement ? element.value : undefined,
-    visibleText(element),
-    associatedCheckboxLabel(element)
-  ].filter(Boolean).join(" "));
-}
-
-function replayClickElement(element: Element): void {
-  const target = element instanceof HTMLElement ? element : element.closest<HTMLElement>("button, a, input, textarea, select, [role], li, [class*='option'], [class*='select']") ?? undefined;
-  if (!target) return;
-  target.scrollIntoView?.({ block: "center", inline: "center" });
-  target.focus?.();
-  const rect = target.getBoundingClientRect();
-  const eventInit = {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    clientX: rect.left + rect.width / 2,
-    clientY: rect.top + rect.height / 2,
-    button: 0,
-    buttons: 1
-  };
-
-  dispatchPointerMouseEvent(target, "pointerover", eventInit);
-  dispatchPointerMouseEvent(target, "mouseover", eventInit);
-  dispatchPointerMouseEvent(target, "pointermove", eventInit);
-  dispatchPointerMouseEvent(target, "mousemove", eventInit);
-  dispatchPointerMouseEvent(target, "pointerdown", eventInit);
-  dispatchPointerMouseEvent(target, "mousedown", eventInit);
-  dispatchPointerMouseEvent(target, "pointerup", { ...eventInit, buttons: 0 });
-  dispatchPointerMouseEvent(target, "mouseup", { ...eventInit, buttons: 0 });
-  dispatchPointerMouseEvent(target, "click", { ...eventInit, buttons: 0 });
-}
-
-function dispatchPointerMouseEvent(target: HTMLElement, type: string, init: MouseEventInit): void {
-  const EventCtor = type.startsWith("pointer") && typeof PointerEvent !== "undefined" ? PointerEvent : MouseEvent;
-  target.dispatchEvent(new EventCtor(type, init));
-}
-
-function normalizeReplayText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-async function findByText(text: string, timeout: number): Promise<Element> {
-  let found: Element | undefined;
-  await waitFor(() => {
-    found = Array.from(document.querySelectorAll("body *")).find((element) => {
-      if (!isElementVisible(element)) return false;
-      return visibleText(element).toLowerCase().includes(text.toLowerCase());
-    });
-    return Boolean(found);
-  }, timeout, `Expected visible text "${text}"`);
-  return found!;
-}
-
-function setElementValue(element: Element, value: string): void {
-  if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
-    throw new Error("Target element is not fillable");
-  }
-  element.focus();
-  element.value = value;
-  element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
-async function waitFor(predicate: () => boolean, timeout: number, errorMessage: string | (() => string)): Promise<void> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await sleep(100);
-  }
-  throw new Error(typeof errorMessage === "function" ? errorMessage() : errorMessage);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isElementVisible(element: Element): boolean {
-  const rect = element.getBoundingClientRect();
-  const style = window.getComputedStyle(element);
-  return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-}
-
-function visibleText(element: Element): string {
-  return element.textContent?.replace(/\s+/g, " ").trim() ?? "";
-}
-
-function cssEscape(value: string): string {
-  return value.replace(/["\\]/g, "\\$&");
-}
-
-// ─── Recording Indicator ─────────────────────────────────────────────────────
-
-function showRecordingIndicator(): void {
-  const existingLabel = document.querySelector("#__zoom_recorder_indicator [data-recorder-label]");
-  if (existingLabel) {
-    existingLabel.textContent = paused ? "Recording paused" : "Recording workflow...";
-    return;
-  }
-  const indicator = document.createElement("div");
-  indicator.id = "__zoom_recorder_indicator";
-  indicator.innerHTML = `
-    <div style="
-      position: fixed;
-      top: 8px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 999999;
-      background: #e53935;
-      color: white;
-      padding: 6px 16px;
-      border-radius: 20px;
-      font-family: system-ui, sans-serif;
-      font-size: 12px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      pointer-events: none;
-    ">
-      <span style="width:8px;height:8px;border-radius:50%;background:white;animation:pulse 1s infinite;"></span>
-      <span data-recorder-label>${paused ? "Recording paused" : "Recording workflow..."}</span>
-    </div>
-    <style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>
-  `;
-  document.body.appendChild(indicator);
-}
-
-function hideRecordingIndicator(): void {
-  document.getElementById("__zoom_recorder_indicator")?.remove();
-}
-
-// ─── Utilities ───────────────────────────────────────────────────────────────
-
-function isInputElement(el: Element): boolean {
-  const tag = el.tagName.toLowerCase();
-  return tag === "input" || tag === "textarea" || el.getAttribute("contenteditable") === "true";
-}
-
-function inputElementValue(el: Element): string {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    return el.value;
-  }
-  return el.textContent ?? "";
-}
-
-/**
- * Check if target is the same element or a child of the reference element.
- * Used for click deduplication — clicking an SVG inside a button counts as
- * the same click as clicking the button itself.
- */
-function isSameOrChildOf(target: Element, reference: Element): boolean {
-  return target === reference || reference.contains(target) || target.contains(reference);
-}
-
-/**
- * Check if an element is inside a dropdown/option list (not the combobox trigger).
- */
-function isInsideDropdownList(element: Element): boolean {
-  return Boolean(element.closest(
-    '[class*="select-option"], [class*="dropdown-item"], [class*="option__content"], ' +
-    '[role="option"], [role="listbox"], [class*="select__list"], [class*="popper"]'
-  ));
-}
-
-function closestZoomComboboxTrigger(element: Element): Element | null {
-  if (isInsideDropdownList(element)) return null;
-
-  const candidate = element.closest(
-    '[role="combobox"], [class*="cpzui-virtual-filter-select"], [class*="cpzui-select"]'
-  );
-  if (!candidate || isDropdownContainer(candidate)) return null;
-
-  return candidate;
-}
-
-function isDropdownContainer(element: Element): boolean {
-  const className = element.getAttribute("class") ?? "";
-  return element.getAttribute("role") === "listbox" ||
-    /\bcpzui-select-option\b|\bcpzui-virtual-filter-select-option\b|select-option|select-dropdown|popper/i.test(className);
-}
-
-function normalizedOptionElement(element: Element): Element {
-  return element.closest('[role="option"], [class*="cpzui-select-option"], [class*="cpzui-virtual-filter-select-option"], [class*="select-option"]') ?? element;
-}
-
-/**
- * Extract the visible text of a dropdown option, handling Zoom's nested structure.
- */
-function getOptionText(element: Element): string | undefined {
-  return normalizeZoomOptionText(element);
-}
-
-function isRecorderUI(el: Element): boolean {
-  return Boolean(el.closest("#__zoom_recorder_indicator, #__zoom_recorder_picker_instruction, #__zoom_recorder_picker_highlight"));
-}
-
-/**
- * Heuristic: does clicking this element trigger a browser download? (feature 7)
- */
-function isDownloadTrigger(target: Element, text: string | undefined): boolean {
-  const anchor = target.closest("a");
-  if (anchor) {
-    if (anchor.hasAttribute("download")) return true;
-    const href = anchor.getAttribute("href") ?? "";
-    if (/\.(csv|pdf|xlsx?|zip|json|txt|docx?)(\?|$)/i.test(href)) return true;
-  }
-  return /\b(download|export)\b/i.test(text ?? "");
-}
-
-function generateId(): string {
-  return `act_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * Detect if the current page is within an impersonated sub-account context.
- * Zoom shows "submanage" in the URL or "Not a master account" in the page
- * when impersonating.
- */
-function detectImpersonationContext(): boolean {
-  const url = window.location.href;
-  if (url.includes("/submanage") || url.includes("/sub/")) return true;
-  
-  // Check for Zoom's impersonation indicator in the page
-  const bodyText = document.body?.innerText ?? "";
-  if (bodyText.includes("Not a master account")) return true;
-  
-  // Check for the sub-account switcher UI element
-  const subAccountBadge = document.querySelector('[class*="sub-account"], [class*="subaccount"]');
-  if (subAccountBadge) return true;
-  
-  return false;
-}
-
-/**
- * Check if a URL is a login, sign-in, or impersonation URL that should
- * be filtered from recordings (the automation engine handles these).
- */
-function isLoginOrImpersonationUrl(url: string): boolean {
-  return /\/(signin|login|account\/sub\/[^/]+\/login|oauth)/.test(url);
 }
