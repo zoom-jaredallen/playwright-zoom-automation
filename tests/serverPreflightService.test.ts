@@ -68,4 +68,18 @@ describe("server bulk preflight service", () => {
       ["run", "willRun"]
     ]);
   });
+
+  it("does not convert missing page evidence into a false inventory failure", () => {
+    const result = createBulkPreflightPlan({
+      workflows: [{ id: "wf", workflow: workflow() }],
+      accounts: [{ id: "unknown", ownerEmail: "unknown@example.com", name: "Unknown" }]
+    });
+
+    expect(result.summary).toEqual({ willRun: 0, willSkip: 0, willFail: 0, needsReview: 1 });
+    expect(result.accounts[0].workflowOutcomes[0].issues).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      category: "inventory",
+      message: expect.stringMatching(/Live page text evidence is required/)
+    }));
+  });
 });

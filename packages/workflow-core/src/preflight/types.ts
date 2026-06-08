@@ -13,7 +13,7 @@ export interface PreflightAccountInput {
   accountId: string;
   ownerEmail?: string;
   accountName?: string;
-  visibleText: string;
+  visibleText?: string;
   selectorStates?: Record<string, PreflightSelectorState>;
   reviewReasons?: string[];
 }

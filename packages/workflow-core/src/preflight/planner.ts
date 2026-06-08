@@ -22,6 +22,7 @@ export function buildPreflightPlan(input: PreflightPlanInput): PreflightPlanResu
 function evaluateAccount(account: PreflightAccountInput, actions: RecordedAction[]): PreflightAccountResult {
   const issues: PreflightIssue[] = [];
   const matchedTargetText = matchedIdempotencyText(account.visibleText, actions);
+  const hasVisibleTextEvidence = normalizeText(account.visibleText ?? "").length > 0;
 
   if (matchedTargetText.length > 0) {
     issues.push({
@@ -68,8 +69,17 @@ function evaluateAccount(account: PreflightAccountInput, actions: RecordedAction
     }
 
     if (action.type === "selectRows" && action.rowSelection) {
-      const available = countPatternMatches(account.visibleText, action.rowSelection.valuePattern);
       const minimum = action.rowSelection.minimumCount ?? action.rowSelection.count;
+      if (!hasVisibleTextEvidence) {
+        issues.push({
+          actionId: action.id,
+          severity: "warning",
+          category: "inventory",
+          message: `Live page text evidence is required to verify at least ${minimum} matching row value(s).`
+        });
+        continue;
+      }
+      const available = countPatternMatches(account.visibleText, action.rowSelection.valuePattern);
       if (available < minimum) {
         issues.push({
           actionId: action.id,
@@ -90,26 +100,29 @@ function evaluateAccount(account: PreflightAccountInput, actions: RecordedAction
   return accountResult(account, "willRun", issues, matchedTargetText);
 }
 
-function matchedIdempotencyText(visibleText: string, actions: RecordedAction[]): string[] {
-  const normalizedPageText = normalizeText(visibleText);
+function matchedIdempotencyText(visibleText: string | undefined, actions: RecordedAction[]): string[] {
+  const normalizedPageText = normalizeText(visibleText ?? "");
+  if (!normalizedPageText) return [];
   const matches = new Set<string>();
   for (const action of actions) {
     const guard = action.condition;
     if (guard?.type !== "entityStateGuard" || guard.whenMatched !== "skipAccount") continue;
-    for (const value of guard.match?.allText ?? []) {
-      if (value && normalizedPageText.includes(normalizeText(value))) matches.add(value);
-    }
-    for (const value of guard.match?.anyText ?? []) {
-      if (value && normalizedPageText.includes(normalizeText(value))) matches.add(value);
-    }
+    const allText = (guard.match?.allText ?? []).filter(Boolean);
+    const anyText = (guard.match?.anyText ?? []).filter(Boolean);
+    const matchedAnyText = anyText.filter((value) => normalizedPageText.includes(normalizeText(value)));
+    const allMatched = allText.length === 0 || allText.every((value) => normalizedPageText.includes(normalizeText(value)));
+    const anyMatched = anyText.length === 0 || matchedAnyText.length > 0;
+    if (!allMatched || !anyMatched || (allText.length === 0 && anyText.length === 0)) continue;
+    for (const value of allText) matches.add(value);
+    for (const value of matchedAnyText) matches.add(value);
   }
   return [...matches];
 }
 
-function countPatternMatches(text: string, pattern?: string): number {
+function countPatternMatches(text: string | undefined, pattern?: string): number {
   if (!pattern) return 0;
   try {
-    const matches = text.match(new RegExp(pattern, "gi"));
+    const matches = (text ?? "").match(new RegExp(pattern, "gi"));
     return new Set((matches ?? []).map((match) => normalizeText(match))).size;
   } catch {
     return 0;

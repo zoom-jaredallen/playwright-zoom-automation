@@ -105,6 +105,12 @@ export interface RunReadinessView {
 
 export type PreflightOutcomeView = "willRun" | "willSkip" | "willFail" | "needsReview";
 
+export interface PreflightSelectorStateView {
+  matchedCount: number;
+  visibleCount: number;
+  chosenPreview?: string;
+}
+
 export interface PreflightIssueView {
   actionId?: string;
   severity: "info" | "warning" | "blocking";
@@ -278,7 +284,11 @@ export async function checkRunReadiness(input: {
 export async function simulatePreflight(input: {
   accounts: SubAccountView[];
   workflows: RecordedWorkflowView[];
-  accountEvidence?: Record<string, { visibleText?: string; reviewReasons?: string[] }>;
+  accountEvidence?: Record<string, {
+    visibleText?: string;
+    selectorStates?: Record<string, PreflightSelectorStateView>;
+    reviewReasons?: string[];
+  }>;
 }): Promise<{ preflight: BulkPreflightView }> {
   return requestJson("/api/preflight/simulate", {
     method: "POST",

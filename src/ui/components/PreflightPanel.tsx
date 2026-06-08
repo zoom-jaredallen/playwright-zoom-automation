@@ -1,4 +1,4 @@
-import type { BulkPreflightView, PreflightOutcomeView } from "../api.js";
+import type { BulkPreflightView, PreflightIssueView, PreflightOutcomeView } from "../api.js";
 
 interface PreflightPanelProps {
   preflight?: BulkPreflightView;
@@ -34,7 +34,7 @@ export function PreflightPanel({ preflight, loading, error, disabled, onRun }: P
               <div key={account.accountId} className="preflight-account-row">
                 <span>
                   <strong>{account.ownerEmail ?? account.accountName ?? account.accountId}</strong>
-                  <small>{account.workflowOutcomes[0]?.issues[0]?.message ?? "No preflight issues"}</small>
+                  <small>{topIssueMessage(account.workflowOutcomes) ?? "No preflight issues"}</small>
                 </span>
                 <span className={`status-badge ${badgeClass(account.predictedOutcome)}`}>{labelFor(account.predictedOutcome)}</span>
               </div>
@@ -47,6 +47,20 @@ export function PreflightPanel({ preflight, loading, error, disabled, onRun }: P
       )}
     </section>
   );
+}
+
+function topIssueMessage(workflowOutcomes: BulkPreflightView["accounts"][number]["workflowOutcomes"]): string | undefined {
+  const issue = workflowOutcomes
+    .flatMap((workflow) => workflow.issues.map((item) => ({ ...item, workflowName: workflow.workflowName })))
+    .sort((a, b) => issuePriority(b) - issuePriority(a))[0];
+  if (!issue) return undefined;
+  return workflowOutcomes.length > 1 ? `${issue.workflowName}: ${issue.message}` : issue.message;
+}
+
+function issuePriority(issue: PreflightIssueView): number {
+  if (issue.severity === "blocking") return 3;
+  if (issue.severity === "warning") return 2;
+  return 1;
 }
 
 function labelFor(outcome: PreflightOutcomeView): string {

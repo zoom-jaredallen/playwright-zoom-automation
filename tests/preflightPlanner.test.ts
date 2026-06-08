@@ -86,4 +86,62 @@ describe("bulk preflight planner", () => {
     expect(result.accounts.find((account) => account.accountId === "broken")?.predictedOutcome).toBe("willFail");
     expect(result.accounts.find((account) => account.accountId === "review")?.predictedOutcome).toBe("needsReview");
   });
+
+  it("requires every allText token before predicting an idempotent skip", () => {
+    const actions: RecordedAction[] = [
+      action("open-add-number", {
+        condition: {
+          type: "entityStateGuard",
+          operation: "assign",
+          entityKind: "phoneNumber",
+          match: { allText: ["Assigned +61 2 7000 0001", "Sydney"] },
+          whenMatched: "skipAccount"
+        }
+      })
+    ];
+
+    const result = buildPreflightPlan({
+      workflowId: "add-phone-numbers",
+      workflowName: "Add phone numbers",
+      actions,
+      assertions: [],
+      accounts: [
+        { accountId: "partial", visibleText: "Assigned +61 2 7000 0001" },
+        { accountId: "complete", visibleText: "Assigned +61 2 7000 0001 Sydney" }
+      ]
+    });
+
+    expect(result.accounts.find((account) => account.accountId === "partial")?.predictedOutcome).toBe("willRun");
+    expect(result.accounts.find((account) => account.accountId === "complete")?.predictedOutcome).toBe("willSkip");
+  });
+
+  it("marks row-selection inventory checks as needs review when page evidence is missing", () => {
+    const result = buildPreflightPlan({
+      workflowId: "add-phone-numbers",
+      workflowName: "Add phone numbers",
+      actions: [
+        action("select-rows", {
+          type: "selectRows",
+          selectors: {},
+          rowSelection: {
+            mode: "firstAvailable",
+            count: 4,
+            minimumCount: 4,
+            entityKind: "phoneNumber",
+            valuePattern: "\\+61[\\s().-]*2[\\d\\s().-]{6,}"
+          }
+        })
+      ],
+      assertions: [],
+      accounts: [{ accountId: "unknown", visibleText: "" }]
+    });
+
+    const account = result.accounts[0];
+    expect(account.predictedOutcome).toBe("needsReview");
+    expect(account.issues).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      category: "inventory",
+      message: expect.stringMatching(/Live page text evidence is required/)
+    }));
+  });
 });

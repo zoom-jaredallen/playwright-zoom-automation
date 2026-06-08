@@ -21,8 +21,9 @@ export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, 
   const selectorCheck = validateSelectors(workflow, warnings);
   const assertionCoverage = calculateAssertionCoverage(workflow);
 
-  // Generate files
-  writeFileSync(path.join(outputDir, "schema.json"), JSON.stringify(workflow, null, 2) + "\n", "utf8");
+  // Generate files. Runtime code can use the full workflow object, but the
+  // committed schema should not embed large screenshot data URLs.
+  writeFileSync(path.join(outputDir, "schema.json"), JSON.stringify(stripInlineCaptureThumbnails(workflow), null, 2) + "\n", "utf8");
   writeFileSync(path.join(outputDir, "index.ts"), generatePluginFile(id, workflow), "utf8");
   writeFileSync(path.join(outputDir, "flow.ts"), generateFlowFile(id, workflow), "utf8");
   writeFileSync(path.join(outputDir, "test.ts"), generateTestFile(id, workflow), "utf8");
@@ -37,6 +38,27 @@ export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, 
       assertionCoverage: `${assertionCoverage}%`
     }
   };
+}
+
+function stripInlineCaptureThumbnails(workflow: RecordedWorkflow): RecordedWorkflow {
+  return {
+    ...workflow,
+    actions: workflow.actions.map(stripActionInlineCaptureThumbnail)
+  };
+}
+
+function stripActionInlineCaptureThumbnail(action: RecordedAction): RecordedAction {
+  const next: RecordedAction = {
+    ...action,
+    selectors: { ...action.selectors },
+    capture: action.capture ? { ...action.capture } : undefined,
+    thenActions: action.thenActions?.map(stripActionInlineCaptureThumbnail),
+    elseActions: action.elseActions?.map(stripActionInlineCaptureThumbnail)
+  };
+  if (next.capture?.thumbnail?.dataUrl) {
+    delete next.capture.thumbnail;
+  }
+  return next;
 }
 
 // ─── Code Generation ─────────────────────────────────────────────────────────

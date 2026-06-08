@@ -57,14 +57,18 @@ const OUTCOME_PRIORITY: Record<PreflightOutcome, number> = {
 
 export function createBulkPreflightPlan(input: BulkPreflightInput): BulkPreflightResult {
   const accountInputs = input.accounts.map((account): PreflightAccountInput => {
-    const evidence = input.accountEvidence?.[account.id] ?? {};
+    const evidence = input.accountEvidence?.[account.id];
+    const reviewReasons = [...(evidence?.reviewReasons ?? [])];
+    if (!evidence) {
+      reviewReasons.push("No live preflight evidence was provided for this account; prediction is schema-only.");
+    }
     return {
       accountId: account.id,
       ownerEmail: account.ownerEmail,
       accountName: account.name,
-      visibleText: evidence.visibleText ?? "",
-      selectorStates: evidence.selectorStates,
-      reviewReasons: evidence.reviewReasons
+      visibleText: evidence?.visibleText,
+      selectorStates: evidence?.selectorStates,
+      reviewReasons
     };
   });
 

@@ -597,8 +597,23 @@ describe("compileWorkflow", () => {
     expect(flow).toContain("Expected at least ${minimumCount} available row(s)");
   });
 
-  it("preserves the original schema.json", () => {
-    const workflow = createTestWorkflow();
+  it("preserves schema semantics while stripping inline screenshot thumbnails", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          ...createTestWorkflow().actions[0],
+          capture: {
+            thumbnail: { dataUrl: "data:image/jpeg;base64,abc", width: 320, height: 180 },
+            screenshotArtifactId: "capture-a",
+            capturedAt: "2026-06-08T00:00:00.000Z",
+            pageUrl: "https://zoom.us/x",
+            viewport: { width: 1440, height: 900 },
+            targetBox: { x: 10, y: 20, width: 100, height: 32 }
+          }
+        },
+        ...createTestWorkflow().actions.slice(1)
+      ]
+    });
     const result = compileWorkflow(workflow, testOutputDir);
     const schema = JSON.parse(readFileSync(path.join(result.outputDir, "schema.json"), "utf8"));
 
@@ -606,5 +621,7 @@ describe("compileWorkflow", () => {
     expect(schema.meta.name).toBe("Add AU Toll Address");
     expect(schema.actions).toHaveLength(4);
     expect(schema.parameters).toHaveLength(2);
+    expect(schema.actions[0].capture.thumbnail).toBeUndefined();
+    expect(schema.actions[0].capture.screenshotArtifactId).toBe("capture-a");
   });
 });
