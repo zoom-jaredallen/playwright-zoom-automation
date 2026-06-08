@@ -35,6 +35,8 @@ export interface MockZoomServer {
   impersonatedAccounts: string[];
   /** Track which accounts had addresses submitted. */
   submittedAccounts: string[];
+  /** Track native sign-in form submissions. */
+  signInSubmissionCount(): number;
   close(): Promise<void>;
 }
 
@@ -42,6 +44,7 @@ export async function startMockZoomServer(options: MockZoomServerOptions = {}): 
   const app = express();
   const impersonatedAccounts: string[] = [];
   const submittedAccounts: string[] = [];
+  let signInSubmissions = 0;
   const accounts = options.accounts ?? [
     { id: "sub-001", account_name: "Test Account 1", owner_email: "owner1@test.com" },
     { id: "sub-002", account_name: "Test Account 2", owner_email: "owner2@test.com" }
@@ -77,6 +80,7 @@ export async function startMockZoomServer(options: MockZoomServerOptions = {}): 
 
   // --- Web: Sign-in form submission ---
   app.post("/signin", (_req, res) => {
+    signInSubmissions += 1;
     if (options.loginShouldFail) {
       res.send(loginPageHtml("Incorrect email or password"));
       return;
@@ -146,6 +150,7 @@ export async function startMockZoomServer(options: MockZoomServerOptions = {}): 
         server,
         impersonatedAccounts,
         submittedAccounts,
+        signInSubmissionCount: () => signInSubmissions,
         close: () => new Promise<void>((closeResolve) => server.close(() => closeResolve()))
       });
     });

@@ -13,6 +13,8 @@ export interface ZoomComboboxSelection {
   selectorCandidates: SelectorCandidate[];
   selectedCandidateId?: string;
   selectMetadata: NonNullable<RecordedAction["selectMetadata"]>;
+  intentType: NonNullable<RecordedAction["intentType"]>;
+  intentMetadata: NonNullable<RecordedAction["intentMetadata"]>;
   rankedTriggerCandidates: RankedSelectorCandidate[];
   rankedOptionCandidates: RankedSelectorCandidate[];
 }
@@ -40,6 +42,13 @@ export function buildZoomComboboxSelection(input: ZoomComboboxSelectionInput): Z
       optionCandidates: stripRuntimeScores(rankedOptionCandidates),
       optionLabel: input.optionText,
       verificationText: input.optionText
+    },
+    intentType: "zoom.selectComboboxOption",
+    intentMetadata: {
+      fieldLabel: input.label,
+      optionLabel: input.optionText,
+      confidence: input.label ? "high" : "medium",
+      source: "recorded"
     },
     rankedTriggerCandidates,
     rankedOptionCandidates

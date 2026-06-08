@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
@@ -13,6 +13,14 @@ import type {
   RecorderTrainingReport,
   RecorderWorkflowAudit
 } from "./types.js";
+import {
+  calculateQualityReport,
+  createZoomAdminAdapter,
+  hardenRecordedWorkflow,
+  safeParseWorkflow,
+  type RecordedWorkflow,
+  type WorkflowHardeningReport
+} from "@zoom-automation/workflow-core";
 import {
   buildWorkflowAudit,
   diffRecordedActions,
@@ -38,12 +46,72 @@ export function formatSnapshotSummary(snapshot: RecorderDebugSnapshot): string {
   ].join("\n");
 }
 
+export interface WorkflowHardeningPreview {
+  workflow: RecordedWorkflow;
+  report: WorkflowHardeningReport;
+  quality: NonNullable<RecordedWorkflow["quality"]>;
+}
+
+export function buildWorkflowHardeningPreview(workflow: RecordedWorkflow): WorkflowHardeningPreview {
+  const hardened = hardenRecordedWorkflow({
+    actions: workflow.actions,
+    assertions: workflow.assertions,
+    adapter: createZoomAdminAdapter()
+  });
+  const quality = calculateQualityReport(hardened.actions, hardened.assertions);
+  const nextWorkflow: RecordedWorkflow = {
+    ...JSON.parse(JSON.stringify(workflow)),
+    actions: hardened.actions,
+    assertions: hardened.assertions,
+    quality,
+    hardening: hardened.report
+  };
+  return { workflow: nextWorkflow, report: hardened.report, quality };
+}
+
+export function formatHardeningSummary(preview: WorkflowHardeningPreview): string {
+  const report = preview.report;
+  return [
+    `Bulk readiness: ${report.bulkReady ? "ready" : "needs review"}`,
+    `Intent: ${report.intent.intent} (${report.intent.confidence})`,
+    `Entity: ${report.entity.entityKind} (${report.entity.confidence})`,
+    `Fingerprint: ${report.entity.fingerprintFields.map((field) => `${field.label}=${field.value}`).join(", ") || "none"}`,
+    `Added guard: ${report.addedGuardActionId ?? "none"}`,
+    `Added assertion: ${report.addedAssertion?.type ?? "none"}`,
+    `No-retry mutations: ${report.mutationRetryDisabledActionIds.length}`,
+    `Quality: ${preview.quality.score}`,
+    report.warnings.length > 0 ? `Warnings:\n${report.warnings.map((warning) => `- ${warning}`).join("\n")}` : "Warnings: none"
+  ].join("\n");
+}
+
 export function buildCommandInput(command: string, args: string[]): RecorderDebugCommandInput {
   if (command === "test") {
     const from = readFlag(args, "--from");
+    const workflow = readWorkflowFlag(args);
+    const trusted = args.includes("--trusted");
+    if (workflow) {
+      return from
+        ? { type: trusted ? "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM" : "IMPORT_AND_RUN_TEST_WORKFLOW_FROM", payload: { workflow, actionId: from } }
+        : { type: trusted ? "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW" : "IMPORT_AND_RUN_TEST_WORKFLOW", payload: { workflow } };
+    }
     return from
-      ? { type: "RUN_TEST_WORKFLOW_FROM", payload: { actionId: from } }
-      : { type: "RUN_TEST_WORKFLOW", payload: {} };
+      ? { type: trusted ? "RUN_TRUSTED_TEST_WORKFLOW_FROM" : "RUN_TEST_WORKFLOW_FROM", payload: { actionId: from } }
+      : { type: trusted ? "RUN_TRUSTED_TEST_WORKFLOW" : "RUN_TEST_WORKFLOW", payload: {} };
+  }
+
+  if (command === "import") {
+    const workflow = readWorkflowFlag(args);
+    if (!workflow) throw new Error("import requires --file <workflow.json>");
+    return { type: "IMPORT_WORKFLOW", payload: { workflow } };
+  }
+
+  if (command === "step" || command === "selector") {
+    const actionId = readFlag(args, "--action");
+    if (!actionId) throw new Error(`${command} requires --action <actionId>`);
+    return {
+      type: command === "step" ? "RUN_TEST_ACTION" : "TEST_SELECTOR",
+      payload: { actionId }
+    };
   }
 
   if (command === "train") {
@@ -59,6 +127,9 @@ export function buildCommandInput(command: string, args: string[]): RecorderDebu
   }
 
   const commandTypes: Record<string, RecorderDebugCommandType> = {
+    start: "START_RECORDING",
+    stop: "STOP_RECORDING",
+    "reload-extension": "RELOAD_EXTENSION",
     build: "BUILD_WORKFLOW",
     actions: "GET_ACTIONS",
     state: "GET_TEST_WORKFLOW_STATE",
@@ -122,6 +193,22 @@ export async function runRecorderDebugCli(argv = process.argv.slice(2), env = pr
     return;
   }
 
+  if (command === "harden") {
+    const filePath = readFlag(args, "--file");
+    if (!filePath) throw new Error("harden requires --file <workflow.json>");
+    const raw = JSON.parse(readFileSync(path.resolve(filePath), "utf8"));
+    const validation = safeParseWorkflow(raw);
+    if (!validation.success) throw new Error(validation.error);
+    const preview = buildWorkflowHardeningPreview(validation.workflow);
+    const outPath = readFlag(args, "--out");
+    if (outPath) {
+      mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+      writeFileSync(path.resolve(outPath), `${JSON.stringify(preview.workflow, null, 2)}\n`, "utf8");
+    }
+    writeOutput(args.includes("--json") ? preview : formatHardeningSummary(preview));
+    return;
+  }
+
   if (command === "diff") {
     const snapshot = await getLatest(baseUrl);
     const diff = diffRecordedActions(snapshot);
@@ -174,7 +261,7 @@ export async function runRecorderDebugCli(argv = process.argv.slice(2), env = pr
     return;
   }
 
-  if (["test", "train", "build", "clear", "state"].includes(command)) {
+  if (["start", "stop", "reload-extension", "import", "test", "step", "selector", "train", "build", "clear", "state"].includes(command)) {
     const body = buildCommandInput(command, args);
     writeOutput(await postJson(`${baseUrl}/api/recorder/debug/commands`, body));
     return;
@@ -218,6 +305,15 @@ function writeOutput(value: unknown): void {
 function readFlag(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function readWorkflowFlag(args: string[]): RecordedWorkflow | undefined {
+  const filePath = readFlag(args, "--file");
+  if (!filePath) return undefined;
+  const raw = JSON.parse(readFileSync(path.resolve(filePath), "utf8"));
+  const validation = safeParseWorkflow(raw);
+  if (!validation.success) throw new Error(`Invalid workflow JSON: ${validation.error}`);
+  return validation.workflow;
 }
 
 function readIntFlag(args: string[], flag: string, defaultValue: number): number {
@@ -298,10 +394,16 @@ function normalizeBaseUrl(value: string): string {
 function helpText(): string {
   return [
     "Usage: npm run recorder:debug -- <command>",
-    "Commands: latest, workflow, actions, sessions, events, export, test, train, wait, report, audit, diff, bundle, build, clear, state, command",
+    "Commands: latest, workflow, actions, sessions, events, export, import, start, stop, reload-extension, test, step, selector, train, wait, report, audit, diff, bundle, build, clear, state, command",
     "Examples:",
     "  npm run recorder:latest",
+    "  npm run recorder:debug -- import --file output/debug/workflow.json",
+    "  npm run recorder:debug -- reload-extension",
+    "  npm run recorder:test -- --file output/debug/workflow.json",
+    "  npm run recorder:test -- --trusted --file output/debug/workflow.json",
     "  npm run recorder:test -- --from <actionId>",
+    "  npm run recorder:debug -- selector --action <actionId>",
+    "  npm run recorder:debug -- step --action <actionId>",
     "  npm run recorder:train -- --iterations 3",
     "  npm run recorder:export -- --out output/debug/workflow.json"
   ].join("\n");

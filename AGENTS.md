@@ -68,6 +68,7 @@ UI_DEV=false UI_PORT=4174 npm run serve:ui
 - `src/ui/`: React UI.
 - `src/ui/components/`: UI panels and controls.
 - `src/compiler/`: Recorded-workflow schema compiler, selector healing, and generated-flow helpers.
+- `packages/workflow-core/src/hardening/`: Reusable workflow intent/entity analysis, idempotency guard generation, mutation retry policy, bulk-readiness reporting, and Zoom adapter hints.
 - `extension/`: Chrome workflow recorder with side panel, selector testing, preflight testing, and JSON export/sync.
 - `src/recorderDebug/`: Recorder debug CLI and shared debug contracts.
 - `src/server/services/recorderDebugStore.ts`: File-backed recorder session snapshots, command queue, results, and events.
@@ -97,9 +98,27 @@ The `AutomationRunner` handles batching, retry, account delays, and progress upd
 
 For UI-triggered jobs, add the workflow to `workflowRegistry.ts` and instantiate it in `jobRunner.ts`. Recorded workflows can also be imported through `/api/workflows/import`, compiled into `src/workflows/recorded/`, and then registered intentionally.
 
-The recorded-workflow schema supports per-step timeout, retry count, retry delay, continue-on-failure, screenshot-on-failure, and simple condition guards such as skip-if-text-exists, click-if-element-visible, fill-if-empty, and skip-account-if-address-exists. Keep generated code aligned with `src/compiler/types.ts` and `extension/shared/types.ts`.
+The recorded-workflow schema supports per-step timeout, retry count, retry delay, continue-on-failure, screenshot-on-failure, generic entity guards, and simple condition guards such as skip-if-text-exists, click-if-element-visible, fill-if-empty, and skip-account-if-address-exists. Keep generated code aligned with `packages/workflow-core/src/types.ts`; `src/compiler/types.ts` and `extension/shared/types.ts` re-export the shared schema.
 
 Compiled recorded workflows should use selector healing helpers from `src/compiler/selectorHealing.ts`. Prefer stable role/label/test-id selectors, and treat CSS-only selectors as warnings that need review.
+
+## Reusable Workflow Hardening
+
+Recorded workflows are automatically hardened before export/import/compile where possible. The hardening pipeline is generic first, with Zoom-specific enrichment layered through `createZoomAdminAdapter()`:
+
+1. Infer workflow intent (`create`, `update`, `delete`, `assign`, `remove`, `verify`, or `unknown`).
+2. Build an entity model and fingerprint from filled values, selected options, toggles, anchors, URLs, and Zoom page hints.
+3. Add `entityStateGuard` conditions for idempotency.
+4. Generate generic `entityExists` / `entityAbsent` / `entityState` assertions after mutation steps.
+5. Mark mutation/destructive steps as no-retry by default (`retryCount: 0`, screenshot on failure).
+6. Attach a `workflow.hardening` report with bulk readiness, inferred entity, warnings, added guard/action IDs, and no-retry mutation IDs.
+
+Keep this engine reusable. Do not hardcode business-address-only behavior into the generic hardener. Put Zoom widget/page knowledge in the Zoom adapter and compiler/runtime helpers. A good workflow should pass this benchmark:
+
+- first run on a fresh account completes,
+- second run on the same account skips safely,
+- mutation retries do not resubmit Save/Create/Delete/Confirm,
+- failure artifacts explain what happened.
 
 ## Business Address Profiles
 
@@ -175,6 +194,8 @@ npm run recorder:train -- --iterations 5 --from step_id --delay-ms 1000 --stop-o
 npm run recorder:wait -- command_id
 npm run recorder:report
 npm run recorder:audit
+npm run recorder:debug -- harden --file output/debug/workflow.json
+npm run recorder:debug -- harden --file output/debug/workflow.json --out output/debug/workflow.hardened.json
 npm run recorder:diff
 npm run recorder:bundle -- --out output/debug/recorder-bundle
 npm run recorder:export -- --out output/debug/workflow.json
@@ -183,6 +204,8 @@ npm run recorder:export -- --out output/debug/workflow.json
 `npm run recorder:test` enqueues a browser-preflight command through `/api/recorder/debug/commands`. The extension polls the queue, runs the workflow against the active Chrome tab, then posts structured results and events back to the server. Use `npm run recorder:events` or `npm run recorder:latest` to inspect progress/results. Use `npm run recorder:test -- --from step_id` to replay from a selected step after manually resetting the Zoom page to the expected state.
 
 `npm run recorder:train` enqueues repeated browser-preflight runs through the Chrome bridge and writes a training report under `output/recorder-sessions/`. Use it to identify flaky selectors, weak assertions, hardcoded values, duplicate recorder noise, and risky steps before compiling or running across sub accounts. Training runs execute the workflow against the active Zoom tab and may mutate the lab account, so only run them when the user has explicitly authorized testing and the page has been manually reset to the expected starting state.
+
+`npm run recorder:debug -- harden --file workflow.json` previews automatic hardening without using Chrome. It reports inferred intent/entity, fingerprint fields, added idempotency guard, added assertion, no-retry mutation steps, quality score, and warnings. Use `--out hardened.json` to write the hardened workflow JSON.
 
 Recommended review loop:
 

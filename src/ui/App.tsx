@@ -15,10 +15,12 @@ import {
   queryAccounts,
   retryJob,
   saveRecordedWorkflow,
+  simulatePreflight,
   subscribeToJob,
   type AccountQueryFilters,
   type AccountCohortView,
   type AddressProfileView,
+  type BulkPreflightView,
   type JobView,
   type RecordedWorkflowView,
   type RunReadinessView,
@@ -82,6 +84,9 @@ function AppContent() {
   const [readiness, setReadiness] = useState<RunReadinessView | undefined>();
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [readinessError, setReadinessError] = useState<string | undefined>();
+  const [preflight, setPreflight] = useState<BulkPreflightView | undefined>();
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | undefined>();
 
   // Job state
   const [job, setJob] = useState<JobView | undefined>();
@@ -267,6 +272,36 @@ function AppContent() {
     }
     if (!dryRun) { setConfirmOpen(true); return; }
     executeStartJob();
+  };
+
+  const handleRunPreflight = async () => {
+    setPreflightLoading(true);
+    setPreflightError(undefined);
+    try {
+      const recorded = await Promise.all(pipelineOrder.map(async (workflowId) => {
+        try {
+          return await fetchRecordedWorkflow(workflowId);
+        } catch {
+          return undefined;
+        }
+      }));
+      const workflowsForPreflight = recorded.map((result) => result?.workflow).filter((workflow): workflow is RecordedWorkflowView => Boolean(workflow));
+      if (workflowsForPreflight.length === 0) {
+        throw new Error("Preflight currently supports imported recorded workflows. Import or select a recorded workflow first.");
+      }
+      const response = await simulatePreflight({
+        accounts: selectedAccounts,
+        workflows: workflowsForPreflight
+      });
+      setPreflight(response.preflight);
+      addToast("success", `Preflight complete: ${response.preflight.summary.willRun} run, ${response.preflight.summary.willSkip} skip, ${response.preflight.summary.needsReview} review, ${response.preflight.summary.willFail} fail`);
+    } catch (error) {
+      setPreflight(undefined);
+      setPreflightError(error instanceof Error ? error.message : String(error));
+      addToast("error", `Preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPreflightLoading(false);
+    }
   };
 
   const executeStartJob = async () => {
@@ -562,6 +597,9 @@ function AppContent() {
                 readiness={readiness}
                 readinessLoading={readinessLoading}
                 readinessError={readinessError}
+                preflight={preflight}
+                preflightLoading={preflightLoading}
+                preflightError={preflightError}
                 workflowParameterValues={workflowParameterValues}
                 onToggleWorkflow={handleToggleWorkflow}
                 onReorderPipeline={setPipelineOrder}
@@ -571,6 +609,7 @@ function AppContent() {
                 onConcurrencyChange={setConcurrency}
                 onRetryAttemptsChange={setRetryAttempts}
                 onWorkflowParameterValuesChange={setWorkflowParameterValues}
+                onRunPreflight={handleRunPreflight}
                 onImportWorkflow={() => setImportOpen(true)}
                 onAccountValuesChange={setAccountValues}
                 onBack={() => setWizardStep("accounts")}

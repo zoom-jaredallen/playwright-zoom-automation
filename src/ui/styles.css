@@ -3858,6 +3858,74 @@ tr:hover .copy-btn {
   color: var(--text-text-warning);
 }
 
+.preflight-panel {
+  align-self: start;
+}
+
+.preflight-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.preflight-metric {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+
+.preflight-metric strong,
+.preflight-metric span {
+  display: block;
+}
+
+.preflight-metric strong {
+  color: var(--text-text-primary);
+  font-size: 20px;
+  line-height: 24px;
+}
+
+.preflight-metric span {
+  color: var(--text-text-subtle-neutral);
+  font-size: 12px;
+}
+
+.preflight-metric.willFail {
+  border-color: var(--border-border-subtle-critical);
+}
+
+.preflight-metric.needsReview {
+  border-color: var(--border-border-subtle-warning);
+}
+
+.preflight-account-list {
+  display: grid;
+  gap: 8px;
+}
+
+.preflight-account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--border-border-subtle-neutral);
+  border-radius: 8px;
+  background: var(--fill-fill-subtler-neutral);
+}
+
+.preflight-account-row small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-text-subtle-neutral);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .readiness-item.blocking .readiness-icon {
   background: var(--fill-fill-subtler-error);
   color: var(--text-text-error);

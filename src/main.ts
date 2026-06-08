@@ -7,7 +7,7 @@ import { loadConfigFromEnvFile } from "./config.js";
 import { createLogger, parseLogLevel } from "./logger.js";
 import { validateDocumentFiles } from "./preflight.js";
 import { ZoomApiClient } from "./zoom/api.js";
-import { loginAsMasterAdmin } from "./zoom/auth.js";
+import { getMasterStorageState } from "./zoom/masterSession.js";
 import { BusinessAddressFlow } from "./zoom/businessAddressFlow.js";
 import { TokenManager } from "./zoom/oauth.js";
 import { SessionHealthMonitor } from "./zoom/sessionHealth.js";
@@ -58,15 +58,17 @@ async function main(): Promise<void> {
   const browser = await chromium.launch({ headless: config.runtime.headless });
 
   try {
-    const masterStorageState = await loginAsMasterAdmin({
+    const masterStorageState = await getMasterStorageState({
       browser,
       config: config.zoom,
-      logger
+      logger,
+      storageStatePath: config.runtime.masterStorageStatePath
     });
     const sessionMonitor = new SessionHealthMonitor(masterStorageState, {
       browser,
       config: config.zoom,
-      logger
+      logger,
+      storageStatePath: config.runtime.masterStorageStatePath
     });
     const refreshAtMs = 40 * 60 * 1_000;
     let refreshInFlight: Promise<unknown> | undefined;

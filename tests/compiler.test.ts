@@ -490,6 +490,113 @@ describe("compileWorkflow", () => {
     expect(flow).toContain("Auto verification (toastVisible)");
   });
 
+  it("compiles generic entity guards and entity assertions", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "open-create",
+          timestamp: 1000,
+          type: "click",
+          selectors: { role: { role: "button", name: "Create Queue" } },
+          condition: {
+            type: "entityStateGuard",
+            operation: "create",
+            entityKind: "queue",
+            match: { allText: ["Priority Support", "5001"] },
+            whenMatched: "skipAccount"
+          },
+          pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues",
+          pageTitle: "Queues",
+          description: "Click Create Queue"
+        },
+        {
+          id: "save",
+          timestamp: 1001,
+          type: "click",
+          selectors: { role: { role: "button", name: "Save" } },
+          retryCount: 0,
+          sideEffectRisk: "mutation",
+          pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues",
+          pageTitle: "Queues",
+          description: "Click Save"
+        }
+      ],
+      assertions: [
+        {
+          afterAction: "save",
+          type: "entityExists",
+          expected: "Priority Support|5001",
+          timeout: 15000,
+          onFailure: "screenshot"
+        }
+      ]
+    });
+
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("entityStateGuard");
+    expect(flow).toContain("entityStateGuardMatched");
+    expect(flow).toContain("Auto verification (entityExists)");
+    expect(flow).toContain("await this.expectEntityPresence(page, \"Priority Support|5001\", true, 15000);");
+  });
+
+  it("compiles dynamic first-available row selection for phone-number allocation", () => {
+    const workflow = createTestWorkflow({
+      actions: [
+        {
+          id: "select-rows",
+          timestamp: 1000,
+          type: "selectRows",
+          selectors: {},
+          rowSelection: {
+            mode: "firstAvailable",
+            count: 4,
+            entityKind: "phoneNumber",
+            outputName: "selected.phoneNumbers",
+            rowSelector: "tr, [role='row']",
+            checkboxSelector: "[role='checkbox'], input[type='checkbox']",
+            valuePattern: "\\\\+61\\\\s+2\\\\s+[0-9\\\\s]+",
+            unavailableText: "Unavailable|Reserved|Assigned",
+            minimumCount: 4
+          },
+          pageUrl: "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+          pageTitle: "Get Number",
+          description: "Select first 4 available phone-number rows"
+        },
+        {
+          id: "done",
+          timestamp: 1001,
+          type: "click",
+          selectors: { role: { role: "button", name: "Done" } },
+          pageUrl: "https://zoom.us/cpw/page/phoneNumbers#/get-number",
+          pageTitle: "Get Number",
+          description: "Click Done"
+        }
+      ],
+      assertions: [
+        {
+          afterAction: "done",
+          type: "entityExists",
+          expected: "{{selected.phoneNumbers}}",
+          timeout: 15000,
+          onFailure: "screenshot"
+        }
+      ]
+    });
+
+    const result = compileWorkflow(workflow, testOutputDir);
+    const flow = readFileSync(path.join(result.outputDir, "flow.ts"), "utf8");
+
+    expect(flow).toContain("const workflowState = new Map<string, string[]>();");
+    expect(flow).toContain("await this.selectRows(page");
+    expect(flow).toContain('"outputName":"selected.phoneNumbers"');
+    expect(flow).toContain('const outputName = policy.outputName ?? "selected.rows";');
+    expect(flow).toContain("workflowState.set(outputName, selectedValues)");
+    expect(flow).toContain('this.resolveExpected("{{selected.phoneNumbers}}", workflowState)');
+    expect(flow).toContain("Expected at least ${minimumCount} available row(s)");
+  });
+
   it("preserves the original schema.json", () => {
     const workflow = createTestWorkflow();
     const result = compileWorkflow(workflow, testOutputDir);

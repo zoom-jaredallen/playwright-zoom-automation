@@ -93,6 +93,7 @@ export class ${className} implements AutomationFlow {
   async run(input: FlowInput): Promise<FlowResult> {
     const activeAccountId = input.account.id;
     let dryRunSkipped = false;
+    const workflowState = new Map<string, string[]>();
     const context = await this.options.browser.newContext({
       storageState: this.options.getMasterStorageState?.() ?? this.options.masterStorageState
     });
@@ -166,6 +167,61 @@ ${actionCode}
     return template.replace(/\\{\\{([^}]+)\\}\\}/g, (_, paramName) => this.resolve(paramName.trim(), activeAccountId));
   }
 
+  private resolveExpected(template: string, workflowState: Map<string, string[]>): string {
+    return template.replace(/\\{\\{([^}]+)\\}\\}/g, (_, rawName) => {
+      const name = String(rawName).trim();
+      const values = workflowState.get(name);
+      if (values) return values.join("|");
+      return this.resolve(name);
+    });
+  }
+
+  private async selectRows(page: Page, policy: Record<string, any>, timeout: number, workflowState: Map<string, string[]>): Promise<void> {
+    if (policy.mode !== "firstAvailable") {
+      throw new Error(\`Unsupported row selection mode: \${policy.mode}\`);
+    }
+    const count = Math.max(1, Number(policy.count ?? 1));
+    const minimumCount = Math.max(1, Number(policy.minimumCount ?? count));
+    const rowSelector = policy.rowSelector ?? "tr, [role='row']";
+    const checkboxSelector = policy.checkboxSelector ?? "[role='checkbox'], input[type='checkbox']";
+    const valuePattern = new RegExp(policy.valuePattern ?? "\\\\+\\\\d[\\\\d\\\\s().-]{5,}");
+    const unavailablePattern = policy.unavailableText ? new RegExp(policy.unavailableText, "i") : undefined;
+    const selectedValues: string[] = [];
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline && selectedValues.length < count) {
+      const rows = page.locator(rowSelector);
+      const rowCount = await rows.count().catch(() => 0);
+      for (let index = 0; index < rowCount && selectedValues.length < count; index++) {
+        const row = rows.nth(index);
+        if (!await row.isVisible({ timeout: 250 }).catch(() => false)) continue;
+        const rowText = await row.innerText({ timeout: 500 }).catch(() => "");
+        if (unavailablePattern?.test(rowText)) continue;
+        const value = rowText.match(valuePattern)?.[0]?.replace(/\\s+/g, " ").trim();
+        if (!value || selectedValues.includes(value)) continue;
+        const checkbox = row.locator(checkboxSelector).first();
+        if (!await checkbox.isVisible({ timeout: 250 }).catch(() => false)) continue;
+        const disabled = await checkbox.getAttribute("aria-disabled").catch(() => null)
+          ?? await checkbox.getAttribute("disabled").catch(() => null);
+        if (disabled === "true" || disabled === "") continue;
+        const checked = await checkbox.getAttribute("aria-checked").catch(() => null);
+        const inputChecked = await checkbox.evaluate((node) => node instanceof HTMLInputElement ? node.checked : false).catch(() => false);
+        if (checked !== "true" && !inputChecked) {
+          await checkbox.click({ timeout });
+        }
+        selectedValues.push(value);
+      }
+      if (selectedValues.length < count) await page.waitForTimeout(500);
+    }
+
+    if (selectedValues.length < minimumCount) {
+      throw new Error(\`Expected at least \${minimumCount} available row(s), found \${selectedValues.length}\`);
+    }
+    const outputName = policy.outputName ?? "selected.rows";
+    workflowState.set(outputName, selectedValues);
+    this.options.logger.info("Selected dynamic rows", { outputName, selectedValues });
+  }
+
 ${generateHealingCode()}
 
   private async executeRecordedStep(
@@ -236,11 +292,24 @@ ${generateHealingCode()}
     if (!condition || condition.type === "none") return undefined;
     const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
     const conditionText = condition.text as string | undefined;
-    if ((condition.type === "textExistsSkip" || condition.type === "addressAlreadyExistsSkipAccount") && conditionText && bodyText.toLowerCase().includes(conditionText.toLowerCase())) {
-      return condition.type === "addressAlreadyExistsSkipAccount" ? "account" : "step";
+    if (condition.type === "textExistsSkip" && conditionText && bodyText.toLowerCase().includes(conditionText.toLowerCase())) {
+      return "step";
+    }
+    if (condition.type === "addressAlreadyExistsSkipAccount" && conditionText) {
+      return bodyText.toLowerCase().includes(conditionText.toLowerCase()) && this.targetAlreadyExists(bodyText)
+        ? "account"
+        : undefined;
     }
     if (condition.type === "addressAlreadyExistsSkipAccount" && this.targetAlreadyExists(bodyText)) {
       return "account";
+    }
+    if (condition.type === "entityStateGuard") {
+      const matched = this.entityStateGuardMatched(bodyText, condition);
+      if (matched && condition.whenMatched === "skipAccount") return "account";
+      if (matched && condition.whenMatched === "skipStep") return "step";
+      if (!matched && condition.whenMissing === "skipAccount") return "account";
+      if (!matched && condition.whenMissing === "skipStep") return "step";
+      return undefined;
     }
     if (condition.type === "elementVisibleClick") {
       return await this.isElementVisible(page, condition.selector ?? actionSelectors) ? undefined : "step";
@@ -267,6 +336,30 @@ ${generateHealingCode()}
     const config = this.options.config.address;
     const tokens = [config.line1, config.city, config.postalCode].filter(Boolean);
     return tokens.length > 0 && tokens.every((token) => pageText.toLowerCase().includes(token!.toLowerCase()));
+  }
+
+  private entityStateGuardMatched(pageText: string, condition: Record<string, any>): boolean {
+    const lower = pageText.toLowerCase();
+    const allText = Array.isArray(condition.match?.allText) ? condition.match.allText : [];
+    const anyText = Array.isArray(condition.match?.anyText) ? condition.match.anyText : [];
+    const allMatched = allText.length === 0 || allText.every((token: string) => lower.includes(String(token).toLowerCase()));
+    const anyMatched = anyText.length === 0 || anyText.some((token: string) => lower.includes(String(token).toLowerCase()));
+    return allMatched && anyMatched && (allText.length > 0 || anyText.length > 0);
+  }
+
+  private async expectEntityPresence(page: Page, expected: string, shouldExist: boolean, timeout: number): Promise<void> {
+    const tokens = expected.split("|").map((token) => token.trim()).filter(Boolean);
+    if (tokens.length === 0) throw new Error("Entity assertion requires at least one fingerprint token");
+    const deadline = Date.now() + timeout;
+    let matched = false;
+    while (Date.now() < deadline) {
+      const bodyText = await page.locator("body").innerText({ timeout: 1_000 }).catch(() => "");
+      const lower = bodyText.toLowerCase();
+      matched = tokens.every((token) => lower.includes(token.toLowerCase()));
+      if (matched === shouldExist) return;
+      await page.waitForTimeout(250);
+    }
+    throw new Error("Expected entity fingerprint " + tokens.join(" | ") + (shouldExist ? " to be visible" : " to be absent"));
   }
 }
 
@@ -321,6 +414,11 @@ ${coreIndent}await dismissBlockingZoomPopups(page, this.options.logger);`;
         ? `this.resolveValue(${JSON.stringify(action.value)}, activeAccountId)`
         : JSON.stringify(action.value ?? "");
       core = `${coreIndent}await this.selectOption(page, ${selectors}, ${selectorCandidates}, ${value}, ${timeout}, ${frame}, ${selectMetadata});`;
+      break;
+    }
+
+    case "selectRows": {
+      core = `${coreIndent}await this.selectRows(page, ${JSON.stringify(action.rowSelection ?? { mode: "firstAvailable", count: 1 })}, ${timeout}, workflowState);`;
       break;
     }
 
@@ -410,12 +508,10 @@ function generateWorkflowAssertionCode(assertion: RecordedWorkflow["assertions"]
   const t = assertion.timeout;
   const onFailure = assertion.onFailure ?? "screenshot";
 
-  const body = generateAssertionBody({
-    assertionType: assertion.type,
-    expected: assertion.expected,
-    timeout: t,
-    indent: ci
-  });
+  const expectedExpression = assertion.expected.includes("{{selected.")
+    ? `this.resolveExpected(${JSON.stringify(assertion.expected)}, workflowState)`
+    : JSON.stringify(assertion.expected);
+  const body = generateWorkflowAssertionBody(assertion, expectedExpression, ci);
 
   if (onFailure === "skip") {
     return `${indent}// Auto verification (${assertion.type})
@@ -436,6 +532,23 @@ ${indent}}`;
   }
   return `${indent}// Auto verification (${assertion.type})
 ${body}`;
+}
+
+function generateWorkflowAssertionBody(
+  assertion: RecordedWorkflow["assertions"][number],
+  expectedExpression: string,
+  indent: string
+): string {
+  if (assertion.type === "entityExists" || assertion.type === "entityAbsent" || assertion.type === "entityState") {
+    const shouldExist = assertion.type === "entityAbsent" ? "false" : "true";
+    return `${indent}await this.expectEntityPresence(page, ${expectedExpression}, ${shouldExist}, ${assertion.timeout});`;
+  }
+  return generateAssertionBody({
+    assertionType: assertion.type,
+    expected: assertion.expected,
+    timeout: assertion.timeout,
+    indent
+  });
 }
 
 /**

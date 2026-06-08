@@ -42,6 +42,8 @@
     "recorder:diff": "tsx src/recorderDebug/cli.ts diff",
     "recorder:bundle": "tsx src/recorderDebug/cli.ts bundle",
     "recorder:export": "tsx src/recorderDebug/cli.ts export",
+    "recorder:import": "tsx src/recorderDebug/cli.ts import",
+    "recorder:reload-extension": "tsx src/recorderDebug/cli.ts reload-extension",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {

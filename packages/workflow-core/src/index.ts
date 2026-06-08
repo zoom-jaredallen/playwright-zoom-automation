@@ -5,3 +5,5 @@ export * from "./analysis.js";
 export * from "./capabilities.js";
 export * from "./confidence.js";
 export * from "./selectors/index.js";
+export * from "./hardening/index.js";
+export * from "./preflight/index.js";

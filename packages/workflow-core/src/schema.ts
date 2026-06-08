@@ -170,9 +170,20 @@ const selectMetadataSchema = z
 
 const conditionSchema = z
   .object({
-    type: z.enum(["none", "textExistsSkip", "elementVisibleClick", "fieldEmptyFill", "addressAlreadyExistsSkipAccount"]),
+    type: z.enum(["none", "textExistsSkip", "elementVisibleClick", "fieldEmptyFill", "addressAlreadyExistsSkipAccount", "entityStateGuard"]),
     text: z.string().optional(),
-    selector: selectorSchema.optional()
+    selector: selectorSchema.optional(),
+    operation: z.enum(["create", "update", "delete", "assign", "remove", "verify", "unknown"]).optional(),
+    entityKind: z.string().optional(),
+    match: z
+      .object({
+        allText: z.array(z.string()).optional(),
+        anyText: z.array(z.string()).optional()
+      })
+      .loose()
+      .optional(),
+    whenMatched: z.enum(["skipStep", "skipAccount"]).optional(),
+    whenMissing: z.enum(["skipStep", "skipAccount"]).optional()
   })
   .loose();
 
@@ -199,18 +210,56 @@ const parameterHintSchema = z
   })
   .loose();
 
+const intentTypeSchema = z.enum([
+  "zoom.selectComboboxOption",
+  "zoom.fillFieldByLabel",
+  "zoom.clickPrimaryAction",
+  "zoom.selectTableRows",
+  "zoom.verifyEntityExists",
+  "zoom.skipIfEntityExists"
+]);
+
+const intentMetadataSchema = z
+  .object({
+    fieldLabel: z.string().optional(),
+    optionLabel: z.string().optional(),
+    tableEntityKind: z.string().optional(),
+    rowMatchText: z.string().optional(),
+    rowMatchPattern: z.string().optional(),
+    rowCount: z.number().optional(),
+    expectedOutcome: z.string().optional(),
+    mutationBoundary: z.boolean().optional(),
+    confidence: z.enum(["high", "medium", "low"]).optional(),
+    source: z.enum(["recorded", "hardened", "manual"]).optional()
+  })
+  .loose();
+
 const actionSchema: z.ZodType = z.lazy(() => z
   .object({
     id: z.string(),
     timestamp: z.number(),
     type: z.enum([
-      "click", "fill", "select", "navigate", "upload", "wait",
+      "click", "fill", "select", "selectRows", "navigate", "upload", "wait",
       "assert", "screenshot", "dismiss", "hover", "press", "download", "dialog", "if"
     ]),
     selectors: selectorSchema,
     selectorCandidates: z.array(selectorCandidateSchema).optional(),
     selectedCandidateId: z.string().optional(),
     selectMetadata: selectMetadataSchema.optional(),
+    rowSelection: z
+      .object({
+        mode: z.literal("firstAvailable"),
+        count: z.number().int().positive(),
+        entityKind: z.string().optional(),
+        outputName: z.string().optional(),
+        rowSelector: z.string().optional(),
+        checkboxSelector: z.string().optional(),
+        valuePattern: z.string().optional(),
+        unavailableText: z.string().optional(),
+        minimumCount: z.number().int().positive().optional()
+      })
+      .loose()
+      .optional(),
     capture: stepCaptureSchema.optional(),
     selectorDiagnostics: selectorDiagnosticsSummarySchema.optional(),
     repairSuggestions: z.array(selectorRepairSuggestionSchema).optional(),
@@ -218,7 +267,11 @@ const actionSchema: z.ZodType = z.lazy(() => z
     url: z.string().optional(),
     filePath: z.string().optional(),
     assertionType: z
-      .enum(["textVisible", "elementVisible", "urlContains", "urlMatches", "fieldValue", "tableRowContains", "addressStatusEquals", "toastVisible", "hasText", "hasValue"])
+      .enum([
+        "textVisible", "elementVisible", "urlContains", "urlMatches", "fieldValue",
+        "tableRowContains", "addressStatusEquals", "toastVisible", "hasText", "hasValue",
+        "entityExists", "entityAbsent", "entityState"
+      ])
       .optional(),
     expected: z.string().optional(),
     timeout: z.number().optional(),
@@ -247,7 +300,10 @@ const actionSchema: z.ZodType = z.lazy(() => z
     dialogAction: z.enum(["accept", "dismiss"]).optional(),
     dialogPromptText: z.string().optional(),
     elementScreenshot: z.boolean().optional(),
+    sideEffectRisk: z.enum(["read", "edit", "mutation", "destructive"]).optional(),
     skipInDryRun: z.boolean().optional(),
+    intentType: intentTypeSchema.optional(),
+    intentMetadata: intentMetadataSchema.optional(),
     ifCondition: predicateSchema.optional(),
     thenActions: z.array(actionSchema).optional(),
     elseActions: z.array(actionSchema).optional()
@@ -282,7 +338,11 @@ const parameterSchema = z
 const assertionSchema = z
   .object({
     afterAction: z.string(),
-    type: z.enum(["urlContains", "urlMatches", "textVisible", "elementVisible", "responseOk", "fieldValue", "tableRowContains", "addressStatusEquals", "toastVisible"]),
+    type: z.enum([
+      "urlContains", "urlMatches", "textVisible", "elementVisible", "responseOk",
+      "fieldValue", "tableRowContains", "addressStatusEquals", "toastVisible",
+      "entityExists", "entityAbsent", "entityState"
+    ]),
     expected: z.string(),
     timeout: z.number(),
     onFailure: z.enum(["fail", "retry", "skip", "screenshot"])

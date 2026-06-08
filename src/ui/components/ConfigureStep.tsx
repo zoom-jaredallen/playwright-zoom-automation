@@ -1,7 +1,8 @@
 import { useState } from "react";
-import type { AddressProfileView, RunReadinessView, WorkflowView } from "../api.js";
+import type { AddressProfileView, BulkPreflightView, RunReadinessView, WorkflowView } from "../api.js";
 import { AccountOverrideGrid } from "./AccountOverrideGrid.js";
 import { CheckIcon, ChevronRightIcon } from "./Icons.js";
+import { PreflightPanel } from "./PreflightPanel.js";
 import { RunReadinessPanel } from "./RunReadinessPanel.js";
 import { WorkflowParameterForm } from "./WorkflowParameterForm.js";
 
@@ -19,6 +20,9 @@ interface ConfigureStepProps {
   readiness?: RunReadinessView;
   readinessLoading?: boolean;
   readinessError?: string;
+  preflight?: BulkPreflightView;
+  preflightLoading?: boolean;
+  preflightError?: string;
   workflowParameterValues: Record<string, string>;
   onToggleWorkflow(id: string): void;
   onReorderPipeline(order: string[]): void;
@@ -28,6 +32,7 @@ interface ConfigureStepProps {
   onConcurrencyChange(value: number): void;
   onRetryAttemptsChange(value: number): void;
   onWorkflowParameterValuesChange(values: Record<string, string>): void;
+  onRunPreflight(): void;
   onImportWorkflow(): void;
   onBack(): void;
   onNext(): void;
@@ -38,10 +43,10 @@ interface ConfigureStepProps {
 export function ConfigureStep({
   workflows, selectedWorkflowIds, pipelineOrder, profiles, selectedProfileId,
   dryRun, headless, concurrency, retryAttempts, accountCount,
-  readiness, readinessLoading, readinessError, workflowParameterValues,
+  readiness, readinessLoading, readinessError, preflight, preflightLoading, preflightError, workflowParameterValues,
   onToggleWorkflow, onReorderPipeline, onProfileChange,
   onDryRunChange, onHeadlessChange, onConcurrencyChange, onRetryAttemptsChange, onWorkflowParameterValuesChange,
-  onImportWorkflow, onBack, onNext, onAccountValuesChange
+  onRunPreflight, onImportWorkflow, onBack, onNext, onAccountValuesChange
 }: ConfigureStepProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [csvSummary, setCsvSummary] = useState<string | undefined>();
@@ -236,6 +241,13 @@ export function ConfigureStep({
         />
 
         <RunReadinessPanel readiness={readiness} loading={readinessLoading} error={readinessError} />
+        <PreflightPanel
+          preflight={preflight}
+          loading={preflightLoading}
+          error={preflightError}
+          disabled={accountCount === 0 || pipelineOrder.length === 0}
+          onRun={onRunPreflight}
+        />
       </div>
 
       {/* Footer */}

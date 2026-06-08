@@ -1420,7 +1420,7 @@ async function testSingleStep(action: RecordedAction): Promise<void> {
 }
 
 async function pickSelectorForAction(action: RecordedAction): Promise<void> {
-  if (!["click", "fill", "select", "press", "assert"].includes(action.type)) {
+  if (!["click", "fill", "select", "selectRows", "press", "assert"].includes(action.type)) {
     setMessage("This step does not need a page target.");
     return;
   }
@@ -1470,7 +1470,7 @@ async function pickSelectorForAction(action: RecordedAction): Promise<void> {
 }
 
 async function pickAnchorForAction(action: RecordedAction): Promise<void> {
-  if (!["click", "fill", "select", "press"].includes(action.type)) {
+  if (!["click", "fill", "select", "selectRows", "press"].includes(action.type)) {
     setMessage("This step does not need an anchor.");
     return;
   }

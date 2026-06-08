@@ -32,6 +32,8 @@ import { computeOperationsMetrics } from "./operations/runMetricsService.js";
 import { createRunManifest } from "./operations/reportExporter.js";
 import { createFileWorkerRegistry } from "./workers/fileWorkerRegistry.js";
 import { createRecorderDebugStore } from "./services/recorderDebugStore.js";
+import { applyAutomaticWorkflowHardening } from "./services/workflowHardeningService.js";
+import { createBulkPreflightPlan, type BulkPreflightEvidence } from "./services/preflightService.js";
 import { loadConfig } from "../config.js";
 import { ZoomApiClient } from "../zoom/api.js";
 import { TokenManager } from "../zoom/oauth.js";
@@ -230,7 +232,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         return;
       }
       resolveRecordedWorkflowPath(request.params.id);
-      const result = compileWorkflow(workflow, path.resolve("src/workflows/recorded"), request.params.id);
+      const result = compileWorkflow(applyAutomaticWorkflowHardening(workflow), path.resolve("src/workflows/recorded"), request.params.id);
       lifecycleStore.getOrCreate(result.id, "recorded");
       auditStore.append({ eventType: "workflow_imported", actor: "web-ui", workflowId: result.id, message: "Recorded workflow saved" });
       response.json({ ok: true, compiled: result.id });
@@ -274,7 +276,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
       }
 
       const uniqueId = uniqueRecordedId(name);
-      const result = compileWorkflow(validation.workflow, path.resolve("src/workflows/recorded"), uniqueId);
+      const result = compileWorkflow(applyAutomaticWorkflowHardening(validation.workflow), path.resolve("src/workflows/recorded"), uniqueId);
       lifecycleStore.getOrCreate(result.id, "recorded");
       auditStore.append({ eventType: "workflow_imported", actor: "web-ui", workflowId: result.id, message: "Recorded workflow duplicated" });
       response.status(201).json({ id: result.id, name });
@@ -292,7 +294,7 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
         return;
       }
 
-      const workflow = validation.workflow;
+      const workflow = applyAutomaticWorkflowHardening(validation.workflow);
       if (!workflow.meta.name) {
         response.status(400).json({ error: "Workflow must have a name" });
         return;
@@ -394,6 +396,45 @@ export function createAutomationServer(options: CreateServerOptions = {}) {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.post("/api/preflight/simulate", (request, response) => {
+    const body = request.body as {
+      accounts?: SubAccount[];
+      workflows?: unknown[];
+      accountEvidence?: Record<string, BulkPreflightEvidence>;
+    };
+    const accounts = Array.isArray(body.accounts) ? body.accounts : [];
+    const rawWorkflows = Array.isArray(body.workflows) ? body.workflows : [];
+    if (accounts.length === 0) {
+      response.status(400).json({ error: "accounts are required" });
+      return;
+    }
+    if (rawWorkflows.length === 0) {
+      response.status(400).json({ error: "workflows are required" });
+      return;
+    }
+
+    const workflows: Array<{ id: string; workflow: RecordedWorkflow }> = [];
+    for (const rawWorkflow of rawWorkflows) {
+      const validation = safeParseWorkflow(rawWorkflow);
+      if (!validation.success) {
+        response.status(400).json({ error: validation.error });
+        return;
+      }
+      workflows.push({
+        id: slugify(validation.workflow.meta.name),
+        workflow: validation.workflow
+      });
+    }
+
+    response.json({
+      preflight: createBulkPreflightPlan({
+        workflows,
+        accounts,
+        accountEvidence: body.accountEvidence
+      })
+    });
   });
 
   const serverTokenManager = new TokenManager(loadConfig(process.env).zoom);
@@ -1033,8 +1074,20 @@ const RECORDER_DEBUG_COMMAND_TYPES: readonly RecorderDebugCommandType[] = [
   "BUILD_WORKFLOW",
   "GET_ACTIONS",
   "GET_TEST_WORKFLOW_STATE",
+  "START_RECORDING",
+  "STOP_RECORDING",
+  "RELOAD_EXTENSION",
+  "IMPORT_WORKFLOW",
+  "IMPORT_AND_RUN_TEST_WORKFLOW",
+  "IMPORT_AND_RUN_TEST_WORKFLOW_FROM",
+  "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW",
+  "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM",
   "RUN_TEST_WORKFLOW",
   "RUN_TEST_WORKFLOW_FROM",
+  "RUN_TRUSTED_TEST_WORKFLOW",
+  "RUN_TRUSTED_TEST_WORKFLOW_FROM",
+  "RUN_TEST_ACTION",
+  "TEST_SELECTOR",
   "RUN_TRAINING_WORKFLOW",
   "CLEAR_ACTIONS"
 ];

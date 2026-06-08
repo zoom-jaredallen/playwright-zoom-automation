@@ -41,7 +41,7 @@ export async function resolveSelector(
   const warnings: string[] = [];
 
   for (const entry of plan) {
-    const locator = locatorFor(root, entry.candidate.selector, selectors.nth);
+    const locator = locatorFor(root, entry.candidate.selector);
     const matchedCount = await locator.count().catch(() => 0);
     const visibleCount = await countVisible(locator, Math.min(timeout, 1_000));
     if (visibleCount === 0) {
@@ -50,7 +50,7 @@ export async function resolveSelector(
     }
     if (visibleCount > 1) warnings.push(`Ambiguous: ${visibleCount} visible matches`);
 
-    const selected = pick(locator, selectors.nth);
+    const selected = pick(locator, entry.candidate.selector.nth);
     await selected.waitFor({ state: "visible", timeout: Math.min(timeout, 3_000) });
     return {
       locator: selected,
@@ -69,9 +69,9 @@ export async function resolveSelector(
   throw new Error(`Element not found with ranked selector plan: ${JSON.stringify({ selectors, requestedStrategies, warnings })}`);
 }
 
-function locatorFor(root: SelectorRoot, selectors: SelectorStrategy, fallbackNth?: number): Locator {
+function locatorFor(root: SelectorRoot, selectors: SelectorStrategy): Locator {
   const scopedRoot = resolveAnchorScope(root, selectors);
-  const nth = selectors.nth ?? fallbackNth;
+  const nth = selectors.nth;
   if (selectors.testId) return pick(scopedRoot.getByTestId(selectors.testId), nth);
   if (selectors.role) {
     const { role, name, exact, checked, expanded, selected, pressed } = selectors.role;

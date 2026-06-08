@@ -5,8 +5,20 @@ export type RecorderDebugCommandType =
   | "BUILD_WORKFLOW"
   | "GET_ACTIONS"
   | "GET_TEST_WORKFLOW_STATE"
+  | "START_RECORDING"
+  | "STOP_RECORDING"
+  | "RELOAD_EXTENSION"
+  | "IMPORT_WORKFLOW"
+  | "IMPORT_AND_RUN_TEST_WORKFLOW"
+  | "IMPORT_AND_RUN_TEST_WORKFLOW_FROM"
+  | "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW"
+  | "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM"
   | "RUN_TEST_WORKFLOW"
   | "RUN_TEST_WORKFLOW_FROM"
+  | "RUN_TRUSTED_TEST_WORKFLOW"
+  | "RUN_TRUSTED_TEST_WORKFLOW_FROM"
+  | "RUN_TEST_ACTION"
+  | "TEST_SELECTOR"
   | "RUN_TRAINING_WORKFLOW"
   | "CLEAR_ACTIONS";
 
@@ -50,6 +62,7 @@ export interface RecorderDebugCommandResult {
   testState?: RecorderDebugSnapshot["testState"];
   events?: WorkflowTestEvent[];
   trainingReport?: RecorderTrainingReport;
+  diagnostic?: unknown;
 }
 
 export interface RecorderTrainingIteration {

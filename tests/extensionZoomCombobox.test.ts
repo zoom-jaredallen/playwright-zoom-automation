@@ -45,6 +45,12 @@ describe("extension Zoom combobox recording", () => {
       selector: { role: { role: "option", name: "Contact Center", exact: true } }
     }));
     expect(selection.selectMetadata.optionCandidates?.some((candidate) => candidate.id === "label-phone")).toBe(false);
+    expect(selection.intentType).toBe("zoom.selectComboboxOption");
+    expect(selection.intentMetadata).toEqual(expect.objectContaining({
+      fieldLabel: "Product",
+      optionLabel: "Contact Center",
+      source: "recorded"
+    }));
   });
 
   it("normalizes multi-line Zoom option text to the accessible option label", () => {

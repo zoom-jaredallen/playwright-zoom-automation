@@ -55,6 +55,64 @@ describe("recorder debug routes", () => {
     expect(command.body.command.result).toMatchObject({ ok: true, message: "test finished" });
   });
 
+  it("accepts workflow import debug commands", async () => {
+    const baseUrl = await startServer();
+
+    const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
+      type: "IMPORT_WORKFLOW",
+      payload: { workflow: makeWorkflow() }
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.command).toMatchObject({
+      type: "IMPORT_WORKFLOW",
+      status: "pending",
+      payload: { workflow: { meta: { name: "Debug Import Workflow" } } }
+    });
+  });
+
+  it("accepts trusted workflow test debug commands", async () => {
+    const baseUrl = await startServer();
+
+    const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
+      type: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW",
+      payload: { workflow: makeWorkflow() }
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.command).toMatchObject({
+      type: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW",
+      status: "pending",
+      payload: { workflow: { meta: { name: "Debug Import Workflow" } } }
+    });
+  });
+
+  it("accepts extension self-reload debug commands", async () => {
+    const baseUrl = await startServer();
+
+    const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
+      type: "RELOAD_EXTENSION",
+      payload: {}
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.command).toMatchObject({
+      type: "RELOAD_EXTENSION",
+      status: "pending"
+    });
+  });
+
+  it("rejects unsupported recorder debug command types", async () => {
+    const baseUrl = await startServer();
+
+    const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
+      type: "RUN_TRUSTED_UNKNOWN_COMMAND",
+      payload: {}
+    });
+
+    expect(created.status).toBe(400);
+  });
+
   it("accepts training commands and exposes latest training report", async () => {
     const baseUrl = await startServer();
     const created = await postJson(`${baseUrl}/api/recorder/debug/commands`, {
@@ -112,6 +170,37 @@ function makeSnapshot(sessionId: string) {
     preparedActions: [{ id: "a1", type: "navigate", timestamp: 1, selectors: {} }],
     testState: { running: false, events: [] },
     page: { url: "https://zoom.us/cpw/page/phoneNumbers#/business-address", title: "Business Address" }
+  };
+}
+
+function makeWorkflow() {
+  return {
+    version: 1,
+    meta: {
+      name: "Debug Import Workflow",
+      description: "Workflow loaded through the debug bridge",
+      recordedAt: "2026-06-08T00:00:00.000Z",
+      recordedOnUrl: "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      durationMs: 1000,
+      category: "phone"
+    },
+    parameters: [],
+    actions: [{
+      id: "navigate",
+      type: "navigate",
+      timestamp: 1,
+      selectors: {},
+      url: "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      pageUrl: "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      pageTitle: "Phone Numbers - Zoom"
+    }],
+    assertions: [],
+    config: {
+      startUrl: "https://zoom.us/cpw/page/phoneNumbers#/number-list",
+      requiresImpersonation: true,
+      defaultTimeout: 10000,
+      retryableErrors: []
+    }
   };
 }
 

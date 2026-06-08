@@ -8,6 +8,7 @@ export type ActionType =
   | "click"
   | "fill"
   | "select"
+  | "selectRows"
   | "navigate"
   | "upload"
   | "wait"
@@ -168,6 +169,39 @@ export interface SelectMetadata {
   verificationText?: string;
 }
 
+export interface RowSelectionPolicy {
+  mode: "firstAvailable";
+  count: number;
+  entityKind?: "phoneNumber" | string;
+  outputName?: string;
+  rowSelector?: string;
+  checkboxSelector?: string;
+  valuePattern?: string;
+  unavailableText?: string;
+  minimumCount?: number;
+}
+
+export type WorkflowIntentType =
+  | "zoom.selectComboboxOption"
+  | "zoom.fillFieldByLabel"
+  | "zoom.clickPrimaryAction"
+  | "zoom.selectTableRows"
+  | "zoom.verifyEntityExists"
+  | "zoom.skipIfEntityExists";
+
+export interface WorkflowIntentMetadata {
+  fieldLabel?: string;
+  optionLabel?: string;
+  tableEntityKind?: string;
+  rowMatchText?: string;
+  rowMatchPattern?: string;
+  rowCount?: number;
+  expectedOutcome?: string;
+  mutationBoundary?: boolean;
+  confidence?: "high" | "medium" | "low";
+  source?: "recorded" | "hardened" | "manual";
+}
+
 /**
  * A boolean condition tree, shared by per-step guards and IF/ELSE blocks. Leaf
  * predicates are evaluated against the live page (Playwright) or DOM (preflight).
@@ -193,7 +227,10 @@ export type AssertionType =
   | "addressStatusEquals"
   | "toastVisible"
   | "hasText"
-  | "hasValue";
+  | "hasValue"
+  | "entityExists"
+  | "entityAbsent"
+  | "entityState";
 
 export type OnFailure = "fail" | "retry" | "skip" | "screenshot";
 
@@ -205,9 +242,17 @@ export interface ParameterHint {
 }
 
 export interface StepCondition {
-  type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount";
+  type: "none" | "textExistsSkip" | "elementVisibleClick" | "fieldEmptyFill" | "addressAlreadyExistsSkipAccount" | "entityStateGuard";
   text?: string;
   selector?: SelectorStrategy;
+  operation?: "create" | "update" | "delete" | "assign" | "remove" | "verify" | "unknown";
+  entityKind?: string;
+  match?: {
+    allText?: string[];
+    anyText?: string[];
+  };
+  whenMatched?: "skipStep" | "skipAccount";
+  whenMissing?: "skipStep" | "skipAccount";
 }
 
 export interface RecordedAction {
@@ -218,6 +263,7 @@ export interface RecordedAction {
   selectorCandidates?: SelectorCandidate[];
   selectedCandidateId?: string;
   selectMetadata?: SelectMetadata;
+  rowSelection?: RowSelectionPolicy;
   capture?: StepCapture;
   selectorDiagnostics?: SelectorDiagnosticsSummary;
   repairSuggestions?: SelectorRepairSuggestion[];
@@ -260,12 +306,18 @@ export interface RecordedAction {
   dialogPromptText?: string;
   /** When true, a screenshot action is scoped to the matched element via locator.screenshot(). */
   elementScreenshot?: boolean;
+  /** Generic risk classification used by bulk-safe replay and readiness checks. */
+  sideEffectRisk?: "read" | "edit" | "mutation" | "destructive";
   /**
    * Skip this step during a dry run (used for mutating/commit steps like Save so a
    * dry run validates the flow without making changes). The compiler auto-marks
    * submit-like clicks; this overrides that per step.
    */
   skipInDryRun?: boolean;
+  /** Semantic action captured or inferred from raw browser events. */
+  intentType?: WorkflowIntentType;
+  /** Structured data used by hardening, preflight, and generated runtime helpers. */
+  intentMetadata?: WorkflowIntentMetadata;
   // ─── Control flow (type === "if") ───────────────────────────────────────────
   /** Condition for an IF block. */
   ifCondition?: Predicate;
@@ -308,7 +360,10 @@ export interface WorkflowAssertion {
     | "fieldValue"
     | "tableRowContains"
     | "addressStatusEquals"
-    | "toastVisible";
+    | "toastVisible"
+    | "entityExists"
+    | "entityAbsent"
+    | "entityState";
   expected: string;
   timeout: number;
   onFailure: OnFailure;
@@ -348,4 +403,13 @@ export interface RecordedWorkflow {
     retryableErrors: string[];
   };
   quality?: WorkflowQualityReport;
+  hardening?: {
+    bulkReady: boolean;
+    addedGuardActionId?: string;
+    mutationRetryDisabledActionIds: string[];
+    warnings: string[];
+    intent?: unknown;
+    entity?: unknown;
+    addedAssertion?: unknown;
+  };
 }

@@ -297,10 +297,7 @@ export function generateHealingCode(): string {
     let scope: any = this.resolveAnchorScope(root, selectors, esc);
 
     // When an ordinal was recorded, target that match; otherwise the first.
-    const pick = (base: import("playwright").Locator): import("playwright").Locator =>
-      typeof selectors.nth === "number" ? base.nth(selectors.nth) : base.first();
-
-    const strategies = this.buildSelectorStrategies(scope, selectors, selectorCandidates, esc, pick);
+    const strategies = this.buildSelectorStrategies(scope, selectors, selectorCandidates, esc);
 
     const anchoredCheckbox = await this.findAnchoredCheckbox(root, selectors, esc, timeout);
     if (anchoredCheckbox) {
@@ -355,11 +352,12 @@ export function generateHealingCode(): string {
     selectors: Record<string, any>,
     selectorCandidates: Array<Record<string, any>>,
     esc: (value: string) => string,
-    pick: (base: import("playwright").Locator) => import("playwright").Locator
   ): Array<{ name: string; locator: () => import("playwright").Locator }> {
     const strategies: Array<{ name: string; locator: () => import("playwright").Locator }> = [];
     const pushSelector = (source: Record<string, any>, labelPrefix: string) => {
       if (!source) return;
+      const pick = (base: import("playwright").Locator): import("playwright").Locator =>
+        typeof source.nth === "number" ? base.nth(source.nth) : base.first();
       if (source.role) {
         const { role, name, exact, checked, expanded, selected, pressed } = source.role;
         const opts: any = {};
@@ -421,13 +419,32 @@ export function generateHealingCode(): string {
 
   private async clickElement(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector?: string, ariaState?: Record<string, any>): Promise<void> {
     await dismissBlockingZoomPopups(page, this.options.logger);
-    const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, timeout);
-    // Feature 5: skip the click if the element is already in the desired ARIA state (idempotent re-runs).
-    if (ariaState && await this.isAriaStateSatisfied(el, ariaState)) {
-      this.options.logger.info("Skipping click; element already in desired state", { ariaState });
-      return;
+    const deadline = Date.now() + timeout;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= 3 && Date.now() < deadline; attempt++) {
+      const el = await this.findElement(this.scope(page, frameSelector), selectors, selectorCandidates, Math.max(1_000, deadline - Date.now()));
+      // Feature 5: skip the click if the element is already in the desired ARIA state (idempotent re-runs).
+      if (ariaState && await this.isAriaStateSatisfied(el, ariaState)) {
+        this.options.logger.info("Skipping click; element already in desired state", { ariaState });
+        return;
+      }
+
+      try {
+        await el.click({ timeout: Math.min(5_000, Math.max(1_000, deadline - Date.now())) });
+        return;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/detached from the DOM|not stable|intercepts pointer events|Timeout/i.test(message)) {
+          throw error;
+        }
+        this.options.logger.warn("Click target changed during action; retrying", { attempt, error: message.slice(0, 240) });
+        await page.waitForTimeout(300);
+      }
     }
-    await el.click();
+
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   private async fillField(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, value: string, timeout: number, frameSelector?: string): Promise<void> {
@@ -446,21 +463,97 @@ export function generateHealingCode(): string {
       return;
     }
 
-    await el.click({ timeout });
-    const popup = await this.findOpenSelectPopup(page, el, root, timeout, selectMetadata.popupSelectorHint);
     const optionText = selectMetadata.optionLabel ?? value;
+    const trigger = await this.findSelectTrigger(el);
+    await trigger.click({ timeout });
+    await this.filterOpenSelectIfEditable(trigger, optionText).catch(() => undefined);
+    const popup = await this.findOpenSelectPopup(page, trigger, root, timeout, selectMetadata.popupSelectorHint);
     const optionCandidates = selectMetadata.optionCandidates ?? [];
     const optionSelectors = optionCandidates[0]?.selector ?? { role: { role: "option", name: optionText } };
     const option = optionCandidates.length > 0
       ? await this.findElement(popup, optionSelectors, optionCandidates, Math.min(timeout, 5_000))
-      : popup.getByRole("option", { name: new RegExp(optionText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).first();
+          .catch(() => this.findVisibleSelectOptionByText(page, popup, optionText, Math.min(timeout, 5_000)))
+      : await this.findVisibleSelectOptionByText(page, popup, optionText, Math.min(timeout, 5_000));
     await option.waitFor({ state: "visible", timeout: 5000 });
     await option.click();
     const verificationText = selectMetadata.verificationText ?? optionText;
-    await el.filter({ hasText: new RegExp(verificationText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+    await trigger.filter({ hasText: new RegExp(verificationText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&"), "i") }).waitFor({ state: "visible", timeout: 3_000 }).catch(() => undefined);
+  }
+
+  private async filterOpenSelectIfEditable(trigger: import("playwright").Locator, optionText: string): Promise<void> {
+    const tagName = await trigger.evaluate((node) => node.tagName.toLowerCase()).catch(() => "");
+    const isEditable = tagName === "input" || tagName === "textarea" || await trigger.evaluate((node) => (node as HTMLElement).isContentEditable).catch(() => false);
+    if (!isEditable) return;
+
+    await trigger.fill(optionText, { timeout: 1_000 }).catch(async () => {
+      await trigger.press(process.platform === "darwin" ? "Meta+A" : "Control+A", { timeout: 1_000 }).catch(() => undefined);
+      await trigger.type(optionText, { timeout: 1_000 }).catch(() => undefined);
+    });
+    await trigger.page().waitForTimeout(250);
+  }
+
+  private async findVisibleSelectOptionByText(
+    page: Page,
+    popup: import("playwright").Locator,
+    optionText: string,
+    timeout: number
+  ): Promise<import("playwright").Locator> {
+    const escaped = optionText.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&").replace(/\\s+/g, "\\\\s+");
+    const exact = new RegExp("^\\\\s*" + escaped + "\\\\s*$", "i");
+    const loose = new RegExp(escaped, "i");
+    const optionSelector = [
+      "[role='option']",
+      "li",
+      "[class*='option']",
+      "[data-testid*='Option']",
+      "[data-testid*='option']"
+    ].join(", ");
+
+    const allowLoose = optionText.trim().split(/\\s+/).filter(Boolean).length > 1;
+    for (const scope of [popup]) {
+      const exactOption = scope.locator(optionSelector).filter({ hasText: exact }).first();
+      if (await exactOption.isVisible({ timeout: Math.min(timeout, 1_500) }).catch(() => false)) return exactOption;
+
+      const looseOption = scope.locator(optionSelector).filter({ hasText: loose }).first();
+      if (allowLoose && await looseOption.isVisible({ timeout: Math.min(timeout, 1_500) }).catch(() => false)) return looseOption;
+    }
+
+    const roleOption = page.getByRole("option", { name: loose }).first();
+    if (await roleOption.isVisible({ timeout: Math.min(timeout, 1_500) }).catch(() => false)) return roleOption;
+
+    throw new Error('No visible select option matching "' + optionText + '"');
+  }
+
+  private async findSelectTrigger(el: import("playwright").Locator): Promise<import("playwright").Locator> {
+    const descendant = await this.firstVisibleLocator(
+      el.locator("[role='combobox'], input:not([type='hidden']), textarea, [class*='cpzui-select'], [class*='cpzui-virtual-filter-select'], [class*='select']")
+    );
+    if (descendant) return descendant;
+
+    const ancestors = [
+      el.locator("xpath=ancestor-or-self::*[@role='combobox'][1]"),
+      el.locator("xpath=ancestor-or-self::*[contains(@class, 'cpzui-select') or contains(@class, 'cpzui-virtual-filter-select')][1]"),
+      el
+    ];
+
+    for (const ancestor of ancestors) {
+      if (await ancestor.isVisible({ timeout: 250 }).catch(() => false)) return ancestor;
+    }
+
+    return el;
+  }
+
+  private async firstVisibleLocator(locator: import("playwright").Locator, limit = 30): Promise<import("playwright").Locator | undefined> {
+    const count = Math.min(await locator.count().catch(() => 0), limit);
+    for (let index = 0; index < count; index++) {
+      const candidate = locator.nth(index);
+      if (await candidate.isVisible({ timeout: 100 }).catch(() => false)) return candidate;
+    }
+    return undefined;
   }
 
   private async findOpenSelectPopup(page: Page, trigger: import("playwright").Locator, root: import("playwright").Page | import("playwright").FrameLocator, timeout: number, popupSelectorHint?: Record<string, any>): Promise<import("playwright").Locator> {
+    const deadline = Date.now() + Math.min(timeout, 5_000);
     const controlledId = await trigger.getAttribute("aria-controls").catch(() => null);
     if (controlledId) {
       const controlled = page.locator(\`#\${controlledId.replace(/"/g, "\\\\\\"")}\`).first();
@@ -479,9 +572,18 @@ export function generateHealingCode(): string {
       "[class*='cpzui-select'] [role='listbox']",
       "[class*='cpzui-virtual-filter-select']"
     ].join(", ");
-    const popup = page.locator(popupSelector).filter({ has: page.locator("[role='option'], li, [class*='option']") }).last();
-    await popup.waitFor({ state: "visible", timeout: Math.min(timeout, 5_000) });
-    return popup;
+    const popups = page.locator(popupSelector).filter({ has: page.locator("[role='option'], li, [class*='option']") });
+    while (Date.now() < deadline) {
+      const count = await popups.count().catch(() => 0);
+      for (let index = 0; index < count; index++) {
+        const popup = popups.nth(index);
+        if (await popup.isVisible({ timeout: 100 }).catch(() => false)) return popup;
+      }
+      await trigger.click({ timeout: 1_000 }).catch(() => undefined);
+      await page.waitForTimeout(200);
+    }
+
+    throw new Error("No visible select popup opened");
   }
 
   private async uploadFile(page: Page, selectors: Record<string, any>, selectorCandidates: Array<Record<string, any>>, timeout: number, frameSelector?: string): Promise<void> {

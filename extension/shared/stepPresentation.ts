@@ -61,6 +61,7 @@ export function describeStep(action: RecordedAction): string {
   if (action.type === "fill") return `Fill ${action.selectors.label ?? "field"}`;
   if (action.type === "click") return `Click ${action.selectors.role?.name ?? action.selectors.text ?? "element"}`;
   if (action.type === "select") return `Select ${action.value ?? "option"}`;
+  if (action.type === "selectRows") return `Select first ${action.rowSelection?.count ?? 1} available row(s)`;
   if (action.type === "press") return `Press ${action.key ?? "Enter"}`;
   if (action.type === "dismiss") return "Dismiss blocking popup";
   if (action.type === "screenshot") return `Take screenshot${action.screenshotLabel ? `: ${action.screenshotLabel}` : ""}`;
@@ -162,7 +163,7 @@ export function isSubmitLikeClickStep(action: RecordedAction): boolean {
 }
 
 function isMutatingStep(action: RecordedAction): boolean {
-  return ["click", "fill", "select", "press", "upload", "dialog"].includes(action.type);
+  return ["click", "fill", "select", "selectRows", "press", "upload", "dialog"].includes(action.type);
 }
 
 function miniMapRisk(action: RecordedAction): { level: StepMiniMapLevel; reason: string } {

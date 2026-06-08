@@ -106,6 +106,7 @@ export const envSchema = z.object({
   DOCUMENT_BUSINESS_VERIFICATION_PATH: envString,
 
   // Runtime controls
+  ZOOM_MASTER_STORAGE_STATE_PATH: envString,
   HEADLESS: envBoolean(true),
   DRY_RUN: envBoolean(false),
   PROGRESS_PATH: z.string().optional().transform((val) => val?.trim() || "output/progress.json"),

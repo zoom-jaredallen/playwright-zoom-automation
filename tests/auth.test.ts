@@ -32,4 +32,8 @@ describe("getZoomLoginBlockingReason", () => {
     expect(getZoomLoginBlockingReason("Enter the verification code from your email.")).toMatch(/MFA/);
     expect(getZoomLoginBlockingReason("Incorrect email or password.")).toMatch(/credentials/);
   });
+
+  it("detects Zoom sign-in HTTP 403 blockers", () => {
+    expect(getZoomLoginBlockingReason("Request failed with status code 403")).toMatch(/HTTP 403/);
+  });
 });

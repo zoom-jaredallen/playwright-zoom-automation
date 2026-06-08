@@ -69,6 +69,21 @@ export interface WorkflowTestEvent {
   actionId?: string;
 }
 
+export interface ReplayTargetResult {
+  ok: boolean;
+  error?: string;
+  preview?: string;
+  text?: string;
+  rect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    centerX: number;
+    centerY: number;
+  };
+}
+
 // ─── Extension Messages ──────────────────────────────────────────────────────
 
 export type ExtensionMessage =
@@ -138,8 +153,11 @@ export type ExtensionMessage =
   | { type: "RUN_TEST_WORKFLOW_FROM"; actionId: string }
   | { type: "RUN_TEST_ACTION"; action: RecordedAction }
   | { type: "GET_TEST_WORKFLOW_STATE" }
-  | { type: "WAIT_FOR_PAGE_READY"; timeout?: number }
+  | { type: "WAIT_FOR_PAGE_READY"; timeout?: number; afterAction?: boolean }
   | { type: "EXECUTE_TEST_ACTION"; action: RecordedAction }
+  | { type: "LOCATE_TEST_ACTION_TARGET"; action: RecordedAction }
+  | { type: "LOCATE_TEST_ACTION_OPTION"; action: RecordedAction; optionText: string }
+  | { type: "VERIFY_TEST_ACTION_SELECT"; action: RecordedAction; expected?: string }
   | { type: "TEST_SELECTOR"; action: RecordedAction }
   | { type: "HIGHLIGHT_ACTION_TARGET"; action: RecordedAction }
   | { type: "PICK_SELECTOR"; action: RecordedAction }

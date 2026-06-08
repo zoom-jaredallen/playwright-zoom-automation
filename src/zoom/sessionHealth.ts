@@ -5,7 +5,8 @@
 import type { Browser, BrowserContext } from "playwright";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { loginAsMasterAdmin, type StorageState } from "./auth.js";
+import type { StorageState } from "./auth.js";
+import { getMasterStorageState } from "./masterSession.js";
 
 export type SessionStatus = "healthy" | "degraded" | "expired" | "recovering";
 
@@ -24,6 +25,8 @@ export interface SessionHealthMonitorOptions {
   checkIntervalMs?: number;
   /** Max session age before proactive refresh (ms). Default: 45 minutes. */
   maxSessionAgeMs?: number;
+  /** Optional Playwright storage-state cache path for the master session. */
+  storageStatePath?: string;
 }
 
 /**
@@ -118,10 +121,11 @@ export class SessionHealthMonitor {
     this.options.logger.info("Refreshing master session...");
 
     try {
-      this.storageState = await loginAsMasterAdmin({
+      this.storageState = await getMasterStorageState({
         browser: this.options.browser,
         config: this.options.config,
-        logger: this.options.logger
+        logger: this.options.logger,
+        storageStatePath: this.options.storageStatePath
       });
       this.sessionCreatedAt = Date.now();
       this.refreshCount += 1;

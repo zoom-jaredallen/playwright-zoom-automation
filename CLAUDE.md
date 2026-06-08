@@ -65,6 +65,8 @@ npm run recorder:test -- --from step_id
 npm run recorder:train -- --iterations 3 --stop-on-failure
 npm run recorder:report
 npm run recorder:audit
+npm run recorder:debug -- harden --file output/debug/workflow.json
+npm run recorder:debug -- harden --file output/debug/workflow.json --out output/debug/workflow.hardened.json
 npm run recorder:diff
 npm run recorder:bundle -- --out output/debug/latest-recorder-bundle
 npm run recorder:export -- --out output/debug/workflow.json
@@ -79,6 +81,7 @@ The expected bridge workflow is:
 5. Use `npm run recorder:test` or `npm run recorder:test -- --from step_id` to enqueue browser-preflight replay in the active Chrome tab.
 6. Use `npm run recorder:train -- --iterations 3 --stop-on-failure` for repeated training runs that identify flaky steps before bulk use.
 7. Use `npm run recorder:report`, `npm run recorder:audit`, `npm run recorder:diff`, and `npm run recorder:bundle` to review the resulting workflow quality.
+8. Use `npm run recorder:debug -- harden --file workflow.json` to preview reusable hardening without Chrome. Use `--out` to write the hardened JSON.
 
 Recorder snapshots are written under `output/recorder-sessions/`. They include raw actions, prepared/deduped actions, workflow JSON, quality data, URL/title, and preflight events. They are diagnostics, may contain recorded field values, and should not be committed.
 
@@ -104,6 +107,9 @@ Known verification caveat: untracked generated workflows under `src/workflows/re
 - Instantiate runnable workflows in `src/server/services/jobRunner.ts`.
 - Use `src/server/services/artifacts.ts` for run artifact indexing instead of inventing ad hoc artifact links.
 - The recorded-workflow schema, Zod validator, mutation model, and analysis/quality logic live in the shared `packages/workflow-core` package (`@zoom-automation/workflow-core`). Edit them there; `extension/shared/types.ts`, `src/compiler/types.ts`, and `src/ui/api.ts` re-export from it. The extension and Web UI drive the same `model`/`analysis` functions, gated by `WorkflowEditorCapabilities` (record/preflight are extension-only).
+- Reusable recorder hardening lives in `packages/workflow-core/src/hardening/`. Keep the engine generic: infer intent, entity fingerprint, idempotency guards, outcome assertions, mutation retry policy, and bulk-readiness reports for create/update/delete/assign/remove/verify workflows. Put Zoom-specific behavior in the Zoom adapter, not in business-address-only branches.
+- Web UI imports and recorded-workflow saves call `src/server/services/workflowHardeningService.ts` before compilation. Fresh recorder exports are hardened by `buildWorkflow()` in workflow-core.
+- The compiler/runtime supports generic `entityStateGuard`, `entityExists`, `entityAbsent`, and `entityState`. Preserve these when editing `src/compiler/compiler.ts` or `src/compiler/assertionCompiler.ts`.
 - This is an npm-workspace monorepo (`packages/*`, `extension`). Run `npm install` once at the root; `workflow-core` is built automatically before typecheck/test/build via `pre*` scripts.
 - Preserve selector-healing and step-policy behavior when modifying `src/compiler/compiler.ts`.
 - Keep country-specific address and document requirements in `addresses.yaml` when possible.

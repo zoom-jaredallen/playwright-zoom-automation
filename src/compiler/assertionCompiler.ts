@@ -43,6 +43,12 @@ ${indent}}`
       return `${indent}await page.locator("tr, [role='row']", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${timeout} });`;
     case "addressStatusEquals":
       return `${indent}await page.locator("tr, [role='row']", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${timeout} });`;
+    case "entityExists":
+      return `${indent}await this.expectEntityPresence(page, ${expected}, true, ${timeout});`;
+    case "entityAbsent":
+      return `${indent}await this.expectEntityPresence(page, ${expected}, false, ${timeout});`;
+    case "entityState":
+      return `${indent}await this.expectEntityPresence(page, ${expected}, true, ${timeout});`;
     case "toastVisible":
       return `${indent}await page.locator("[role='status'], [role='alert'], .toast, .zm-toast, .zmu-toast, [class*='toast'], [class*='Toast'], [class*='banner']", { hasText: ${expected} }).first().waitFor({ state: "visible", timeout: ${timeout} });`;
     case "hasText":

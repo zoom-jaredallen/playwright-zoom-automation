@@ -2,10 +2,11 @@
  * Background service worker that aggregates recorded actions from the content
  * script, manages recording state, and generates the final workflow JSON.
  */
-import type { ExtensionMessage, RecordedAction, RecordedWorkflow, WorkflowTestEvent } from "../shared/types.js";
+import type { ExtensionMessage, RecordedAction, RecordedWorkflow, ReplayTargetResult, WorkflowTestEvent } from "../shared/types.js";
 import { createStepTestPlan } from "../shared/testPlan.js";
 import { firstRecordableNavigationUrl, shouldAcceptRecordedAction, shouldRecordNavigationUrl } from "../shared/navigationPolicy.js";
 import { insertRecordedAction, prepareRecordedActionsForWorkflow } from "../shared/recordedActionPolicy.js";
+import { stripStorageHeavyActions, stripStorageHeavyWorkflowFields } from "../shared/storageSanitizer.js";
 import {
   fetchNextRecorderDebugCommand,
   postRecorderDebugCommandResult,
@@ -62,6 +63,7 @@ let testRunning = false;
 let testCurrentActionId: string | undefined;
 let testEvents: WorkflowTestEvent[] = [];
 let debugCommandPollRunning = false;
+let reloadExtensionAfterCommand = false;
 
 startRecorderDebugCommandPolling();
 
@@ -348,7 +350,7 @@ async function stopRecording(message: Extract<ExtensionMessage, { type: "STOP_RE
 
   const workflow = buildWorkflow();
   actions = workflow.actions;
-  await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
+  await persistLastWorkflow(workflow, actions);
   await clearDraftState();
   broadcastRecorderState();
   void publishRecorderDebugSnapshot();
@@ -494,7 +496,7 @@ function lastInsertedActionId(insertAfterActionId?: string | null): string | und
   return actions.at(-1)?.id;
 }
 
-async function startTestWorkflow(planOptions: { mode: "full" | "from"; actionId?: string }): Promise<{ ok: boolean; error?: string }> {
+async function startTestWorkflow(planOptions: { mode: "full" | "from"; actionId?: string; trusted?: boolean }): Promise<{ ok: boolean; error?: string }> {
   await ensureHydrated();
   if (testRunning) return { ok: true };
   if (recording) {
@@ -519,8 +521,9 @@ async function startTestWorkflow(planOptions: { mode: "full" | "from"; actionId?
   testRunning = true;
   testCurrentActionId = undefined;
   testEvents = [];
-  pushTestEvent("info", `Starting ${testPlan.mode} browser test with ${testActions.length} step(s).`);
-  void runTestWorkflow(testActions, tab as TestTab);
+  const modeLabel = planOptions.trusted ? `${testPlan.mode} trusted browser test` : `${testPlan.mode} browser test`;
+  pushTestEvent("info", `Starting ${modeLabel} with ${testActions.length} step(s).`);
+  void runTestWorkflow(testActions, tab as TestTab, { trusted: Boolean(planOptions.trusted) });
   return { ok: true };
 }
 
@@ -559,14 +562,20 @@ async function startTestAction(action: RecordedAction): Promise<{ ok: boolean; e
   }
 }
 
-async function runTestWorkflow(testActions: RecordedAction[], tab: TestTab): Promise<void> {
+async function runTestWorkflow(testActions: RecordedAction[], tab: TestTab, options: { trusted?: boolean } = {}): Promise<void> {
+  let trustedSession: TrustedInputSession | undefined;
   try {
+    if (options.trusted) {
+      trustedSession = await TrustedInputSession.attach(tab.id);
+      pushTestEvent("info", "Trusted Chrome input session attached.");
+    }
+
     for (const action of testActions) {
       testCurrentActionId = action.id;
       broadcastTestState();
       pushTestEvent("info", `Step: ${action.description ?? action.type}`, action.id);
 
-      const result = await runSingleTestAction(action, tab);
+      const result = await runSingleTestAction(action, tab, { trustedSession });
       if (result.stopWorkflow) {
         break;
       }
@@ -580,6 +589,9 @@ async function runTestWorkflow(testActions: RecordedAction[], tab: TestTab): Pro
   } catch (error) {
     pushTestEvent("error", error instanceof Error ? error.message : String(error), testCurrentActionId);
   } finally {
+    await trustedSession?.detach().catch((error) => {
+      pushTestEvent("error", `Trusted Chrome input session detach failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
     testRunning = false;
     testCurrentActionId = undefined;
     broadcastTestState();
@@ -588,7 +600,8 @@ async function runTestWorkflow(testActions: RecordedAction[], tab: TestTab): Pro
 
 async function runSingleTestAction(
   action: RecordedAction,
-  tab: TestTab
+  tab: TestTab,
+  options: { trustedSession?: TrustedInputSession } = {}
 ): Promise<{ skipped?: boolean; stopWorkflow?: boolean }> {
   if (action.type === "navigate") {
     const result = await evaluatePreflightNavigation(tab.id, action);
@@ -609,7 +622,9 @@ async function runSingleTestAction(
   }
 
   await ensureContentRecorder(tab.id);
-  const result = await executeTestActionWithPolicy(tab, action);
+  const result = options.trustedSession
+    ? await executeTrustedTestActionWithPolicy(tab, action, options.trustedSession)
+    : await executeTestActionWithPolicy(tab, action);
   if (result.skipped) {
     pushTestEvent("info", result.message ?? `Skipped: ${action.description ?? action.type}`, action.id);
     return { skipped: true, stopWorkflow: action.condition?.type === "addressAlreadyExistsSkipAccount" };
@@ -648,11 +663,262 @@ async function executeTestActionWithPolicy(tab: chrome.tabs.Tab, action: Recorde
   throw new Error(lastError ?? `Step failed: ${action.description ?? action.type}`);
 }
 
+async function executeTrustedTestActionWithPolicy(
+  tab: TestTab,
+  action: RecordedAction,
+  session: TrustedInputSession
+): Promise<{ skipped?: boolean; message?: string }> {
+  if (!isTrustedReplayAction(action)) {
+    return await executeTestActionWithPolicy(tab, action);
+  }
+
+  const retryBudget = Math.max(action.retryCount ?? 0, action.onFailure === "retry" ? 1 : 0);
+  const attempts = retryBudget + 1;
+  const retryDelayMs = action.retryDelayMs ?? 1_000;
+  let lastError: string | undefined;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await executeTrustedTestAction(tab, action, session);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < attempts) {
+        pushTestEvent("info", `Trusted retry ${attempt}/${attempts - 1}: ${lastError}`, action.id);
+        await sleep(retryDelayMs);
+      }
+    }
+  }
+
+  if (action.screenshotOnFailure || action.onFailure === "screenshot") {
+    await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }).catch(() => undefined);
+    pushTestEvent("info", "Failure screenshot captured.", action.id);
+  }
+  if (action.continueOnFailure || action.onFailure === "skip") {
+    pushTestEvent("error", `Continuing after trusted failure: ${lastError}`, action.id);
+    return { skipped: true, message: lastError };
+  }
+  throw new Error(lastError ?? `Trusted step failed: ${action.description ?? action.type}`);
+}
+
+function isTrustedReplayAction(action: RecordedAction): boolean {
+  return action.type === "click" || action.type === "fill" || action.type === "select";
+}
+
+async function executeTrustedTestAction(
+  tab: TestTab,
+  action: RecordedAction,
+  session: TrustedInputSession
+): Promise<{ skipped?: boolean; message?: string }> {
+  if (action.type === "click") {
+    const target = await locateReplayTarget(tab.id, action);
+    pushTestEvent("info", trustedTargetMessage("Trusted click target", target), action.id);
+    await session.click(target.rect!.centerX, target.rect!.centerY);
+    await waitForTestPageReady(tab.id, action.timeout ?? 10_000);
+    return {};
+  }
+
+  if (action.type === "fill") {
+    const target = await locateReplayTarget(tab.id, action);
+    const value = resolveTrustedActionValue(action);
+    pushTestEvent("info", `${trustedTargetMessage("Trusted fill target", target)} with "${value}"`, action.id);
+    await session.click(target.rect!.centerX, target.rect!.centerY);
+    await session.fill(value);
+    await sleep(750);
+    return {};
+  }
+
+  if (action.type === "select") {
+    const target = await locateReplayTarget(tab.id, action);
+    pushTestEvent("info", trustedTargetMessage("Trusted select trigger", target), action.id);
+    await session.click(target.rect!.centerX, target.rect!.centerY);
+    await sleep(500);
+
+    const optionText = action.selectMetadata?.optionLabel ?? resolveTrustedActionValue(action);
+    if (!optionText.trim()) {
+      throw new Error("Trusted select step has no option text.");
+    }
+    const option = await locateReplayOption(tab.id, action, optionText);
+    pushTestEvent("info", trustedTargetMessage(`Trusted select option "${optionText}"`, option), action.id);
+    await session.click(option.rect!.centerX, option.rect!.centerY);
+    await sleep(500);
+
+    const verified = await chrome.tabs.sendMessage(tab.id, {
+      type: "VERIFY_TEST_ACTION_SELECT",
+      action,
+      expected: action.selectMetadata?.verificationText ?? optionText
+    } satisfies ExtensionMessage) as { ok?: boolean; error?: string };
+    if (!verified?.ok) {
+      throw new Error(verified?.error ?? `Trusted select step did not apply "${optionText}".`);
+    }
+    await waitForTestPageReady(tab.id, action.timeout ?? 10_000);
+    return {};
+  }
+
+  return await executeTestActionWithPolicy(tab, action);
+}
+
+function trustedTargetMessage(prefix: string, target: ReplayTargetResult & { rect: NonNullable<ReplayTargetResult["rect"]> }): string {
+  const rect = target.rect;
+  return `${prefix}: ${target.preview ?? target.text ?? "element"} at (${Math.round(rect.centerX)}, ${Math.round(rect.centerY)})`;
+}
+
+async function locateReplayTarget(tabId: number, action: RecordedAction): Promise<ReplayTargetResult & { rect: NonNullable<ReplayTargetResult["rect"]> }> {
+  const result = await chrome.tabs.sendMessage(tabId, {
+    type: "LOCATE_TEST_ACTION_TARGET",
+    action
+  } satisfies ExtensionMessage) as ReplayTargetResult;
+  return requireReplayTarget(result, action.description ?? action.type);
+}
+
+async function locateReplayOption(
+  tabId: number,
+  action: RecordedAction,
+  optionText: string
+): Promise<ReplayTargetResult & { rect: NonNullable<ReplayTargetResult["rect"]> }> {
+  const result = await chrome.tabs.sendMessage(tabId, {
+    type: "LOCATE_TEST_ACTION_OPTION",
+    action,
+    optionText
+  } satisfies ExtensionMessage) as ReplayTargetResult;
+  return requireReplayTarget(result, `option "${optionText}"`);
+}
+
+function requireReplayTarget(
+  result: ReplayTargetResult | undefined,
+  label: string
+): ReplayTargetResult & { rect: NonNullable<ReplayTargetResult["rect"]> } {
+  if (!result?.ok || !result.rect) {
+    throw new Error(result?.error ?? `Could not locate trusted replay target for ${label}.`);
+  }
+  return result as ReplayTargetResult & { rect: NonNullable<ReplayTargetResult["rect"]> };
+}
+
+function resolveTrustedActionValue(action: RecordedAction): string {
+  const value = action.value ?? "";
+  if (!value.includes("{{") || !action.parameterHints?.length) return value;
+
+  return value.replace(/\{\{([^}]+)\}\}/g, (placeholder, rawName) => {
+    const paramName = String(rawName).trim();
+    const hint = action.parameterHints?.find(
+      (candidate) => candidate.confirmed !== false && candidate.suggestedName === paramName
+    );
+    return hint?.originalValue ?? placeholder;
+  });
+}
+
+class TrustedInputSession {
+  private attached = true;
+
+  private constructor(private readonly tabId: number) {}
+
+  static async attach(tabId: number): Promise<TrustedInputSession> {
+    const session = new TrustedInputSession(tabId);
+    await chrome.debugger.attach({ tabId }, "1.3");
+    return session;
+  }
+
+  async click(x: number, y: number): Promise<void> {
+    await this.dispatch("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+      buttons: 0,
+      pointerType: "mouse"
+    });
+    await this.dispatch("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      pointerType: "mouse"
+    });
+    await sleep(80);
+    await this.dispatch("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      pointerType: "mouse"
+    });
+  }
+
+  async fill(value: string): Promise<void> {
+    await this.selectAll();
+    await this.pressKey({
+      type: "keyDown",
+      key: "Backspace",
+      code: "Backspace",
+      windowsVirtualKeyCode: 8
+    });
+    await this.pressKey({
+      type: "keyUp",
+      key: "Backspace",
+      code: "Backspace",
+      windowsVirtualKeyCode: 8
+    });
+    if (value) {
+      await this.dispatch("Input.insertText", { text: value });
+    }
+  }
+
+  private async selectAll(): Promise<void> {
+    await this.dispatch("Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      key: "Meta",
+      code: "MetaLeft",
+      windowsVirtualKeyCode: 91,
+      modifiers: 4
+    });
+    await this.dispatch("Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: 4
+    });
+    await this.dispatch("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "a",
+      code: "KeyA",
+      windowsVirtualKeyCode: 65,
+      modifiers: 4
+    });
+    await this.dispatch("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Meta",
+      code: "MetaLeft",
+      windowsVirtualKeyCode: 91,
+      modifiers: 0
+    });
+  }
+
+  private async pressKey(params: Record<string, unknown>): Promise<void> {
+    await this.dispatch("Input.dispatchKeyEvent", params);
+  }
+
+  async detach(): Promise<void> {
+    if (!this.attached) return;
+    this.attached = false;
+    await chrome.debugger.detach({ tabId: this.tabId });
+  }
+
+  private async dispatch(method: string, params: Record<string, unknown>): Promise<void> {
+    if (!this.attached) throw new Error("Trusted Chrome input session is not attached.");
+    await chrome.debugger.sendCommand({ tabId: this.tabId }, method, params);
+  }
+}
+
 async function waitForTestPageReady(tabId: number, timeout: number): Promise<void> {
   await ensureContentRecorder(tabId);
   const result = await chrome.tabs.sendMessage(tabId, {
     type: "WAIT_FOR_PAGE_READY",
-    timeout
+    timeout,
+    afterAction: true
   } satisfies ExtensionMessage);
   if (!result?.ok) {
     throw new Error(result?.error ?? "Page did not become ready before the step timeout.");
@@ -825,21 +1091,50 @@ async function persistDraftState(): Promise<void> {
     return;
   }
 
-  await getDraftStorage().set({
+  await safeStorageSet(getDraftStorage(), {
     [DRAFT_STORAGE_KEY]: {
       recording,
       paused,
-      actions,
+      actions: stripStorageHeavyActions(actions),
       recordingStartTime,
       recordingStartUrl,
       impersonationDetected,
       activeTabId: activeRecordingTabId
     } satisfies DraftState
-  });
+  }, [DRAFT_STORAGE_KEY]);
 }
 
 async function clearDraftState(): Promise<void> {
   await getDraftStorage().remove(DRAFT_STORAGE_KEY);
+}
+
+async function persistLastWorkflow(workflow: RecordedWorkflow, workflowActions: RecordedAction[]): Promise<void> {
+  const storageWorkflow = stripStorageHeavyWorkflowFields({ ...workflow, actions: workflowActions });
+  await safeStorageSet(chrome.storage.local, {
+    lastWorkflow: storageWorkflow,
+    lastActions: stripStorageHeavyActions(workflowActions)
+  }, ["lastWorkflow", "lastActions"]);
+}
+
+async function safeStorageSet(
+  area: chrome.storage.StorageArea,
+  values: Record<string, unknown>,
+  replacementKeys: string[]
+): Promise<boolean> {
+  try {
+    await area.set(values);
+    return true;
+  } catch (error) {
+    await area.remove(replacementKeys).catch(() => undefined);
+    try {
+      await area.set(values);
+      return true;
+    } catch (retryError) {
+      const message = retryError instanceof Error ? retryError.message : String(retryError);
+      pushTestEvent("error", `Recorder storage persistence skipped: ${message}`);
+      return false;
+    }
+  }
 }
 
 function getDraftStorage(): chrome.storage.StorageArea {
@@ -864,6 +1159,10 @@ async function pollRecorderDebugCommand(): Promise<void> {
     const result = await executeRecorderDebugCommand(command);
     await postRecorderDebugCommandResult(command.id, result).catch(() => undefined);
     void publishRecorderDebugSnapshot();
+    if (reloadExtensionAfterCommand) {
+      reloadExtensionAfterCommand = false;
+      setTimeout(() => chrome.runtime.reload(), 250);
+    }
   } finally {
     debugCommandPollRunning = false;
   }
@@ -872,13 +1171,45 @@ async function pollRecorderDebugCommand(): Promise<void> {
 async function executeRecorderDebugCommand(command: RecorderDebugCommand): Promise<RecorderDebugCommandResult> {
   try {
     switch (command.type) {
+      case "START_RECORDING": {
+        const started = await startRecording({ type: "START_RECORDING" });
+        return started.ok
+          ? { ok: true, message: "Recorder started." }
+          : { ok: false, error: started.error };
+      }
+
+      case "STOP_RECORDING": {
+        const stopped = await stopRecording({ type: "STOP_RECORDING" });
+        return stopped.ok
+          ? {
+              ok: true,
+              message: `Recorder stopped with ${stopped.workflow?.actions.length ?? 0} step(s).`,
+              workflow: stopped.workflow
+            }
+          : { ok: false, error: stopped.error };
+      }
+
+      case "RELOAD_EXTENSION": {
+        reloadExtensionAfterCommand = true;
+        return { ok: true, message: "Extension reload scheduled." };
+      }
+
       case "BUILD_WORKFLOW": {
         const available = await availableActions({ restore: true });
         const workflow = available.length > 0 ? buildWorkflow() : await loadLastWorkflow();
         if (!workflow) return { ok: false, error: "No recorder actions are available to build a workflow." };
         actions = workflow.actions;
-        await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: workflow.actions });
+        await persistLastWorkflow(workflow, workflow.actions);
         return { ok: true, message: `Built workflow with ${workflow.actions.length} step(s).`, workflow };
+      }
+
+      case "IMPORT_WORKFLOW": {
+        const workflow = debugCommandWorkflow(command);
+        if (!workflow) return { ok: false, error: "IMPORT_WORKFLOW requires payload.workflow" };
+        const imported = await importWorkflow(workflow);
+        return imported.ok
+          ? { ok: true, message: `Imported workflow with ${workflow.actions.length} step(s).`, workflow }
+          : { ok: false, error: imported.error };
       }
 
       case "GET_ACTIONS":
@@ -900,6 +1231,61 @@ async function executeRecorderDebugCommand(command: RecorderDebugCommand): Promi
         return { ok: !hasDebugTestError(), message: "Browser workflow test finished.", testState: currentTestState(), events: testEvents };
       }
 
+      case "RUN_TRUSTED_TEST_WORKFLOW": {
+        const started = await startTestWorkflow({ mode: "full", trusted: true });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Trusted browser workflow test finished.", testState: currentTestState(), events: testEvents };
+      }
+
+      case "IMPORT_AND_RUN_TEST_WORKFLOW": {
+        const workflow = debugCommandWorkflow(command);
+        if (!workflow) return { ok: false, error: "IMPORT_AND_RUN_TEST_WORKFLOW requires payload.workflow" };
+        const imported = await importWorkflow(workflow);
+        if (!imported.ok) return { ok: false, error: imported.error, testState: currentTestState(), events: testEvents };
+        const started = await startTestWorkflow({ mode: "full" });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents, workflow };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Imported workflow and browser test finished.", workflow, testState: currentTestState(), events: testEvents };
+      }
+
+      case "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW": {
+        const workflow = debugCommandWorkflow(command);
+        if (!workflow) return { ok: false, error: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW requires payload.workflow" };
+        const imported = await importWorkflow(workflow);
+        if (!imported.ok) return { ok: false, error: imported.error, testState: currentTestState(), events: testEvents };
+        const started = await startTestWorkflow({ mode: "full", trusted: true });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents, workflow };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Imported workflow and trusted browser test finished.", workflow, testState: currentTestState(), events: testEvents };
+      }
+
+      case "IMPORT_AND_RUN_TEST_WORKFLOW_FROM": {
+        const workflow = debugCommandWorkflow(command);
+        const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
+        if (!workflow) return { ok: false, error: "IMPORT_AND_RUN_TEST_WORKFLOW_FROM requires payload.workflow" };
+        if (!actionId) return { ok: false, error: "IMPORT_AND_RUN_TEST_WORKFLOW_FROM requires payload.actionId" };
+        const imported = await importWorkflow(workflow);
+        if (!imported.ok) return { ok: false, error: imported.error, testState: currentTestState(), events: testEvents };
+        const started = await startTestWorkflow({ mode: "from", actionId });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents, workflow };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Imported workflow and browser test finished.", workflow, testState: currentTestState(), events: testEvents };
+      }
+
+      case "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM": {
+        const workflow = debugCommandWorkflow(command);
+        const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
+        if (!workflow) return { ok: false, error: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM requires payload.workflow" };
+        if (!actionId) return { ok: false, error: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM requires payload.actionId" };
+        const imported = await importWorkflow(workflow);
+        if (!imported.ok) return { ok: false, error: imported.error, testState: currentTestState(), events: testEvents };
+        const started = await startTestWorkflow({ mode: "from", actionId, trusted: true });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents, workflow };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Imported workflow and trusted browser test finished.", workflow, testState: currentTestState(), events: testEvents };
+      }
+
       case "RUN_TEST_WORKFLOW_FROM": {
         const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
         if (!actionId) return { ok: false, error: "RUN_TEST_WORKFLOW_FROM requires payload.actionId" };
@@ -907,6 +1293,43 @@ async function executeRecorderDebugCommand(command: RecorderDebugCommand): Promi
         if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents };
         await waitForDebugTestCompletion();
         return { ok: !hasDebugTestError(), message: "Browser workflow test finished.", testState: currentTestState(), events: testEvents };
+      }
+
+      case "RUN_TRUSTED_TEST_WORKFLOW_FROM": {
+        const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
+        if (!actionId) return { ok: false, error: "RUN_TRUSTED_TEST_WORKFLOW_FROM requires payload.actionId" };
+        const started = await startTestWorkflow({ mode: "from", actionId, trusted: true });
+        if (!started.ok) return { ok: false, error: started.error, testState: currentTestState(), events: testEvents };
+        await waitForDebugTestCompletion();
+        return { ok: !hasDebugTestError(), message: "Trusted browser workflow test finished.", testState: currentTestState(), events: testEvents };
+      }
+
+      case "RUN_TEST_ACTION": {
+        const action = await resolveDebugCommandAction(command);
+        if (!action) return { ok: false, error: "RUN_TEST_ACTION requires payload.actionId or payload.action" };
+        const result = await startTestAction(action);
+        return {
+          ok: result.ok,
+          message: result.ok ? `Step test finished: ${action.description ?? action.type}` : undefined,
+          error: result.error,
+          testState: currentTestState(),
+          events: testEvents
+        };
+      }
+
+      case "TEST_SELECTOR": {
+        const action = await resolveDebugCommandAction(command);
+        if (!action) return { ok: false, error: "TEST_SELECTOR requires payload.actionId or payload.action" };
+        const tab = await getActiveTab().catch(() => undefined);
+        if (!tab?.id) return { ok: false, error: "No active tab is available for selector diagnostics." };
+        await ensureContentRecorder(tab.id);
+        const diagnostic = await chrome.tabs.sendMessage(tab.id, { type: "TEST_SELECTOR", action } satisfies ExtensionMessage);
+        return {
+          ok: !diagnostic?.error,
+          message: diagnostic?.error ? undefined : `Selector diagnostic finished: ${action.description ?? action.type}`,
+          error: diagnostic?.error,
+          diagnostic
+        };
       }
 
       case "RUN_TRAINING_WORKFLOW":
@@ -919,6 +1342,34 @@ async function executeRecorderDebugCommand(command: RecorderDebugCommand): Promi
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error), testState: currentTestState(), events: testEvents };
   }
+}
+
+function debugCommandWorkflow(command: RecorderDebugCommand): RecordedWorkflow | undefined {
+  const workflow = command.payload?.workflow;
+  if (!workflow || typeof workflow !== "object") return undefined;
+  const validation = validateImportWorkflow(workflow as RecordedWorkflow);
+  return validation ? undefined : workflow as RecordedWorkflow;
+}
+
+async function resolveDebugCommandAction(command: RecorderDebugCommand): Promise<RecordedAction | undefined> {
+  const payloadAction = command.payload?.action;
+  if (isRecordedAction(payloadAction)) return payloadAction;
+
+  const actionId = typeof command.payload?.actionId === "string" ? command.payload.actionId : undefined;
+  if (!actionId) return undefined;
+
+  const available = await availableActions({ restore: true });
+  const workflow = available.length > 0 ? undefined : await loadLastWorkflow();
+  return available.find((action) => action.id === actionId)
+    ?? workflow?.actions.find((action) => action.id === actionId);
+}
+
+function isRecordedAction(value: unknown): value is RecordedAction {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<RecordedAction>;
+  return typeof candidate.id === "string"
+    && typeof candidate.type === "string"
+    && Boolean(candidate.selectors && typeof candidate.selectors === "object");
 }
 
 async function runTrainingWorkflow(command: RecorderDebugCommand): Promise<RecorderDebugCommandResult> {
@@ -1168,7 +1619,7 @@ async function importWorkflow(workflow: RecordedWorkflow): Promise<{ ok: boolean
     ? workflow.meta.recordedOnUrl
     : firstRecordableNavigationUrl(actions) ?? normalizeNavigationUrl(workflow.config?.startUrl ?? "/");
   updateBadge();
-  await chrome.storage.local.set({ lastWorkflow: workflow, lastActions: actions });
+  await persistLastWorkflow({ ...workflow, actions }, actions);
   await persistAndBroadcast();
   return { ok: true };
 }

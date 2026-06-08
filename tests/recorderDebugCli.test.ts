@@ -1,6 +1,10 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCommandInput, formatSnapshotSummary } from "../src/recorderDebug/cli.js";
+import { buildCommandInput, buildWorkflowHardeningPreview, formatHardeningSummary, formatSnapshotSummary } from "../src/recorderDebug/cli.js";
 import type { RecorderDebugSnapshot } from "../src/recorderDebug/types.js";
+import type { RecordedWorkflow } from "@zoom-automation/workflow-core";
 
 describe("recorder debug CLI helpers", () => {
   it("formats a concise latest snapshot summary", () => {
@@ -22,9 +26,70 @@ describe("recorder debug CLI helpers", () => {
     });
   });
 
+  it("builds an import command from a workflow JSON file", () => {
+    const workflowPath = writeWorkflowFile(makeWorkflow());
+
+    expect(buildCommandInput("import", ["--file", workflowPath])).toEqual({
+      type: "IMPORT_WORKFLOW",
+      payload: { workflow: makeWorkflow() }
+    });
+  });
+
+  it("builds import and browser-test commands from a workflow JSON file", () => {
+    const workflowPath = writeWorkflowFile(makeWorkflow());
+
+    expect(buildCommandInput("test", ["--file", workflowPath])).toEqual({
+      type: "IMPORT_AND_RUN_TEST_WORKFLOW",
+      payload: { workflow: makeWorkflow() }
+    });
+    expect(buildCommandInput("test", ["--file", workflowPath, "--from", "save"])).toEqual({
+      type: "IMPORT_AND_RUN_TEST_WORKFLOW_FROM",
+      payload: { workflow: makeWorkflow(), actionId: "save" }
+    });
+  });
+
+  it("builds trusted browser-test commands for Chrome debugger input replay", () => {
+    const workflowPath = writeWorkflowFile(makeWorkflow());
+
+    expect(buildCommandInput("test", ["--trusted"])).toEqual({
+      type: "RUN_TRUSTED_TEST_WORKFLOW",
+      payload: {}
+    });
+    expect(buildCommandInput("test", ["--trusted", "--from", "save"])).toEqual({
+      type: "RUN_TRUSTED_TEST_WORKFLOW_FROM",
+      payload: { actionId: "save" }
+    });
+    expect(buildCommandInput("test", ["--trusted", "--file", workflowPath])).toEqual({
+      type: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW",
+      payload: { workflow: makeWorkflow() }
+    });
+    expect(buildCommandInput("test", ["--trusted", "--file", workflowPath, "--from", "save"])).toEqual({
+      type: "IMPORT_AND_RUN_TRUSTED_TEST_WORKFLOW_FROM",
+      payload: { workflow: makeWorkflow(), actionId: "save" }
+    });
+  });
+
+  it("builds command payloads for single-step and selector diagnostics", () => {
+    expect(buildCommandInput("step", ["--action", "country"])).toEqual({
+      type: "RUN_TEST_ACTION",
+      payload: { actionId: "country" }
+    });
+    expect(buildCommandInput("selector", ["--action", "country"])).toEqual({
+      type: "TEST_SELECTOR",
+      payload: { actionId: "country" }
+    });
+  });
+
   it("builds command payloads for workflow snapshots and clearing actions", () => {
     expect(buildCommandInput("build", [])).toEqual({ type: "BUILD_WORKFLOW", payload: {} });
     expect(buildCommandInput("clear", [])).toEqual({ type: "CLEAR_ACTIONS", payload: {} });
+  });
+
+  it("builds a self-reload command for the Chrome extension", () => {
+    expect(buildCommandInput("reload-extension", [])).toEqual({
+      type: "RELOAD_EXTENSION",
+      payload: {}
+    });
   });
 
   it("builds training command payloads with harness options", () => {
@@ -38,6 +103,18 @@ describe("recorder debug CLI helpers", () => {
           stopOnFailure: true
         }
       });
+  });
+
+  it("formats workflow hardening previews for CLI review", () => {
+    const preview = buildWorkflowHardeningPreview(makeWorkflow());
+    const summary = formatHardeningSummary(preview);
+
+    expect(preview.report.bulkReady).toBe(true);
+    expect(summary).toContain("Bulk readiness: ready");
+    expect(summary).toContain("Intent: create");
+    expect(summary).toContain("Entity: queue");
+    expect(summary).toContain("Added guard: create");
+    expect(summary).toContain("Added assertion: entityExists");
   });
 });
 
@@ -68,6 +145,41 @@ function makeSnapshot(): RecorderDebugSnapshot {
     page: {
       url: "https://zoom.us/cpw/page/phoneNumbers#/business-address",
       title: "Business Address"
+    }
+  };
+}
+
+function writeWorkflowFile(workflow: RecordedWorkflow): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "recorder-debug-cli-"));
+  const filePath = path.join(dir, "workflow.json");
+  writeFileSync(filePath, `${JSON.stringify(workflow, null, 2)}\n`, "utf8");
+  return filePath;
+}
+
+function makeWorkflow(): RecordedWorkflow {
+  return {
+    version: 1,
+    meta: {
+      name: "Create Queue",
+      description: "raw workflow",
+      recordedAt: "2026-06-08T00:00:00.000Z",
+      recordedOnUrl: "https://zoom.us/cpw/page/contactCenter#/queues",
+      durationMs: 1000,
+      category: "custom"
+    },
+    parameters: [],
+    actions: [
+      { id: "create", timestamp: 1, type: "click", selectors: { role: { role: "button", name: "Create Queue" } }, pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues", pageTitle: "Queues" },
+      { id: "name", timestamp: 2, type: "fill", selectors: { label: "Queue Name" }, value: "Priority Support", pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues/new", pageTitle: "Queues" },
+      { id: "extension", timestamp: 3, type: "fill", selectors: { label: "Extension" }, value: "5001", pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues/new", pageTitle: "Queues" },
+      { id: "save", timestamp: 4, type: "click", selectors: { role: { role: "button", name: "Save" } }, networkWaitUrl: "/api/queues", pageUrl: "https://zoom.us/cpw/page/contactCenter#/queues/new", pageTitle: "Queues" }
+    ],
+    assertions: [],
+    config: {
+      startUrl: "/cpw/page/contactCenter#/queues",
+      requiresImpersonation: true,
+      defaultTimeout: 10_000,
+      retryableErrors: []
     }
   };
 }

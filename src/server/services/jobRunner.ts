@@ -6,7 +6,7 @@ import { AutomationRunner } from "../../automation/runner.js";
 import { loadConfig } from "../../config.js";
 import { createLogger, parseLogLevel } from "../../logger.js";
 import { validateDocumentFiles } from "../../preflight.js";
-import { loginAsMasterAdmin } from "../../zoom/auth.js";
+import { getMasterStorageState } from "../../zoom/masterSession.js";
 import { SessionHealthMonitor } from "../../zoom/sessionHealth.js";
 import type { WorkItemStore } from "../queues/types.js";
 import type { JobStore } from "./inMemoryJobStore.js";
@@ -103,16 +103,22 @@ async function runAutomationJob(options: StartJobOptions): Promise<void> {
 
   const browser = await chromium.launch({ headless: options.headless });
   try {
-    const masterStorageState = await loginAsMasterAdmin({
+    const masterStorageState = await getMasterStorageState({
       browser,
       config: config.zoom,
-      logger
+      logger,
+      storageStatePath: config.runtime.masterStorageStatePath
     });
 
     // Keep the master session alive across long, many-account runs. The monitor
     // re-logs in when the session approaches its max age; flows read the latest
     // state via getMasterStorageState().
-    const sessionMonitor = new SessionHealthMonitor(masterStorageState, { browser, config: config.zoom, logger });
+    const sessionMonitor = new SessionHealthMonitor(masterStorageState, {
+      browser,
+      config: config.zoom,
+      logger,
+      storageStatePath: config.runtime.masterStorageStatePath
+    });
     const refreshAtMs = 40 * 60 * 1_000;
     let refreshInFlight: Promise<unknown> | undefined;
     const refreshSessionIfStale = async (): Promise<void> => {

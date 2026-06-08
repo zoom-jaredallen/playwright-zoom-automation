@@ -183,6 +183,14 @@ async function writeLoginDebugArtifacts(page: Page, reason: string): Promise<voi
 }
 
 export function getZoomLoginBlockingReason(pageText: string): string | undefined {
+  if (/request failed with status code 403|status code 403|http 403/i.test(pageText)) {
+    return [
+      "Zoom native login returned HTTP 403 before the password step.",
+      "This automation does not bypass Zoom sign-in protection.",
+      "Wait and retry, or seed/reuse a valid master storage-state session."
+    ].join(" ");
+  }
+
   if (/entered the letters\s*\(captcha\)\s*incorrectly|captcha\s+(verification|required|incorrect)/i.test(pageText)) {
     return "Zoom native login requires CAPTCHA, which this automation does not bypass.";
   }

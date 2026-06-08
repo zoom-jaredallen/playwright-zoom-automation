@@ -12,6 +12,7 @@ import {
   calculateQualityReport,
   replaceWithPlaceholders
 } from "./analysis.js";
+import { createZoomAdminAdapter, hardenRecordedWorkflow } from "./hardening/index.js";
 import type { AssertionType, OnFailure, Predicate, RecordedAction, RecordedWorkflow, StepCondition } from "./types.js";
 
 // ─── ID + URL helpers ───────────────────────────────────────────────────────────
@@ -534,10 +535,13 @@ export function buildWorkflow(input: BuildWorkflowInput): RecordedWorkflow {
   const nowMs = input.nowMs ?? Date.now();
 
   const parameters = extractParameters(actions);
-  const assertions = generateAssertions(actions);
   const startUrl = extractRelativeStartUrl(recordingStartUrl);
-
   const workflowActions = actions.map(applyPlaceholdersDeep);
+  const hardening = hardenRecordedWorkflow({
+    actions: workflowActions,
+    assertions: generateAssertions(workflowActions),
+    adapter: createZoomAdminAdapter()
+  });
 
   return {
     version: 1,
@@ -550,15 +554,16 @@ export function buildWorkflow(input: BuildWorkflowInput): RecordedWorkflow {
       category: inferCategory(actions)
     },
     parameters,
-    actions: workflowActions,
-    assertions,
+    actions: hardening.actions,
+    assertions: hardening.assertions,
     config: {
       startUrl,
       requiresImpersonation: impersonationDetected || true,
       defaultTimeout: 10_000,
       retryableErrors: ["timeout", "temporarily unavailable", "net::", "target closed"]
     },
-    quality: calculateQualityReport(workflowActions, assertions)
+    quality: calculateQualityReport(hardening.actions, hardening.assertions),
+    hardening: hardening.report
   };
 }
 

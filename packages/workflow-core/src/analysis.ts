@@ -171,7 +171,7 @@ export function calculateQualityReport(
   const actionable = workflowActions.filter((action) => !["navigate", "wait", "screenshot", "dismiss", "dialog", "if"].includes(action.type));
   const stableSelectors = actionable.filter(hasStableSelector).length;
   const selectorStability = actionable.length === 0 ? 100 : Math.round((stableSelectors / actionable.length) * 100);
-  const submitActions = workflowActions.filter((action) => action.type === "click" && isCommitClickLabel(action.selectors.role?.name ?? action.selectors.text ?? ""));
+  const submitActions = workflowActions.filter((action) => action.type === "click" && isOutcomeAssertionTarget(action));
   const assertionCoverage = submitActions.length === 0 ? 100 : Math.round((Math.min(assertions.length, submitActions.length) / submitActions.length) * 100);
   const evidenceCount = workflowActions.filter((action) => action.capture || action.type === "screenshot" || action.screenshotOnFailure || action.onFailure === "screenshot").length;
   const evidenceCoverage = workflowActions.length === 0 ? 100 : Math.round((evidenceCount / workflowActions.length) * 100);
@@ -213,6 +213,11 @@ function needsContext(action: RecordedAction): boolean {
   if (!diagnostics) return false;
   if (contextNarrowsToOne(action)) return false;
   return (diagnostics.visibleCount ?? 0) > 1 && !action.selectors.anchor?.text;
+}
+
+function isOutcomeAssertionTarget(action: RecordedAction): boolean {
+  if (action.sideEffectRisk) return action.sideEffectRisk === "mutation" || action.sideEffectRisk === "destructive";
+  return isCommitClickLabel(action.selectors.role?.name ?? action.selectors.text ?? "");
 }
 
 // ─── Parameter detection (value heuristics) ─────────────────────────────────────

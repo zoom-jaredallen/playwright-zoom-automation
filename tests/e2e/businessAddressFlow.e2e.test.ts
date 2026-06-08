@@ -13,12 +13,16 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { startMockZoomServer, type MockZoomServer } from "./mockZoomServer.js";
 import { AutomationRunner } from "../../src/automation/runner.js";
 import { createLogger } from "../../src/logger.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ProgressAdapter, SubAccount } from "../../src/automation/types.js";
 import { loginAsMasterAdmin } from "../../src/zoom/auth.js";
+import { getMasterStorageState } from "../../src/zoom/masterSession.js";
 import { BusinessAddressFlow } from "../../src/zoom/businessAddressFlow.js";
 
 // Skip these tests in CI or when Playwright is not installed
@@ -198,6 +202,35 @@ describeE2E("BusinessAddressFlow E2E", () => {
       expect(storageState.cookies.map((cookie) => cookie.name)).toContain("cred");
     } finally {
       await stagedLoginServer.close();
+    }
+  });
+
+  it("reuses a valid cached master storage state", async () => {
+    const config = createTestConfig();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zoom-master-session-"));
+    const storageStatePath = path.join(tempDir, "state.json");
+    const initialSignIns = mockServer.signInSubmissionCount();
+
+    try {
+      await getMasterStorageState({
+        browser,
+        config: config.zoom,
+        logger,
+        storageStatePath,
+        timeoutMs: 5_000
+      });
+      expect(mockServer.signInSubmissionCount()).toBe(initialSignIns + 1);
+
+      await getMasterStorageState({
+        browser,
+        config: config.zoom,
+        logger,
+        storageStatePath,
+        timeoutMs: 5_000
+      });
+      expect(mockServer.signInSubmissionCount()).toBe(initialSignIns + 1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   });
 

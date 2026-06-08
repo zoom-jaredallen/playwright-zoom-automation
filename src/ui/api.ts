@@ -103,6 +103,32 @@ export interface RunReadinessView {
   warnings: ReadinessCheckView[];
 }
 
+export type PreflightOutcomeView = "willRun" | "willSkip" | "willFail" | "needsReview";
+
+export interface PreflightIssueView {
+  actionId?: string;
+  severity: "info" | "warning" | "blocking";
+  category: "selector" | "idempotency" | "parameters" | "unsupported" | "inventory" | "mutation";
+  message: string;
+}
+
+export interface BulkPreflightView {
+  summary: Record<PreflightOutcomeView, number>;
+  accounts: Array<{
+    accountId: string;
+    ownerEmail?: string;
+    accountName?: string;
+    predictedOutcome: PreflightOutcomeView;
+    workflowOutcomes: Array<{
+      workflowId: string;
+      workflowName: string;
+      predictedOutcome: PreflightOutcomeView;
+      issues: PreflightIssueView[];
+      matchedTargetText: string[];
+    }>;
+  }>;
+}
+
 export interface RunCockpitView {
   progress: {
     totalAccounts: number;
@@ -244,6 +270,17 @@ export async function checkRunReadiness(input: {
   parameterValues?: Record<string, string>;
 }): Promise<{ readiness: RunReadinessView }> {
   return requestJson("/api/readiness/check", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function simulatePreflight(input: {
+  accounts: SubAccountView[];
+  workflows: RecordedWorkflowView[];
+  accountEvidence?: Record<string, { visibleText?: string; reviewReasons?: string[] }>;
+}): Promise<{ preflight: BulkPreflightView }> {
+  return requestJson("/api/preflight/simulate", {
     method: "POST",
     body: JSON.stringify(input)
   });

@@ -40,6 +40,7 @@ export interface AppConfig {
     dryRun: boolean;
     progressPath: string;
     artifactsDir: string;
+    masterStorageStatePath?: string;
     accountLimit?: number;
     accountIds?: string[];
     ownerRange?: {
@@ -145,6 +146,7 @@ function buildRuntimeConfig(parsed: ParsedEnv): AppConfig["runtime"] {
     dryRun: parsed.DRY_RUN,
     progressPath: parsed.PROGRESS_PATH,
     artifactsDir: parsed.ARTIFACTS_DIR,
+    masterStorageStatePath: parsed.ZOOM_MASTER_STORAGE_STATE_PATH,
     accountLimit: parsed.SUB_ACCOUNT_LIMIT,
     accountIds: parsed.SUB_ACCOUNT_IDS,
     ownerRange,
