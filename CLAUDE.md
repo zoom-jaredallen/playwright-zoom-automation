@@ -37,6 +37,7 @@ npm test
 npm run typecheck
 npm run build
 npm run build:ui
+npm run check:file-size
 ```
 
 For UI-only edits, also inspect the app at:
@@ -90,6 +91,8 @@ Training runs execute the recorded workflow against the active Zoom tab and may 
 Only fall back to browser/computer-control tools when the bridge cannot answer the question, such as recording a new unknown path, visual layout inspection, or clearing an unexpected Zoom modal.
 
 Known verification caveat: untracked generated workflows under `src/workflows/recorded/` can make root `npm run typecheck` fail. Do not delete or commit those generated workflows unless the user explicitly asks.
+
+Authored TypeScript files should stay at or below 600 lines. `npm run check:file-size` reports violations and excludes generated recorded workflows. Keep modules named around concrete responsibilities rather than creating catch-all utility files.
 
 ## Do Not Do These
 

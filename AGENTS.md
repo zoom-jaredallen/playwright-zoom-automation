@@ -235,9 +235,12 @@ npm test
 npm run typecheck
 npm run build
 npm run build:ui
+npm run check:file-size
 ```
 
 For narrow UI helper changes, at minimum run the relevant test file, `npm run typecheck`, and `npm run build:ui`.
+
+Authored TypeScript files should stay at or below 600 lines. `npm run check:file-size` enforces this boundary and intentionally excludes generated recorded workflows under `src/workflows/recorded/**`. Prefer responsibility-named modules over catch-all utility files.
 
 Current caveat: if untracked generated workflows exist under `src/workflows/recorded/`, root `npm run typecheck` may fail on those generated files. Do not delete, rewrite, or commit them unless the user asks. Mention the caveat in the final response and run focused checks that avoid those files where possible.
 
