@@ -6,7 +6,22 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { CompileResult, RecordedAction, RecordedWorkflow } from "./types.js";
 import { generateHealingCode } from "./selectorHealing.js";
-import { generateAssertionBody } from "./assertionCompiler.js";
+import {
+  calculateAssertionCoverage,
+  generatePluginFile,
+  generateTestFile,
+  stripInlineCaptureThumbnails,
+  validateParameters,
+  validateSelectors
+} from "./compilerArtifacts.js";
+import {
+  generateAfterActionAssertions,
+  generateAssertionActionCode,
+  generateWorkflowAssertionCode
+} from "./compilerAssertions.js";
+import { pascalCase, slugify } from "./nameUtils.js";
+
+export { slugify } from "./nameUtils.js";
 
 export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, idOverride?: string): CompileResult {
   const generatedId = slugify(workflow.meta.name || "");
@@ -38,49 +53,6 @@ export function compileWorkflow(workflow: RecordedWorkflow, outputBase: string, 
       assertionCoverage: `${assertionCoverage}%`
     }
   };
-}
-
-function stripInlineCaptureThumbnails(workflow: RecordedWorkflow): RecordedWorkflow {
-  return {
-    ...workflow,
-    actions: workflow.actions.map(stripActionInlineCaptureThumbnail)
-  };
-}
-
-function stripActionInlineCaptureThumbnail(action: RecordedAction): RecordedAction {
-  const next: RecordedAction = {
-    ...action,
-    selectors: { ...action.selectors },
-    capture: action.capture ? { ...action.capture } : undefined,
-    thenActions: action.thenActions?.map(stripActionInlineCaptureThumbnail),
-    elseActions: action.elseActions?.map(stripActionInlineCaptureThumbnail)
-  };
-  if (next.capture?.thumbnail?.dataUrl) {
-    delete next.capture.thumbnail;
-  }
-  return next;
-}
-
-// ─── Code Generation ─────────────────────────────────────────────────────────
-
-function generatePluginFile(id: string, workflow: RecordedWorkflow): string {
-  const className = pascalCase(id) + "Flow";
-  return `import { ${className} } from "./flow.js";
-import type { WorkflowPlugin } from "../../types.js";
-
-const plugin: WorkflowPlugin = {
-  id: "${id}",
-  name: ${JSON.stringify(workflow.meta.name)},
-  description: ${JSON.stringify(workflow.meta.description)},
-  enabled: true,
-  category: "${workflow.meta.category}",
-  createFlow(context) {
-    return new ${className}(context);
-  }
-};
-
-export default plugin;
-`;
 }
 
 function generateFlowFile(id: string, workflow: RecordedWorkflow): string {
@@ -515,68 +487,6 @@ ${indent}}${elseBlock}`;
   return wrapGeneratedAction(action, stepComment, core, workflow, generateAfterActionAssertions(action, workflow));
 }
 
-/**
- * Generate workflow.assertions[] whose afterAction matches this step, so a
- * failed submit is detected instead of being reported as success.
- */
-function generateAfterActionAssertions(action: RecordedAction, workflow: RecordedWorkflow): string {
-  const matching = workflow.assertions.filter((assertion) => assertion.afterAction === action.id);
-  return matching.map((assertion) => generateWorkflowAssertionCode(assertion)).join("\n");
-}
-
-function generateWorkflowAssertionCode(assertion: RecordedWorkflow["assertions"][number]): string {
-  const indent = "      ";
-  const ci = "        ";
-  const t = assertion.timeout;
-  const onFailure = assertion.onFailure ?? "screenshot";
-
-  const expectedExpression = assertion.expected.includes("{{selected.")
-    ? `this.resolveExpected(${JSON.stringify(assertion.expected)}, workflowState)`
-    : JSON.stringify(assertion.expected);
-  const body = generateWorkflowAssertionBody(assertion, expectedExpression, ci);
-
-  if (onFailure === "skip") {
-    return `${indent}// Auto verification (${assertion.type})
-${indent}try {
-${body}
-${indent}} catch (error) {
-${indent}  this.options.logger.warn("Verification skipped after failure", { error: error instanceof Error ? error.message : String(error) });
-${indent}}`;
-  }
-  if (onFailure === "screenshot") {
-    return `${indent}// Auto verification (${assertion.type})
-${indent}try {
-${body}
-${indent}} catch (error) {
-${indent}  await page.screenshot({ path: \`\${artifactBase}-verify-failure.png\`, fullPage: true }).catch(() => undefined);
-${indent}  throw error;
-${indent}}`;
-  }
-  return `${indent}// Auto verification (${assertion.type})
-${body}`;
-}
-
-function generateWorkflowAssertionBody(
-  assertion: RecordedWorkflow["assertions"][number],
-  expectedExpression: string,
-  indent: string
-): string {
-  if (assertion.type === "entityExists" || assertion.type === "entityAbsent" || assertion.type === "entityState") {
-    const shouldExist = assertion.type === "entityAbsent" ? "false" : "true";
-    return `${indent}await this.expectEntityPresence(page, ${expectedExpression}, ${shouldExist}, ${assertion.timeout});`;
-  }
-  return generateAssertionBody({
-    assertionType: assertion.type,
-    expected: assertion.expected,
-    timeout: assertion.timeout,
-    indent
-  });
-}
-
-/**
- * Feature 2: wrap an action that triggers a known XHR/fetch so the flow waits for
- * that response (with the action) rather than guessing with a fixed timeout.
- */
 function wrapNetworkWait(action: RecordedAction, call: string, indent: string, timeout: number): string {
   if (!action.networkWaitUrl) return call;
   return `${indent}const __networkWait = page.waitForResponse((response) => response.url().includes(${JSON.stringify(action.networkWaitUrl)}), { timeout: ${timeout} }).catch(() => undefined);
@@ -649,118 +559,3 @@ function isMutatingForDryRun(action: RecordedAction): boolean {
   return /\b(save|submit|create|confirm|apply|delete|remove|invite|provision)\b/i.test(name);
 }
 
-function generateAssertionActionCode(action: RecordedAction, indent: string, timeout: number): string {
-  const actionTimeout = action.timeout ?? timeout;
-  const onFailure = action.onFailure ?? "screenshot";
-  // Feature 6: assertions use Playwright's auto-waiting locators (waitFor / polling)
-  // so they retry until the timeout instead of checking once.
-  const assertionBody = generateAssertionBody({
-    assertionType: action.assertionType,
-    expected: action.expected ?? action.value ?? "",
-    timeout: actionTimeout,
-    indent,
-    selectors: action.selectors,
-    selectorCandidates: action.selectorCandidates
-  });
-
-  if (onFailure === "skip") {
-    return `${indent}try {
-${assertionBody}
-${indent}} catch (error) {
-${indent}  this.options.logger.warn("Recorded assertion skipped after failure", { step: ${JSON.stringify(action.description ?? action.id)}, error: error instanceof Error ? error.message : String(error) });
-${indent}}`;
-  }
-
-  if (onFailure !== "screenshot") {
-    return assertionBody;
-  }
-
-  const label = slugify(action.description ?? action.id);
-  return `${indent}try {
-${assertionBody}
-${indent}} catch (error) {
-${indent}  await page.screenshot({ path: \`\${artifactBase}-${label}-assertion-failure.png\`, fullPage: true }).catch(() => undefined);
-${indent}  throw error;
-${indent}}`;
-}
-
-function generateTestFile(id: string, workflow: RecordedWorkflow): string {
-  const className = pascalCase(id) + "Flow";
-  return `import { describe, expect, it } from "vitest";
-import plugin from "./index.js";
-
-describe("${className}", () => {
-  it("exports a valid workflow plugin", () => {
-    expect(plugin.id).toBe("${id}");
-    expect(plugin.name).toBeTruthy();
-    expect(plugin.enabled).toBe(true);
-    expect(plugin.createFlow).toBeTypeOf("function");
-  });
-
-  it("has ${workflow.parameters.length} parameter(s) defined in schema", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const schema = JSON.parse(readFileSync(join(import.meta.dirname, "schema.json"), "utf8"));
-    expect(schema.parameters).toHaveLength(${workflow.parameters.length});
-${workflow.parameters.map((p) => `    expect(schema.parameters).toContainEqual(expect.objectContaining({ name: "${p.name}", required: ${p.required} }));`).join("\n")}
-  });
-
-  it("has ${workflow.assertions.length} assertion(s) for verification", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const schema = JSON.parse(readFileSync(join(import.meta.dirname, "schema.json"), "utf8"));
-    expect(schema.assertions).toHaveLength(${workflow.assertions.length});
-  });
-
-  it("has ${workflow.actions.length} recorded action(s)", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const schema = JSON.parse(readFileSync(join(import.meta.dirname, "schema.json"), "utf8"));
-    expect(schema.actions).toHaveLength(${workflow.actions.length});
-  });
-});
-`;
-}
-
-// ─── Validation ──────────────────────────────────────────────────────────────
-
-function validateParameters(workflow: RecordedWorkflow): boolean {
-  return workflow.parameters.every((p) => p.name && p.source);
-}
-
-function validateSelectors(workflow: RecordedWorkflow, warnings: string[]): boolean {
-  let allValid = true;
-  for (const action of workflow.actions) {
-    if (["navigate", "wait", "assert", "screenshot", "dismiss", "dialog"].includes(action.type)) continue;
-    const s = action.selectors;
-    const hasStable = Boolean(s.role || s.label || s.text || s.testId);
-    if (!hasStable && s.css) {
-      warnings.push(`Action "${action.description ?? action.id}": only CSS selector available — may be unstable`);
-      allValid = false;
-    }
-  }
-  return allValid;
-}
-
-function calculateAssertionCoverage(workflow: RecordedWorkflow): number {
-  const submitActions = workflow.actions.filter((a) => {
-    if (a.type !== "click") return false;
-    const name = a.selectors.role?.name ?? a.selectors.text ?? "";
-    return /save|submit|add|continue|confirm/i.test(name);
-  });
-  if (submitActions.length === 0) return 100;
-  const covered = submitActions.filter((a) =>
-    workflow.assertions.some((assertion) => assertion.afterAction === a.id)
-  );
-  return Math.round((covered.length / submitActions.length) * 100);
-}
-
-// ─── Utilities ───────────────────────────────────────────────────────────────
-
-export function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
-}
-
-function pascalCase(slug: string): string {
-  return slug.split("-").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join("");
-}
