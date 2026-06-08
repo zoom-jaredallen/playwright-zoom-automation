@@ -44,6 +44,7 @@
     "recorder:export": "tsx src/recorderDebug/cli.ts export",
     "recorder:import": "tsx src/recorderDebug/cli.ts import",
     "recorder:reload-extension": "tsx src/recorderDebug/cli.ts reload-extension",
+    "check:file-size": "node scripts/check-authored-file-size.mjs --limit=600",
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {
