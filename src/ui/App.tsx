@@ -40,6 +40,7 @@ import { ToastProvider, useToast } from "./components/Toast.js";
 import { WizardNav } from "./components/WizardNav.js";
 import { WorkflowEditor } from "./components/WorkflowEditor.js";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts.js";
+import { buildWizardSteps, mergeGlobalParameterValues, type WizardStepId } from "./appHelpers.js";
 
 export function App() {
   return (
@@ -49,16 +50,10 @@ export function App() {
   );
 }
 
-type WizardStepId = "accounts" | "configure" | "run";
-
 function AppContent() {
   const { addToast } = useToast();
-
-  // Wizard state
   const [wizardStep, setWizardStep] = useState<WizardStepId>("accounts");
   const [activeView, setActiveView] = useState<"run" | "history" | "editor">("run");
-
-  // Account state
   const [accounts, setAccounts] = useState<SubAccountView[]>([]);
   const [selectedIds, setSelectedIds] = useState(new Set<string>());
   const [filters, setFilters] = useState<AccountQueryFilters>({});
@@ -66,15 +61,11 @@ function AppContent() {
   const [queryError, setQueryError] = useState<string | undefined>();
   const [totalAccounts, setTotalAccounts] = useState<number | undefined>();
   const [cohorts, setCohorts] = useState<AccountCohortView[]>([]);
-
-  // Workflow state
   const [workflows, setWorkflows] = useState<WorkflowView[]>([]);
   const [selectedWorkflowIds, setSelectedWorkflowIds] = useState(new Set(["add-business-address"]));
   const [pipelineOrder, setPipelineOrder] = useState<string[]>(["add-business-address"]);
   const [profiles, setProfiles] = useState<AddressProfileView[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("australia_sydney");
-
-  // Run settings
   const [dryRun, setDryRun] = useState(true);
   const [headless, setHeadless] = useState(false);
   const [concurrency, setConcurrency] = useState(1);
@@ -87,30 +78,20 @@ function AppContent() {
   const [preflight, setPreflight] = useState<BulkPreflightView | undefined>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [preflightError, setPreflightError] = useState<string | undefined>();
-
-  // Job state
   const [job, setJob] = useState<JobView | undefined>();
   const [jobError, setJobError] = useState<string | undefined>();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-
-  // History
   const [jobHistory, setJobHistory] = useState<JobView[]>([]);
-
-  // Workflow editor
   const [recordedWorkflows, setRecordedWorkflows] = useState<Array<{ id: string; name: string; category: string; actionCount: number }>>([]);
   const [selectedRecordedWorkflowId, setSelectedRecordedWorkflowId] = useState<string | undefined>();
   const [selectedRecordedWorkflow, setSelectedRecordedWorkflow] = useState<RecordedWorkflowView | undefined>();
   const [recordedLoading, setRecordedLoading] = useState(false);
   const [duplicateSource, setDuplicateSource] = useState<{ id: string; name: string } | undefined>();
-
-  // Derived
   const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
   const workflowNames = useMemo(() => new Map(workflows.map((w) => [w.id, w.name])), [workflows]);
   const isRunning = Boolean(job && ["queued", "running"].includes(job.status));
   const selectedAccounts = useMemo(() => accounts.filter((a) => selectedIds.has(a.id)), [accounts, selectedIds]);
-
-  // Load initial data
   useEffect(() => {
     void Promise.all([fetchAddressProfiles(), fetchWorkflows()])
       .then(([profilesRes, workflowsRes]) => {
@@ -120,8 +101,6 @@ function AppContent() {
       })
       .catch(() => undefined);
   }, []);
-
-  // SSE subscription for active job
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) return undefined;
     const unsubscribe = subscribeToJob(
@@ -139,8 +118,6 @@ function AppContent() {
     );
     return () => unsubscribe();
   }, [job?.id, job?.status]);
-
-  // History refresh
   const refreshHistory = useCallback(() => {
     void fetchJobs().then((r) => setJobHistory(r.jobs)).catch(() => undefined);
   }, []);
@@ -181,8 +158,6 @@ function AppContent() {
       refreshRecordedWorkflows();
     }
   }, [activeView, refreshRecordedWorkflows]);
-
-  // Keyboard shortcuts
   useKeyboardShortcuts({
     onStartRun: useCallback(() => {
       if (wizardStep === "configure" && pipelineOrder.length > 0) handleStartRequest();
@@ -194,8 +169,6 @@ function AppContent() {
       setActiveView((v) => v === "run" ? "history" : "run");
     }, [])
   });
-
-  // Handlers
   const handleQuery = async () => {
     setQueryLoading(true);
     setQueryError(undefined);
@@ -403,7 +376,6 @@ function AppContent() {
       const result = await duplicateRecordedWorkflow(sourceId, name);
       addToast("success", `Created "${result.name}"`);
       refreshRecordedWorkflows();
-      // Refresh the runnable workflow list so the copy appears in Configure.
       void fetchWorkflows().then((r) => setWorkflows(r.workflows)).catch(() => undefined);
       await handleOpenRecordedWorkflow(result.id);
     } catch (error) {
@@ -411,30 +383,7 @@ function AppContent() {
     }
   };
 
-  // Wizard step definitions
-  const wizardSteps = [
-    {
-      id: "accounts" as const,
-      label: "Select Accounts",
-      sublabel: selectedIds.size > 0 ? `${selectedIds.size} selected` : undefined,
-      enabled: true,
-      complete: selectedIds.size > 0
-    },
-    {
-      id: "configure" as const,
-      label: "Configure",
-      sublabel: pipelineOrder.length > 0 ? `${pipelineOrder.length} workflow${pipelineOrder.length > 1 ? "s" : ""}` : undefined,
-      enabled: selectedIds.size > 0,
-      complete: selectedIds.size > 0 && pipelineOrder.length > 0
-    },
-    {
-      id: "run" as const,
-      label: "Run",
-      sublabel: job ? statusLabel(job.status) : undefined,
-      enabled: selectedIds.size > 0 && pipelineOrder.length > 0,
-      complete: Boolean(job && ["completed", "failed", "cancelled"].includes(job.status))
-    }
-  ];
+  const wizardSteps = buildWizardSteps({ selectedCount: selectedIds.size, workflowCount: pipelineOrder.length, job });
 
   return (
     <AppShell activeView={activeView} onViewChange={setActiveView}>
@@ -469,7 +418,6 @@ function AppContent() {
                 if (result.warnings && result.warnings.length > 0) {
                   addToast("warning", `${result.warnings.length} warning(s): ${result.warnings[0]}`);
                 }
-                // Refresh workflows list
                 void fetchWorkflows().then((r) => setWorkflows(r.workflows)).catch(() => undefined);
               }}
               onCancel={() => setImportOpen(false)}
@@ -634,24 +582,3 @@ function AppContent() {
   );
 }
 
-function statusLabel(status: string): string {
-  const labels: Record<string, string> = { queued: "Queued", running: "Running", completed: "Done", failed: "Failed", cancelled: "Cancelled" };
-  return labels[status] ?? status;
-}
-
-function mergeGlobalParameterValues(
-  accounts: SubAccountView[],
-  globalValues: Record<string, string>,
-  perAccountValues: Record<string, Record<string, string>> | undefined
-): Record<string, Record<string, string>> | undefined {
-  const usableGlobals = Object.fromEntries(Object.entries(globalValues).filter(([, value]) => value.trim().length > 0));
-  if (Object.keys(usableGlobals).length === 0 && !perAccountValues) return undefined;
-  const merged: Record<string, Record<string, string>> = {};
-  for (const account of accounts) {
-    merged[account.id] = {
-      ...usableGlobals,
-      ...(perAccountValues?.[account.id] ?? {})
-    };
-  }
-  return merged;
-}
