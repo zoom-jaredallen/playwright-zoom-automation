@@ -1,4 +1,6 @@
 import type { SelectorStrategy } from "./types.js";
+import { findSemanticParent } from "./selectorSemantic.js";
+export { computeNth, getAriaState, getFrameSelector } from "./selectorRuntime.js";
 
 /**
  * Extract multiple selector strategies for a DOM element, ranked by stability.
@@ -85,57 +87,6 @@ export function extractSelectors(element: Element): SelectorStrategy {
   selectors.css = buildMinimalCssSelector(element);
 
   return selectors;
-}
-
-// ─── Zoom Component Library Awareness ────────────────────────────────────────
-
-/**
- * Walk up the DOM to find the nearest semantically meaningful parent.
- * Zoom's cpzui-* components nest icons/spans inside buttons/wrappers.
- * We want the button, not the SVG path inside it.
- */
-function findSemanticParent(element: Element): Element | undefined {
-  let current: Element | null = element;
-  let depth = 0;
-
-  while (current && depth < 6) {
-    // Found a button or interactive element
-    if (isSemanticElement(current)) {
-      return current;
-    }
-
-    // Found a Zoom component wrapper with meaningful attributes
-    if (hasZoomComponentSemantics(current)) {
-      return current;
-    }
-
-    current = current.parentElement;
-    depth++;
-  }
-
-  return undefined;
-}
-
-function isSemanticElement(el: Element): boolean {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "button" || tag === "a" || tag === "input" || tag === "select" || tag === "textarea") return true;
-  if (tag === "label" && el.querySelector("input, textarea, select")) return true;
-  if (el.getAttribute("role")) return true;
-  if (el.getAttribute("aria-label")) return true;
-  return false;
-}
-
-function hasZoomComponentSemantics(el: Element): boolean {
-  const classes = el.className ?? "";
-  // Zoom button components
-  if (/cpzui-button(?!__)/.test(classes)) return true;
-  // Zoom select/combobox components
-  if (/cpzui-select(?!-)/.test(classes) || /cpzui-virtual-filter-select(?!-)/.test(classes)) return true;
-  // Zoom checkbox
-  if (/cpzui-checkbox(?!__)|zm-checkbox|zmu-checkbox|checkbox/i.test(String(classes))) return true;
-  // Zoom tab
-  if (/cpzui-tab(?!__)/.test(classes)) return true;
-  return false;
 }
 
 function detectCheckboxControl(element: Element): { name?: string } | undefined {
@@ -592,132 +543,6 @@ function pickAnchorText(container: Element, target: Element): string | undefined
   const name = texts.find((t) => /^[A-Z][a-z]+(\s+[A-Z][a-z.]+)+$/.test(t));
   if (name) return name;
   return texts.find(Boolean);
-}
-
-// ─── Feature 5: ARIA state capture (idempotent toggles) ──────────────────────
-
-/**
- * Read the desired ARIA end-state of a toggle-like element. Used so the compiled
- * flow can skip a click when the element is already in the recorded state.
- */
-export function getAriaState(
-  element: Element
-): { checked?: boolean; expanded?: boolean; selected?: boolean } | undefined {
-  const semantic = findSemanticParent(element) ?? element;
-  const read = (attr: string): boolean | undefined => {
-    const value = semantic.getAttribute(attr) ?? element.getAttribute(attr);
-    if (value === "true") return true;
-    if (value === "false") return false;
-    return undefined;
-  };
-
-  const nativeChecked =
-    element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")
-      ? element.checked
-      : undefined;
-
-  const state = {
-    checked: read("aria-checked") ?? nativeChecked,
-    expanded: read("aria-expanded"),
-    selected: read("aria-selected")
-  };
-
-  if (state.checked === undefined && state.expanded === undefined && state.selected === undefined) {
-    return undefined;
-  }
-  return state;
-}
-
-// ─── Feature 1: iframe / frameLocator capture ────────────────────────────────
-
-/**
- * When the recorder runs inside a same-origin iframe, return a CSS selector that
- * locates that iframe from the parent document so the compiler can emit
- * page.frameLocator(...). Returns undefined for the top frame or cross-origin
- * frames (where window.frameElement is inaccessible).
- */
-export function getFrameSelector(): string | undefined {
-  try {
-    if (window.top === window.self) return undefined;
-    const frameEl = window.frameElement;
-    if (!frameEl) return undefined;
-    return buildFrameCssSelector(frameEl);
-  } catch {
-    return undefined;
-  }
-}
-
-function buildFrameCssSelector(frameEl: Element): string {
-  if (frameEl.id && !/^\d|^[a-f0-9-]{20,}/.test(frameEl.id)) {
-    return `#${frameEl.id}`;
-  }
-  const name = frameEl.getAttribute("name");
-  if (name) return `iframe[name="${name.replace(/"/g, '\\"')}"]`;
-
-  const src = frameEl.getAttribute("src");
-  if (src) {
-    try {
-      const path = new URL(src, window.location.href).pathname;
-      if (path && path !== "/") return `iframe[src*="${path.replace(/"/g, '\\"')}"]`;
-    } catch { /* fall through */ }
-  }
-
-  const sameTag = Array.from(document.querySelectorAll(frameEl.tagName.toLowerCase()));
-  const index = sameTag.indexOf(frameEl);
-  return index >= 0 ? `${frameEl.tagName.toLowerCase()}:nth-of-type(${index + 1})` : frameEl.tagName.toLowerCase();
-}
-
-// ─── Feature 3: nth disambiguation ───────────────────────────────────────────
-
-/**
- * If the most stable available selector matches several elements, return the
- * 0-based index of the target so the compiler can emit .nth(i) instead of
- * .first(). Returns undefined when the target is the first/only match.
- */
-export function computeNth(element: Element, selectors: SelectorStrategy): number | undefined {
-  const matches = resolvePrimaryMatches(selectors);
-  if (matches.length <= 1) return undefined;
-
-  const index = matches.findIndex((candidate) => candidate === element || candidate.contains(element) || element.contains(candidate));
-  return index > 0 ? index : undefined;
-}
-
-/**
- * Resolve the candidate elements for the highest-priority selector strategy,
- * mirroring the compiler's strategy order (role → label → text → testId → css).
- */
-function resolvePrimaryMatches(selectors: SelectorStrategy): Element[] {
-  if (selectors.role) {
-    const tagFilter =
-      selectors.role.role === "button"
-        ? "button, [role='button'], input[type='button'], input[type='submit']"
-        : selectors.role.role === "textbox"
-          ? "input, textarea, [role='textbox']"
-          : selectors.role.role === "checkbox"
-            ? "input[type='checkbox'], [role='checkbox'], label:has(input[type='checkbox']), [class*='checkbox'], [class*='Checkbox']"
-            : `[role='${selectors.role.role}']`;
-    const name = selectors.role.name?.toLowerCase();
-    const matches = Array.from(document.querySelectorAll(tagFilter)).filter((el) => {
-      if (!name) return true;
-      const accessible = `${el.textContent ?? ""} ${el.getAttribute("aria-label") ?? ""}`.toLowerCase();
-      return accessible.includes(name);
-    });
-    if (matches.length > 0) return matches;
-  }
-
-  if (selectors.text) {
-    const text = selectors.text.toLowerCase();
-    return Array.from(document.querySelectorAll("button, a, [role='button'], [role='option'], td, li, span"))
-      .filter((el) => (el.textContent ?? "").trim().toLowerCase().includes(text));
-  }
-
-  if (selectors.css) {
-    try {
-      return Array.from(document.querySelectorAll(selectors.css));
-    } catch { /* invalid selector */ }
-  }
-
-  return [];
 }
 
 function getNearestHeading(element: Element): string | undefined {
